@@ -17,6 +17,7 @@
 package logic
 
 import (
+	"encoding/hex"
 	"fmt"
 
 	"github.com/algorand/go-algorand/data/basics"
@@ -37,7 +38,7 @@ func (cx *EvalContext) availableBox(name string, operation int, createSize uint6
 
 	dirty, ok := cx.available.boxes[boxRef{cx.appID, name}]
 	if !ok {
-		return nil, false, fmt.Errorf("invalid Box reference %v", name)
+		return nil, false, fmt.Errorf("invalid Box reference 0x%v", hex.EncodeToString([]byte(name)))
 	}
 
 	// Since the box is in cx.available, we know this GetBox call is cheap. It

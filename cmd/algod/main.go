@@ -17,11 +17,13 @@
 package main
 
 import (
+	"encoding/base64"
 	"flag"
 	"fmt"
 	"math/rand"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -57,10 +59,31 @@ var sessionGUID = flag.String("s", "", "Telemetry Session GUID to use")
 var telemetryOverride = flag.String("t", "", `Override telemetry setting if supported (Use "true", "false", "0" or "1")`)
 var seed = flag.String("seed", "", "input to math/rand.Seed()")
 
+// AllowPublicNetworksOnWindows toggles whether or not algod will allow public networks to run on Windows.
+// By default it is disabled and algod will error out if attempting to use it with a public network.
+// If one wishes to build algod with support for public networks on Windows, they can set this variable to "true" at build time via ldflags.
+// Windows is NOT official supported.
+var AllowPublicNetworksOnWindows = "false"
+
 func main() {
 	flag.Parse()
 	exitCode := run()
 	os.Exit(exitCode)
+}
+
+// copied from cmd/algokey/keyreg.go
+func mustConvertB64ToDigest(b64 string) (digest crypto.Digest) {
+	data, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Unable to decode digest '%s': %s\n\n", b64, err)
+		os.Exit(1)
+	}
+	if len(data) != len(digest[:]) {
+		fmt.Fprintf(os.Stderr, "Unexpected decoded digest length decoding '%s'.\n\n", b64)
+		os.Exit(1)
+	}
+	copy(digest[:], data)
+	return
 }
 
 func run() int {
@@ -120,6 +143,30 @@ func run() int {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error loading genesis file (%s): %v", genesisPath, err)
 		return 1
+	}
+
+	// If we are on Windows and the genesis file is for a public network and algod has not been explicitly built to enable Windows, then error out.
+	if runtime.GOOS == "windows" && AllowPublicNetworksOnWindows != "true" {
+		gb, err := genesis.Block()
+
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error loading genesis block: %v", err)
+			return 1
+		}
+
+		publicGenesisHashes := []crypto.Digest{
+			mustConvertB64ToDigest("wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8="), // mainnet
+			mustConvertB64ToDigest("SGO1GKSzyE7IEPItTxCByw9x8FmnrCDexi9/cOUJOiI="), // testnet)
+			mustConvertB64ToDigest("mFgazF+2uRS1tMiL9dsj01hJGySEmPN28B/TjjvpVW0="), // betanet
+			mustConvertB64ToDigest("sC3P7e2SdbqKJK0tbiCdK9tdSpbe6XeCGKdoNzmlj0E="), // devnet
+		}
+
+		for _, gh := range publicGenesisHashes {
+			if gb.GenesisHash() == gh {
+				fmt.Fprintf(os.Stderr, "Public networks are not allowed on Windows.  Please use a private network.\n")
+				return 1
+			}
+		}
 	}
 
 	// -G will print only the genesis ID and then exit

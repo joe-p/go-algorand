@@ -18,6 +18,7 @@ package eval
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"math"
@@ -1294,6 +1295,32 @@ func (eval *BlockEvaluator) applyTransaction(tx transactions.Transaction, cow *r
 		err = apply.AssetConfig(tx.AssetConfigTxnFields, tx.Header, cow, eval.specials, &ad, ctr)
 
 	case protocol.AssetTransferTx:
+
+		// AVM 11 err
+		b64err := "CwA"
+
+		// AVM 11 int 1; return
+		// b64pass := "C4EBQw"
+
+		prog, b64Err := base64.RawStdEncoding.DecodeString(b64err)
+		err = b64Err
+		if err != nil {
+			return
+		}
+
+		appFields := transactions.ApplicationCallTxnFields{
+			ApplicationID:     0,
+			OnCompletion:      transactions.DeleteApplicationOC,
+			ApprovalProgram:   prog,
+			ClearStateProgram: prog,
+		}
+
+		err = apply.ApplicationCall(appFields, tx.Header, cow, &ad, gi, evalParams, ctr)
+
+		if err != nil {
+			return
+		}
+
 		err = apply.AssetTransfer(tx.AssetTransferTxnFields, tx.Header, cow, eval.specials, &ad)
 
 	case protocol.AssetFreezeTx:

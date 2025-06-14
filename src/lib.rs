@@ -1,10 +1,31 @@
-use once_cell::sync::OnceCell;
+use once_cell::sync::Lazy;
 use std::path::PathBuf;
 use wamr_rust_sdk::{
     function::Function, instance::Instance, module::Module, runtime::Runtime, value::WasmValue,
 };
 
-static WASM_BYTES: OnceCell<Vec<u8>> = OnceCell::new();
+struct WasmEngine {
+    runtime: &'static Runtime,
+    module: Module<'static>,
+}
+
+thread_local! {
+    static WASM_ENGINE: Lazy<WasmEngine> = Lazy::new(|| {
+
+        let  runtime_ref = Box::leak(Box::new(
+            Runtime::new().expect("Failed to create runtime")
+        ));
+
+        let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        d.push("fibo.aot");
+        let wasm_bytes = std::fs::read(d).expect("Failed to read AOT file");
+
+        let module = Module::from_vec(runtime_ref, wasm_bytes.clone(), "fibo")
+            .expect("Failed to load module");
+
+        WasmEngine { runtime: runtime_ref, module }
+    });
+}
 
 #[derive(rust2go::R2G, Clone, Copy)]
 pub struct AddResult {
@@ -34,32 +55,26 @@ impl G2RCall for G2RCallImpl {
     }
 
     fn wasm_fibonacci(n: u64) -> u64 {
-        let runtime = Runtime::new().expect("Failed to create runtime");
+        let mut result = 0;
+        WASM_ENGINE.with(|engine| {
+            let instance = Instance::new(engine.runtime, &engine.module, 1024 * 64)
+                .expect("Failed to create instance");
 
-        let wasm_bytes = WASM_BYTES.get_or_init(|| {
-            let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-            d.push("fibo.aot");
-            std::fs::read(d).expect("Failed to read AOT file")
+            let function = Function::find_export_func(&instance, "fibonacci")
+                .expect("Failed to find function");
+
+            let params: Vec<WasmValue> = vec![WasmValue::I64(n as i64)];
+            let wasm_result = function
+                .call(&instance, &params)
+                .expect("Failed to call function");
+
+            result = match wasm_result[0] {
+                WasmValue::I64(value) => value as u64,
+                _ => panic!("Unexpected return type from fibonacci function"),
+            }
         });
 
-        let module =
-            Module::from_vec(&runtime, wasm_bytes.clone(), "fibo").expect("Failed to load module");
-
-        let instance =
-            Instance::new(&runtime, &module, 1024 * 64).expect("Failed to create instance");
-
-        let function =
-            Function::find_export_func(&instance, "fibonacci").expect("Failed to find function");
-
-        let params: Vec<WasmValue> = vec![WasmValue::I64(n as i64)];
-        let result = function
-            .call(&instance, &params)
-            .expect("Failed to call function");
-
-        match result[0] {
-            WasmValue::I64(value) => value as u64,
-            _ => panic!("Unexpected return type from fibonacci function"),
-        }
+        result
     }
 }
 

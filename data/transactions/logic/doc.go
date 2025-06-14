@@ -307,6 +307,7 @@ var opDescByName = map[string]OpDesc{
 	"box_get":     {"X is the contents of box A if A exists, else ''. Y is 1 if A exists, else 0.", "For boxes that exceed 4,096 bytes, consider `box_create`, `box_extract`, and `box_replace`", nil},
 	"box_put":     {"replaces the contents of box A with byte-array B. Fails if A exists and len(B) != len(box A). Creates A if it does not exist", "For boxes that exceed 4,096 bytes, consider `box_create`, `box_extract`, and `box_replace`", nil},
 	"box_resize":  {"change the size of box named A to be of length B, adding zero bytes to end or removing bytes from the end, as needed. Fail if the name A is empty, A is not an existing box, or B exceeds 32,768.", "", nil},
+	"wasm_eval":   {"eval wasm", "", nil},
 }
 
 // OpDoc returns a description of the op
@@ -363,7 +364,7 @@ var OpGroups = map[string][]string{
 	"Byte Array Logic":        {"b|", "b&", "b^", "b~"},
 	"Cryptography":            {"sha256", "keccak256", "sha512_256", "sha3_256", "sumhash512", "falcon_verify", "ed25519verify", "ed25519verify_bare", "ecdsa_verify", "ecdsa_pk_recover", "ecdsa_pk_decompress", "vrf_verify", "ec_add", "ec_scalar_mul", "ec_pairing_check", "ec_multi_scalar_mul", "ec_subgroup_check", "ec_map_to", "mimc"},
 	"Loading Values":          {"intcblock", "intc", "intc_0", "intc_1", "intc_2", "intc_3", "pushint", "pushints", "bytecblock", "bytec", "bytec_0", "bytec_1", "bytec_2", "bytec_3", "pushbytes", "pushbytess", "bzero", "arg", "arg_0", "arg_1", "arg_2", "arg_3", "args", "txn", "gtxn", "txna", "txnas", "gtxna", "gtxnas", "gtxns", "gtxnsa", "gtxnsas", "global", "load", "loads", "store", "stores", "gload", "gloads", "gloadss", "gaid", "gaids"},
-	"Flow Control":            {"err", "bnz", "bz", "b", "return", "pop", "popn", "dup", "dup2", "dupn", "dig", "bury", "cover", "uncover", "frame_dig", "frame_bury", "swap", "select", "assert", "callsub", "proto", "retsub", "switch", "match"},
+	"Flow Control":            {"err", "bnz", "bz", "b", "return", "pop", "popn", "dup", "dup2", "dupn", "dig", "bury", "cover", "uncover", "frame_dig", "frame_bury", "swap", "select", "assert", "callsub", "proto", "retsub", "switch", "match", "wasm_eval"},
 	"State Access":            {"balance", "min_balance", "app_opted_in", "app_local_get", "app_local_get_ex", "app_global_get", "app_global_get_ex", "app_local_put", "app_global_put", "app_local_del", "app_global_del", "asset_holding_get", "asset_params_get", "app_params_get", "acct_params_get", "voter_params_get", "online_stake", "log", "block"},
 	"Box Access":              {"box_create", "box_extract", "box_replace", "box_splice", "box_del", "box_len", "box_get", "box_put", "box_resize"},
 	"Inner Transactions":      {"itxn_begin", "itxn_next", "itxn_field", "itxn_submit", "itxn", "itxna", "itxnas", "gitxn", "gitxna", "gitxnas"},

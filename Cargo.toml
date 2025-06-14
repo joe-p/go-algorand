@@ -8,6 +8,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 rust2go = "0.4.0"
+wamr-rust-sdk = { git = "https://github.com/bytecodealliance/wamr-rust-sdk", version = "1.0.0" }
 
 [build-dependencies]
 rust2go = { version = "0.4.0", features = ["build"] }

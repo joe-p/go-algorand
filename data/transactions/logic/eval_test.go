@@ -3903,6 +3903,15 @@ func benchmarkOperation(b *testing.B, prefix string, operation string, suffix st
 	b.ReportMetric(float64(inst), "extra/op")
 }
 
+func BenchmarkWasmFibonacci(b *testing.B) {
+	source := `int 10; wasm_eval`
+
+	b.Run("fibonacci", func(b *testing.B) {
+		b.ReportAllocs()
+		benchmarkBasicProgram(b, source)
+	})
+}
+
 func BenchmarkFibonacci(b *testing.B) {
 	source := `
 	int 10

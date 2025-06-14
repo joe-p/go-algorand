@@ -82,4 +82,4 @@ tools/x-repo-types/x-repo-types
 
 # Added by cargo
 
-/target
+target/

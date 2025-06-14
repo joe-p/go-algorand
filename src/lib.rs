@@ -38,7 +38,7 @@ impl G2RCall for G2RCallImpl {
 
         let wasm_bytes = WASM_BYTES.get_or_init(|| {
             let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-            d.push("test/wasm/fibo/target/wasm32-unknown-unknown/debug/fibo.wasm");
+            d.push("test/wasm/fibo/target/wasm32-unknown-unknown/release/fibo.wasm");
             std::fs::read(d).expect("Failed to read WASM file")
         });
 

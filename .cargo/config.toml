@@ -1,4 +1,4 @@
 [env]
 WAMR_BUILD_PLATFORM = "darwin"
-WAMR_BUILD_TARGET = "AARCH64[sub]"
+WAMR_BUILD_TARGET = "AARCH64"
 LLVM_LIB_CFG_PATH = "/Users/joe/git/other/llvm-project/cmake"

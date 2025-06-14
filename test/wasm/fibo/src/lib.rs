@@ -5,5 +5,3 @@ fn fibonacci(n: u64) -> u64 {
     }
     fibonacci(n - 1) + fibonacci(n - 2)
 }
-
-fn main() {}

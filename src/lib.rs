@@ -1,5 +1,5 @@
-use std::path::PathBuf;
 use once_cell::sync::OnceCell;
+use std::path::PathBuf;
 use wamr_rust_sdk::{
     function::Function, instance::Instance, module::Module, runtime::Runtime, value::WasmValue,
 };
@@ -38,11 +38,12 @@ impl G2RCall for G2RCallImpl {
 
         let wasm_bytes = WASM_BYTES.get_or_init(|| {
             let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-            d.push("test/wasm/fibo/target/wasm32-unknown-unknown/release/fibo.wasm");
-            std::fs::read(d).expect("Failed to read WASM file")
+            d.push("fibo.aot");
+            std::fs::read(d).expect("Failed to read AOT file")
         });
 
-        let module = Module::from_vec(&runtime, wasm_bytes.clone(), "fibo").expect("Failed to load module");
+        let module =
+            Module::from_vec(&runtime, wasm_bytes.clone(), "fibo").expect("Failed to load module");
 
         let instance =
             Instance::new(&runtime, &module, 1024 * 64).expect("Failed to create instance");

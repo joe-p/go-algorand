@@ -1,7 +1,10 @@
 use std::path::PathBuf;
+use once_cell::sync::OnceCell;
 use wamr_rust_sdk::{
     function::Function, instance::Instance, module::Module, runtime::Runtime, value::WasmValue,
 };
+
+static WASM_BYTES: OnceCell<Vec<u8>> = OnceCell::new();
 
 #[derive(rust2go::R2G, Clone, Copy)]
 pub struct AddResult {
@@ -33,10 +36,13 @@ impl G2RCall for G2RCallImpl {
     fn wasm_fibonacci(n: u64) -> u64 {
         let runtime = Runtime::new().expect("Failed to create runtime");
 
-        let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        d.push("test/wasm/fibo/target/wasm32-unknown-unknown/debug/fibo.wasm");
+        let wasm_bytes = WASM_BYTES.get_or_init(|| {
+            let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+            d.push("test/wasm/fibo/target/wasm32-unknown-unknown/debug/fibo.wasm");
+            std::fs::read(d).expect("Failed to read WASM file")
+        });
 
-        let module = Module::from_file(&runtime, d.as_path()).expect("Failed to load module");
+        let module = Module::from_vec(&runtime, wasm_bytes.clone(), "fibo").expect("Failed to load module");
 
         let instance =
             Instance::new(&runtime, &module, 1024 * 64).expect("Failed to create instance");

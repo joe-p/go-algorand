@@ -3903,6 +3903,54 @@ func benchmarkOperation(b *testing.B, prefix string, operation string, suffix st
 	b.ReportMetric(float64(inst), "extra/op")
 }
 
+func BenchmarkFibonacci(b *testing.B) {
+	source := `
+	int 10
+	callsub fib_function
+	return
+
+fib_function:
+	proto 1 1
+
+	frame_dig -1 
+	int 1
+	<=
+	bz recursive_case
+
+	frame_dig -1
+	retsub
+
+recursive_case:
+	frame_dig -1
+	int 1
+	-
+	callsub fib_function
+
+	frame_dig -1
+	int 2
+	-
+	callsub fib_function
+
+	+
+	retsub
+	`
+
+	b.Run("fibonacci", func(b *testing.B) {
+		b.ReportAllocs()
+		benchmarkBasicProgram(b, source)
+	})
+}
+
+func BenchmarkLargeStack(b *testing.B) {
+	{
+		source := strings.Repeat("pushint 1337\n", 500) + "int 1; return"
+
+		b.Run("large stack", func(b *testing.B) {
+			b.ReportAllocs()
+			benchmarkBasicProgram(b, source)
+		})
+	}
+}
 func BenchmarkUintMath(b *testing.B) {
 	benches := [][]string{
 		{"dup", "int 23423", "dup; pop", ""},

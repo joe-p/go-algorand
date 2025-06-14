@@ -1768,11 +1768,15 @@ func opSelect(cx *EvalContext) error {
 func opPlus(cx *EvalContext) error {
 	last := len(cx.Stack) - 1
 	prev := last - 1
-	sum, carry := bits.Add64(cx.Stack[prev].Uint, cx.Stack[last].Uint, 0)
-	if carry > 0 {
+
+	rustStruct := G2RCallImpl{}
+	a, b := cx.Stack[prev].Uint, cx.Stack[last].Uint
+	result := rustStruct.add(&a, &b)
+
+	if result.overflow {
 		return errors.New("+ overflowed")
 	}
-	cx.Stack[prev].Uint = sum
+	cx.Stack[prev].Uint = result.result
 	cx.Stack = cx.Stack[:last]
 	return nil
 }

@@ -28,6 +28,7 @@ require (
 	github.com/google/go-querystring v1.0.0
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/mux v1.8.1
+	github.com/ihciah/rust2go v0.0.0-20250608231442-a833a4a103e0
 	github.com/ipfs/go-log v1.0.5
 	github.com/ipfs/go-log/v2 v2.5.1
 	github.com/jmoiron/sqlx v1.2.0

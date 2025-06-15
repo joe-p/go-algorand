@@ -10,11 +10,6 @@ package logic
 #include <stdint.h>
 #include <stdlib.h>
 
-typedef struct AddResultRef {
-  bool overflow;
-  uint64_t result;
-} AddResultRef;
-
 typedef struct ListRef {
   const void *ptr;
   uintptr_t len;
@@ -26,9 +21,6 @@ typedef struct StringRef {
 } StringRef;
 
 const void c_rust2go_internal_drop(void*);
-const void c_G2RCall_add(const void*, const void*);
-const void c_G2RCall_wasm_fibonacci(const void*, const void*);
-const void c_G2RCall_wasm_no_op(const void*, const void*);
 const void c_G2RCall_program(const void*, const void*);
 */
 import "C"
@@ -189,79 +181,8 @@ func refC_intptr_t(p *int, _ *[]byte) C.intptr_t    { return C.intptr_t(*p) }
 func refC_float(p *float32, _ *[]byte) C.float      { return C.float(*p) }
 func refC_double(p *float64, _ *[]byte) C.double    { return C.double(*p) }
 
-type AddResult struct {
-	overflow bool
-	result   uint64
-}
-
-func newAddResult(p C.AddResultRef) AddResult {
-	return AddResult{
-		overflow: newC_bool(p.overflow),
-		result:   newC_uint64_t(p.result),
-	}
-}
-func ownAddResult(p C.AddResultRef) AddResult {
-	return AddResult{
-		overflow: newC_bool(p.overflow),
-		result:   newC_uint64_t(p.result),
-	}
-}
-func cntAddResult(s *AddResult, cnt *uint) [0]C.AddResultRef {
-	_ = s
-	_ = cnt
-	return [0]C.AddResultRef{}
-}
-func refAddResult(p *AddResult, buffer *[]byte) C.AddResultRef {
-	return C.AddResultRef{
-		overflow: refC_bool(&p.overflow, buffer),
-		result:   refC_uint64_t(&p.result, buffer),
-	}
-}
-
 type G2RCallImpl struct{}
 
-func (G2RCallImpl) add(a *uint64, b *uint64) AddResult {
-	_internal_slot := [2]unsafe.Pointer{}
-	_internal_params := [2]unsafe.Pointer{}
-	a_ref, a_buffer := cvt_ref(cntC_uint64_t, refC_uint64_t)(a)
-	_internal_params[0] = unsafe.Pointer(&a_ref)
-	b_ref, b_buffer := cvt_ref(cntC_uint64_t, refC_uint64_t)(b)
-	_internal_params[1] = unsafe.Pointer(&b_ref)
-	asmcall.CallFuncG0P2(unsafe.Pointer(C.c_G2RCall_add), unsafe.Pointer(&_internal_slot), unsafe.Pointer(&_internal_params))
-	runtime.KeepAlive(_internal_slot)
-	runtime.KeepAlive(_internal_params)
-	runtime.KeepAlive(a_buffer)
-	runtime.KeepAlive(b_buffer)
-	val := ownAddResult(*(*C.AddResultRef)(_internal_slot[0]))
-	asmcall.CallFuncG0P1(unsafe.Pointer(C.c_rust2go_internal_drop), unsafe.Pointer(_internal_slot[1]))
-	return val
-}
-func (G2RCallImpl) wasm_fibonacci(n *uint64) uint64 {
-	_internal_slot := [2]unsafe.Pointer{}
-	_internal_params := [1]unsafe.Pointer{}
-	n_ref, n_buffer := cvt_ref(cntC_uint64_t, refC_uint64_t)(n)
-	_internal_params[0] = unsafe.Pointer(&n_ref)
-	asmcall.CallFuncG0P2(unsafe.Pointer(C.c_G2RCall_wasm_fibonacci), unsafe.Pointer(&_internal_slot), unsafe.Pointer(&_internal_params))
-	runtime.KeepAlive(_internal_slot)
-	runtime.KeepAlive(_internal_params)
-	runtime.KeepAlive(n_buffer)
-	val := newC_uint64_t(*(*C.uint64_t)(_internal_slot[0]))
-	asmcall.CallFuncG0P1(unsafe.Pointer(C.c_rust2go_internal_drop), unsafe.Pointer(_internal_slot[1]))
-	return val
-}
-func (G2RCallImpl) wasm_no_op(n *uint64) uint64 {
-	_internal_slot := [2]unsafe.Pointer{}
-	_internal_params := [1]unsafe.Pointer{}
-	n_ref, n_buffer := cvt_ref(cntC_uint64_t, refC_uint64_t)(n)
-	_internal_params[0] = unsafe.Pointer(&n_ref)
-	asmcall.CallFuncG0P2(unsafe.Pointer(C.c_G2RCall_wasm_no_op), unsafe.Pointer(&_internal_slot), unsafe.Pointer(&_internal_params))
-	runtime.KeepAlive(_internal_slot)
-	runtime.KeepAlive(_internal_params)
-	runtime.KeepAlive(n_buffer)
-	val := newC_uint64_t(*(*C.uint64_t)(_internal_slot[0]))
-	asmcall.CallFuncG0P1(unsafe.Pointer(C.c_rust2go_internal_drop), unsafe.Pointer(_internal_slot[1]))
-	return val
-}
 func (G2RCallImpl) program(wasm_bytes *[]uint8) uint64 {
 	_internal_slot := [2]unsafe.Pointer{}
 	_internal_params := [1]unsafe.Pointer{}

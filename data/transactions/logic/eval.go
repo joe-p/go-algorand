@@ -1781,9 +1781,13 @@ func opWasmEval(cx *EvalContext) error {
 
 	rustStruct := G2RCallImpl{}
 
-	result := rustStruct.wasm_fibonacci(&cx.Stack[len(cx.Stack)-1].Uint)
+	last := len(cx.Stack) - 1
+	bytes := cx.Stack[last].Bytes
 
-	cx.Stack[len(cx.Stack)-1].Uint = result
+	result := rustStruct.program(&bytes)
+
+	cx.Stack[last].Uint = result
+	cx.Stack[last].Bytes = nil
 
 	return nil
 }

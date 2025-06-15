@@ -810,7 +810,7 @@ var OpSpecs = []OpSpec{
 			chunkCost: 550,
 			chunkSize: 32,
 		}})},
-	{0xe7, "wasm_eval", opWasmEval, proto("i:i"), 12, costly(1)},
+	{0xe7, "wasm_eval", opWasmEval, proto("b:i"), 12, costly(1)},
 }
 
 // OpcodesByVersion returns list of opcodes available in a specific version of TEAL

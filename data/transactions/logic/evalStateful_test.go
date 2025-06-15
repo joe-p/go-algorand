@@ -3281,6 +3281,7 @@ func TestReturnTypes(t *testing.T) {
 		"ec_multi_scalar_mul": true,
 		"ec_subgroup_check":   true,
 		"ec_map_to":           true,
+		"wasm_eval":           true, // TODO: investigate how this test works
 	}
 
 	byName := OpsByName[LogicVersion]

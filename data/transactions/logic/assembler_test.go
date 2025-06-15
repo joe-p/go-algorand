@@ -445,7 +445,7 @@ mimc BLS12_381Mp111
 `
 
 const wasmNonsense = `
-int 2
+pushbytes 0x00
 wasm_eval
 `
 
@@ -488,7 +488,7 @@ const incentiveCompiled = "757401"
 
 const stateProofCompiled = "80070123456789abcd86494985"
 const mimcCompiled = "802011223344556677889900aabbccddeeff11223344556677889900aabbccddeeffe601"
-const wasmCompiled = "24e7"
+const wasmCompiled = "800100e7"
 
 const v11Compiled = v10Compiled + incentiveCompiled + mimcCompiled
 const v12Compiled = v11Compiled + stateProofCompiled + wasmCompiled

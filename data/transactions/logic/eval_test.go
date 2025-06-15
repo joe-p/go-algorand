@@ -24,6 +24,9 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -3903,12 +3906,37 @@ func benchmarkOperation(b *testing.B, prefix string, operation string, suffix st
 	b.ReportMetric(float64(inst), "extra/op")
 }
 
+func getWasmFiboTeal() string {
+	_, filePath, _, ok := runtime.Caller(0)
+	if !ok {
+		panic("Unable to get the current file path")
+	}
+
+	// Get the directory of the current source file
+	dir := filepath.Dir(filePath)
+
+	// Specify the file path
+	filePath = filepath.Join(dir, "..", "..", "..", "fibo.aot")
+
+	// Read the entire file into memory
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		panic(fmt.Sprintf("failed to read file: %v", err))
+	}
+
+	// Encode the file data as a hexadecimal string
+	return "pushbytes 0x" + hex.EncodeToString(data) + "; wasm_eval"
+}
+
+func TestWasmFibonacci(t *testing.T) {
+	testAccepts(t, getWasmFiboTeal(), 12)
+
+}
 func BenchmarkWasmFibonacci(b *testing.B) {
-	source := `int 10; wasm_eval`
 
 	b.Run("fibonacci", func(b *testing.B) {
 		b.ReportAllocs()
-		benchmarkBasicProgram(b, source)
+		benchmarkBasicProgram(b, getWasmFiboTeal())
 	})
 }
 

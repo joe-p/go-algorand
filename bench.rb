@@ -1,5 +1,7 @@
 def run(cmd)
-  system(cmd, out: $stdout, err: :out)
+  return if system(cmd, out: $stdout, err: :out)
+
+  raise "Command failed: #{cmd}"
 end
 
 target_dir = "#{__dir__}/target/release"
@@ -20,4 +22,5 @@ File.open(go_file, 'w') { |file| file.puts file_content }
 run 'cargo build --release'
 run 'cargo build --manifest-path test/wasm/fibo/Cargo.toml --target wasm32-unknown-unknown --release'
 run 'wamrc --size-level=3 --bounds-checks=1 -o fibo.aot test/wasm/fibo/target/wasm32-unknown-unknown/release/fibo.wasm'
-run 'go test -count=1 ./data/transactions/logic -bench=Fibo'
+run 'go test -count=1 github.com/algorand/go-algorand/data/transactions/logic -run Fibo'
+run 'go test -count=1 github.com/algorand/go-algorand/data/transactions/logic -bench=Fibo'

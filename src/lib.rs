@@ -14,6 +14,7 @@ pub struct AddResult {
 pub trait G2RCall {
     fn add(a: u64, b: u64) -> AddResult;
     fn wasm_fibonacci(n: u64) -> u64;
+    fn wasm_no_op(n: u64) -> u64;
 }
 
 impl G2RCall for G2RCallImpl {
@@ -39,6 +40,29 @@ impl G2RCall for G2RCallImpl {
 
             let function = Function::find_export_func(&instance, "fibonacci")
                 .expect("Failed to find function");
+
+            let params: Vec<WasmValue> = vec![WasmValue::I64(n as i64)];
+            let wasm_result = function
+                .call(&instance, &params)
+                .expect("Failed to call function");
+
+            result = match wasm_result[0] {
+                WasmValue::I64(value) => value as u64,
+                _ => panic!("Unexpected return type from fibonacci function"),
+            }
+        });
+
+        result
+    }
+
+    fn wasm_no_op(n: u64) -> u64 {
+        let mut result = 0;
+        WASM_ENGINE.with(|engine| {
+            let instance = Instance::new(engine.runtime, &engine.module, 1024 * 64)
+                .expect("Failed to create instance");
+
+            let function =
+                Function::find_export_func(&instance, "no_op").expect("Failed to find function");
 
             let params: Vec<WasmValue> = vec![WasmValue::I64(n as i64)];
             let wasm_result = function

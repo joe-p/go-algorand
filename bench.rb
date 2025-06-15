@@ -20,4 +20,4 @@ File.open(go_file, 'w') { |file| file.puts file_content }
 run 'cargo build --release'
 run 'cargo build --manifest-path test/wasm/fibo/Cargo.toml --target wasm32-unknown-unknown --release'
 run 'wamrc --size-level=3 --bounds-checks=1 -o fibo.aot test/wasm/fibo/target/wasm32-unknown-unknown/release/fibo.wasm'
-run 'go test ./data/transactions/logic -bench=Fibo'
+run 'go test -count=1 ./data/transactions/logic -bench=Fibo'

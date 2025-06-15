@@ -1,8 +1,6 @@
 use once_cell::sync::Lazy;
 use std::path::PathBuf;
-use wamr_rust_sdk::{
-    function::Function, instance::Instance, module::Module, runtime::Runtime, value::WasmValue,
-};
+use wamr_rust_sdk::{module::Module, runtime::Runtime};
 
 pub struct WasmEngine {
     pub runtime: &'static Runtime,
@@ -20,7 +18,7 @@ thread_local! {
         d.push("fibo.aot");
         let wasm_bytes = std::fs::read(d).expect("Failed to read AOT file");
 
-        let module = Module::from_vec(runtime_ref, wasm_bytes.clone(), "fibo")
+        let module = Module::from_vec(runtime_ref, wasm_bytes.clone(), "program")
             .expect("Failed to load module");
 
         WasmEngine { runtime: runtime_ref, module }

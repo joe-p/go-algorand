@@ -5,3 +5,8 @@ fn fibonacci(n: u64) -> u64 {
     }
     fibonacci(n - 1) + fibonacci(n - 2)
 }
+
+#[unsafe(no_mangle)]
+fn no_op(n: u64) -> u64 {
+    n
+}

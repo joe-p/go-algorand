@@ -7,7 +7,7 @@ end
 target_dir = "#{__dir__}/target/release"
 go_file = 'data/transactions/logic/rust.go'
 
-run "rust2go-cli --src src/lib.rs --dst #{go_file}"
+run "rust2go-cli --src src/ffi.rs --dst #{go_file}"
 
 file_content = File.read(go_file)
 

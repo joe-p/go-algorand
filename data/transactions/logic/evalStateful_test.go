@@ -17,14 +17,19 @@
 package logic
 
 import (
+	"context"
 	"encoding/hex"
 	"fmt"
+	"io"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tetratelabs/wazero"
+	wazeroapi "github.com/tetratelabs/wazero/api"
 
 	"github.com/algorand/go-algorand/config"
 	"github.com/algorand/go-algorand/crypto"
@@ -536,11 +541,13 @@ func testAppFull(t *testing.T, program []byte, gi int, aid basics.AppIndex, ep *
 
 	ep.Trace = &strings.Builder{}
 
-	err := CheckContract(program, ep)
-	if checkProblem == "" {
-		require.NoError(t, err, "Error in CheckContract %v", ep.Trace)
-	} else {
-		require.ErrorContains(t, err, checkProblem, "Wrong error in CheckContract %v", ep.Trace)
+	if ep.wasmPrograms == nil || ep.wasmPrograms[aid] == nil {
+		err := CheckContract(program, ep)
+		if checkProblem == "" {
+			require.NoError(t, err, "Error in CheckContract %v", ep.Trace)
+		} else {
+			require.ErrorContains(t, err, checkProblem, "Wrong error in CheckContract %v", ep.Trace)
+		}
 	}
 
 	// We continue on to check Eval() of things that failed Check() because it's
@@ -3675,6 +3682,53 @@ func TestAppLoop(t *testing.T) {
 
 	// Infinite loop because multiply by one instead of two
 	testApp(t, stateful+"int 1; loop:; int 1; *; dup; int 10; <; bnz loop; int 16; ==", ep, "dynamic cost")
+}
+
+func TestWasmAppLoop(t *testing.T) {
+	partitiontest.PartitionTest(t)
+	t.Parallel()
+	ep, _, _ := makeSampleEnv()
+
+	// TODO(wasm): Have wasm binaries/source in this repo
+	file, err := os.Open("/Users/joe/git/joe-p/wazero-playground/target/wasm32-unknown-unknown/release/wazero_playground.wasm")
+	if err != nil {
+		panic(err)
+	}
+	defer file.Close()
+
+	// Read the file into a byte slice
+	data, err := io.ReadAll(file)
+	if err != nil {
+		panic(err)
+	}
+
+	ctx := context.Background()
+
+	// Current AVM allows stack depth of 1k with 4k for each value, so 4MB total
+	// Each page is 64k, so 62 pages is a little under 4MB
+	// WithMemoryCapacityFromMax(true) means that the memory is pre-allocated
+	runCfg := wazero.NewRuntimeConfig().WithMemoryLimitPages(62).WithMemoryCapacityFromMax(true)
+	runtime := wazero.NewRuntimeWithConfig(ctx, runCfg)
+	defer runtime.Close(ctx)
+
+	compiled, err := runtime.CompileModule(ctx, data)
+
+	if err != nil {
+		panic(err)
+	}
+
+	module, err := runtime.InstantiateModule(ctx, compiled, wazero.NewModuleConfig())
+	if err != nil {
+		panic(err)
+	}
+
+	fn := module.ExportedFunction("program")
+	ep.wasmPrograms = map[basics.AppIndex]wazeroapi.Function{}
+	ep.wasmPrograms[888] = fn
+
+	testAppBytes(t, data, ep)
+
+	// TODO(wasm): Infinite loop because multiply by one instead of two
 }
 
 func TestPooledAppCallsVerifyOp(t *testing.T) {

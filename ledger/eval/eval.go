@@ -1046,6 +1046,7 @@ func (eval *BlockEvaluator) TransactionGroup(txgroup []transactions.SignedTxnWit
 	cow := eval.state.child(len(txgroup))
 	defer cow.recycle()
 
+	// TODO(wasm): Here we should start compilation of the WASM programs in the background in parallel.
 	evalParams := logic.NewAppEvalParams(txgroup, &eval.proto, &eval.specials)
 	evalParams.Tracer = eval.Tracer
 

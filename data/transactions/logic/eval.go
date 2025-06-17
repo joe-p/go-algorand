@@ -18,6 +18,7 @@ package logic
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
@@ -31,6 +32,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/algorand/go-algorand/config"
 	"github.com/algorand/go-algorand/config/bounds"
@@ -41,6 +43,7 @@ import (
 	"github.com/algorand/go-algorand/ledger/ledgercore"
 	"github.com/algorand/go-algorand/logging"
 	"github.com/algorand/go-algorand/protocol"
+	wazeroapi "github.com/tetratelabs/wazero/api"
 )
 
 // The constants below control opcode evaluation and MAY NOT be changed without
@@ -315,6 +318,11 @@ func RuntimeEvalConstants() EvalConstants {
 
 // EvalParams contains data that comes into condition evaluation.
 type EvalParams struct {
+	// TODO(wasm): Potentially we need to zero out the memory after each function call,
+	// so we don't "leak" memory between calls but that would require have the module here
+	// and not just the function.
+	wasmPrograms map[basics.AppIndex]wazeroapi.Function
+
 	runMode RunMode
 
 	Proto *config.ConsensusParams
@@ -1207,10 +1215,29 @@ func EvalContract(program []byte, gi int, aid basics.AppIndex, params *EvalParam
 	if cx.Trace != nil && cx.caller != nil {
 		fmt.Fprintf(cx.Trace, "--- enter %d %s %v\n", aid, cx.txn.Txn.OnCompletion, cx.txn.Txn.ApplicationArgs)
 	}
-	pass, err := eval(program, &cx)
+
+	start := time.Now()
+	var pass bool
+	var err error
+	if params.wasmPrograms != nil && params.wasmPrograms[aid] != nil {
+		// Current AVM allows 700 ops and each op is roughly 15 nanoseconds
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Nanosecond*700)
+		defer cancel()
+
+		result, wasmErr := params.wasmPrograms[aid].Call(ctx)
+		err = wasmErr
+		pass = result[0] != 0
+
+	} else {
+		pass, err = eval(program, &cx)
+	}
 	if err != nil {
 		err = cx.evalError(err)
 	}
+
+	elapsed := time.Since(start)
+
+	fmt.Printf("eval took %s\n", elapsed)
 
 	if cx.Trace != nil && cx.caller != nil {
 		fmt.Fprintf(cx.Trace, "--- exit  %d accept=%t\n", aid, pass)

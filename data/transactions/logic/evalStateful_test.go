@@ -17,6 +17,7 @@
 package logic
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"fmt"
@@ -3690,7 +3691,7 @@ func TestWasmAppLoop(t *testing.T) {
 	ep, _, _ := makeSampleEnv()
 
 	// TODO(wasm): Have wasm binaries/source in this repo
-	file, err := os.Open("/Users/joe/git/joe-p/wazero-playground/target/wasm32-unknown-unknown/release/wazero_playground.wasm")
+	file, err := os.Open("/Users/joe/git/algorand/go-algorand/test/wasm/host_hello/target/wasm32-unknown-unknown/release/host_hello.wasm")
 	if err != nil {
 		panic(err)
 	}
@@ -3710,6 +3711,26 @@ func TestWasmAppLoop(t *testing.T) {
 	runCfg := wazero.NewRuntimeConfig().WithMemoryLimitPages(62).WithMemoryCapacityFromMax(true)
 	runtime := wazero.NewRuntimeWithConfig(ctx, runCfg)
 	defer runtime.Close(ctx)
+
+	hello := func(ctx context.Context, m wazeroapi.Module, str_pointer uint32) {
+		mem := m.Memory()
+		// TODO(wasm): Figure out best way to handle out of range memory access, but
+		// this shouldn't happen here since we use mem.Size()
+		buf, _ := mem.Read(str_pointer, mem.Size()-str_pointer)
+
+		// TODO(wasm): Figure out best way to handle errors such as null byte not found
+		nullByte := bytes.IndexByte(buf, 0)
+
+		str := string(buf[:nullByte-1])
+
+		fmt.Printf("Message from WASM: %s!\n", str)
+	}
+
+	_, err = runtime.NewHostModuleBuilder("algorand").
+		NewFunctionBuilder().
+		WithFunc(hello).
+		Export("hello").
+		Instantiate(ctx)
 
 	compiled, err := runtime.CompileModule(ctx, data)
 

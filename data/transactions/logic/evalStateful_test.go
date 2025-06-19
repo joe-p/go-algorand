@@ -3712,6 +3712,10 @@ func TestWasmAppLoop(t *testing.T) {
 	runtime := wazero.NewRuntimeWithConfig(ctx, runCfg)
 	defer runtime.Close(ctx)
 
+	getU64 := func(ctx context.Context, m wazeroapi.Module) uint64 {
+		return uint64(18446744073709551615)
+	}
+
 	hello := func(ctx context.Context, m wazeroapi.Module, str_pointer uint32) {
 		mem := m.Memory()
 		// TODO(wasm): Figure out best way to handle out of range memory access, but
@@ -3721,15 +3725,14 @@ func TestWasmAppLoop(t *testing.T) {
 		// TODO(wasm): Figure out best way to handle errors such as null byte not found
 		nullByte := bytes.IndexByte(buf, 0)
 
-		str := string(buf[:nullByte-1])
+		str := string(buf[:nullByte])
 
 		fmt.Printf("Message from WASM: %s!\n", str)
 	}
 
 	_, err = runtime.NewHostModuleBuilder("algorand").
-		NewFunctionBuilder().
-		WithFunc(hello).
-		Export("hello").
+		NewFunctionBuilder().WithFunc(hello).Export("hello").
+		NewFunctionBuilder().WithFunc(getU64).Export("get_u64").
 		Instantiate(ctx)
 
 	compiled, err := runtime.CompileModule(ctx, data)

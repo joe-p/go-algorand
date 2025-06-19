@@ -1,8 +1,5 @@
 // The entry file of your WebAssembly module.
 // External function declarations imported from "algorand" module
-@external("algorand", "host_hello")
-declare function host_hello(message: i32): void;
-
 @external("algorand", "host_get_global_uint") 
 declare function host_get_global_uint(app: u64, key: i32, len: i32): u64;
 
@@ -33,20 +30,20 @@ export function setGlobalUint(app: u64, key: string, value: u64): void {
   heap.free(keyPtr); // Clean up allocated memory
 }
 
-export function hello(message: string): void {
-  const messagePtr = stringToCString(message);
-  host_hello(messagePtr);
-  heap.free(messagePtr); // Clean up allocated memory
+function getCounter(): u64 {
+  return getGlobalUint(888, "counter");
 }
 
+function incrementCounter(): void {
+  setGlobalUint(888, "counter", getCounter() + 1);
+}
+
+
 export function program(): u64 {
-  const key = "counter";
 
-  const counter = getGlobalUint(888, key);
+  while (getCounter() < 10) {
+    incrementCounter();
+  }
 
-  setGlobalUint(888, key, counter + 1);
-
-  hello("Hello from AssemblyScript! Counter: " + getGlobalUint(888, key).toString());
-
-  return 1
+  return getCounter();
 }

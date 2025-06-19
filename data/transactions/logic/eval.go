@@ -1216,7 +1216,6 @@ func EvalContract(program []byte, gi int, aid basics.AppIndex, params *EvalParam
 		fmt.Fprintf(cx.Trace, "--- enter %d %s %v\n", aid, cx.txn.Txn.OnCompletion, cx.txn.Txn.ApplicationArgs)
 	}
 
-	start := time.Now()
 	var pass bool
 	var err error
 	if params.wasmPrograms != nil && params.wasmPrograms[aid] != nil {
@@ -1226,9 +1225,9 @@ func EvalContract(program []byte, gi int, aid basics.AppIndex, params *EvalParam
 
 		result, wasmErr := params.wasmPrograms[aid].Call(ctx)
 		err = wasmErr
-		if len(result) != 1 {
+		if err == nil && len(result) != 1 {
 			err = fmt.Errorf("wasm program for app %d returned %d results, expected 1 %x", aid, len(result), params.wasmPrograms[aid].Definition().ResultTypes()[0])
-		} else {
+		} else if err == nil {
 			pass = result[0] != 0
 		}
 
@@ -1238,10 +1237,6 @@ func EvalContract(program []byte, gi int, aid basics.AppIndex, params *EvalParam
 	if err != nil {
 		err = cx.evalError(err)
 	}
-
-	elapsed := time.Since(start)
-
-	fmt.Printf("eval took %s\n", elapsed)
 
 	if cx.Trace != nil && cx.caller != nil {
 		fmt.Fprintf(cx.Trace, "--- exit  %d accept=%t\n", aid, pass)

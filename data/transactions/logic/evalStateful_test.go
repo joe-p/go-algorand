@@ -17,7 +17,6 @@
 package logic
 
 import (
-	"bytes"
 	"context"
 	"encoding/hex"
 	"fmt"
@@ -3691,9 +3690,9 @@ func TestWasmAppLoop(t *testing.T) {
 	ep, _, _ := makeSampleEnv()
 	ep.TxnGroup[0].Txn.ApplicationID = 0
 
-	// wasmFile := "/Users/joe/git/algorand/go-algorand/test/wasm/assembly_script/build/release.wasm"
+	wasmFile := "/Users/joe/git/algorand/go-algorand/test/wasm/assembly_script/build/release.wasm"
 	// wasmFile := "/Users/joe/git/algorand/go-algorand/test/wasm/tinygo/program.wasm"
-	wasmFile := "/Users/joe/git/algorand/go-algorand/test/wasm/rust/target/wasm32-unknown-unknown/release/program.wasm"
+	// wasmFile := "/Users/joe/git/algorand/go-algorand/test/wasm/rust/target/wasm32-unknown-unknown/release/program.wasm"
 
 	// TODO(wasm): Have wasm binaries/source in this repo
 	file, err := os.Open(wasmFile)
@@ -3755,22 +3754,7 @@ func TestWasmAppLoop(t *testing.T) {
 		runtime.Close(ctx)
 	}
 
-	hello := func(ctx context.Context, m wazeroapi.Module, str_pointer uint32) {
-		mem := m.Memory()
-		// TODO(wasm): Figure out best way to handle out of range memory access, but
-		// this shouldn't happen here since we use mem.Size()
-		buf, _ := mem.Read(str_pointer, mem.Size()-str_pointer)
-
-		// TODO(wasm): Figure out best way to handle errors such as null byte not found
-		nullByte := bytes.IndexByte(buf, 0)
-
-		str := string(buf[:nullByte])
-
-		fmt.Printf("Message from WASM: %s!\n", str)
-	}
-
 	_, err = runtime.NewHostModuleBuilder("algorand").
-		NewFunctionBuilder().WithFunc(hello).Export("host_hello").
 		NewFunctionBuilder().WithFunc(getGlobalUint).Export("host_get_global_uint").
 		NewFunctionBuilder().WithFunc(setGlobalUint).Export("host_set_global_uint").Instantiate(ctx)
 
@@ -3801,7 +3785,11 @@ func TestWasmAppLoop(t *testing.T) {
 
 	testAppBytes(t, data, ep)
 
-	// TODO(wasm): Infinite loop because multiply by one instead of two
+	tv, exists, err := ep.Ledger.GetGlobal(basics.AppIndex(888), "counter")
+
+	require.True(t, exists, "counter global should exist")
+	require.Equal(t, uint64(10), tv.Uint, "counter global should be 10")
+
 }
 
 func TestPooledAppCallsVerifyOp(t *testing.T) {

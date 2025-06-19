@@ -1,14 +1,10 @@
 package main
 
 import (
-	"strconv"
 	"unsafe"
 )
 
 // Import the external functions from the "algorand" WASM module
-//
-//go:wasmimport algorand host_hello
-func hostHello(message *byte)
 
 //go:wasmimport algorand host_get_global_uint
 func hostGetGlobalUint(app uint64, key *byte, length int32) uint64
@@ -39,18 +35,24 @@ func SetGlobalUint(app uint64, key string, value uint64) {
 	hostSetGlobalUint(app, keyPtr, int32(len(key)), value)
 }
 
-func Hello(message string) {
-	messagePtr := stringToCPtr(message)
-	hostHello(messagePtr)
+// The user-written program
+
+func getCounter() uint64 {
+	key := "counter"
+	return GetGlobalUint(888, key)
+}
+
+func incrementCounter() {
+	key := "counter"
+	counter := GetGlobalUint(888, key)
+	SetGlobalUint(888, key, counter+1)
 }
 
 //export program
 func Program() uint64 {
-	key := "counter"
+	for getCounter() < 10 {
+		incrementCounter()
+	}
 
-	counter := GetGlobalUint(888, key)
-	SetGlobalUint(888, key, counter+1)
-	Hello("Hello from TinyGo! Counter: " + strconv.FormatUint(GetGlobalUint(888, key), 10))
-
-	return 1
+	return getCounter()
 }

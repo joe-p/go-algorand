@@ -3691,8 +3691,11 @@ func TestWasmAppLoop(t *testing.T) {
 	ep, _, _ := makeSampleEnv()
 	ep.TxnGroup[0].Txn.ApplicationID = 0
 
+	wasmFile := "/Users/joe/git/algorand/go-algorand/test/wasm/assembly_script/build/release.wasm"
+	// wasmFile := "/Users/joe/git/algorand/go-algorand/test/wasm/host_hello/target/wasm32-unknown-unknown/release/host_hello.wasm"
+
 	// TODO(wasm): Have wasm binaries/source in this repo
-	file, err := os.Open("/Users/joe/git/algorand/go-algorand/test/wasm/host_hello/target/wasm32-unknown-unknown/release/host_hello.wasm")
+	file, err := os.Open(wasmFile)
 	if err != nil {
 		panic(err)
 	}
@@ -3744,6 +3747,13 @@ func TestWasmAppLoop(t *testing.T) {
 		}
 	}
 
+	abort := func(ctx context.Context, m wazeroapi.Module, a int32, b int32, c int32, d int32) {
+		fmt.Printf("WASM program aborted!\n")
+
+		// TODO(wasm): Figure out best way to handle aborts
+		runtime.Close(ctx)
+	}
+
 	hello := func(ctx context.Context, m wazeroapi.Module, str_pointer uint32) {
 		mem := m.Memory()
 		// TODO(wasm): Figure out best way to handle out of range memory access, but
@@ -3761,7 +3771,11 @@ func TestWasmAppLoop(t *testing.T) {
 	_, err = runtime.NewHostModuleBuilder("algorand").
 		NewFunctionBuilder().WithFunc(hello).Export("host_hello").
 		NewFunctionBuilder().WithFunc(getGlobalUint).Export("host_get_global_uint").
-		NewFunctionBuilder().WithFunc(setGlobalUint).Export("host_set_global_uint").
+		NewFunctionBuilder().WithFunc(setGlobalUint).Export("host_set_global_uint").Instantiate(ctx)
+
+	// Needed for AssemblyScript to work, which uses the abort function
+	_, err = runtime.NewHostModuleBuilder("env").
+		NewFunctionBuilder().WithFunc(abort).Export("abort").
 		Instantiate(ctx)
 
 	compiled, err := runtime.CompileModule(ctx, data)

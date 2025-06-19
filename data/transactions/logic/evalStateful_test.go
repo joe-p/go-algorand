@@ -3689,6 +3689,7 @@ func TestWasmAppLoop(t *testing.T) {
 	partitiontest.PartitionTest(t)
 	t.Parallel()
 	ep, _, _ := makeSampleEnv()
+	ep.TxnGroup[0].Txn.ApplicationID = 0
 
 	// TODO(wasm): Have wasm binaries/source in this repo
 	file, err := os.Open("/Users/joe/git/algorand/go-algorand/test/wasm/host_hello/target/wasm32-unknown-unknown/release/host_hello.wasm")
@@ -3712,8 +3713,35 @@ func TestWasmAppLoop(t *testing.T) {
 	runtime := wazero.NewRuntimeWithConfig(ctx, runCfg)
 	defer runtime.Close(ctx)
 
-	getU64 := func(ctx context.Context, m wazeroapi.Module) uint64 {
-		return uint64(18446744073709551615)
+	getGlobalUint := func(ctx context.Context, m wazeroapi.Module, appId uint64, key_pointer int32, key_length int32) uint64 {
+		mem := m.Memory()
+		// TODO(wasm): Figure out best way to handle out of range memory access
+		key, _ := mem.Read(uint32(key_pointer), uint32(key_length))
+
+		tv, _, err := ep.Ledger.GetGlobal(basics.AppIndex(appId), string(key))
+		if err != nil {
+			fmt.Printf("Error getting global value: %v\n", err)
+			// TODO(wasm): Figure out best way to handle errors in general
+			return 1337
+		}
+
+		return tv.Uint
+
+	}
+
+	setGlobalUint := func(ctx context.Context, m wazeroapi.Module, appId uint64, key_pointer int32, key_length int32, value uint64) {
+		mem := m.Memory()
+
+		// TODO(wasm): Figure out best way to handle out of range memory access
+		key, _ := mem.Read(uint32(key_pointer), uint32(key_length))
+
+		tv := basics.TealValue{Type: basics.TealUintType, Uint: value}
+		err := ep.Ledger.SetGlobal(basics.AppIndex(appId), string(key), tv)
+		if err != nil {
+			fmt.Printf("Error setting global value: %v\n", err)
+			// TODO(wasm): Figure out best way to handle errors in general
+			return
+		}
 	}
 
 	hello := func(ctx context.Context, m wazeroapi.Module, str_pointer uint32) {
@@ -3732,7 +3760,8 @@ func TestWasmAppLoop(t *testing.T) {
 
 	_, err = runtime.NewHostModuleBuilder("algorand").
 		NewFunctionBuilder().WithFunc(hello).Export("hello").
-		NewFunctionBuilder().WithFunc(getU64).Export("get_u64").
+		NewFunctionBuilder().WithFunc(getGlobalUint).Export("get_global_uint").
+		NewFunctionBuilder().WithFunc(setGlobalUint).Export("set_global_uint").
 		Instantiate(ctx)
 
 	compiled, err := runtime.CompileModule(ctx, data)

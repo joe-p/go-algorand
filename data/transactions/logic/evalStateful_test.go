@@ -3759,9 +3759,9 @@ func TestWasmAppLoop(t *testing.T) {
 	}
 
 	_, err = runtime.NewHostModuleBuilder("algorand").
-		NewFunctionBuilder().WithFunc(hello).Export("hello").
-		NewFunctionBuilder().WithFunc(getGlobalUint).Export("get_global_uint").
-		NewFunctionBuilder().WithFunc(setGlobalUint).Export("set_global_uint").
+		NewFunctionBuilder().WithFunc(hello).Export("host_hello").
+		NewFunctionBuilder().WithFunc(getGlobalUint).Export("host_get_global_uint").
+		NewFunctionBuilder().WithFunc(setGlobalUint).Export("host_set_global_uint").
 		Instantiate(ctx)
 
 	compiled, err := runtime.CompileModule(ctx, data)

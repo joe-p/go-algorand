@@ -1221,12 +1221,16 @@ func EvalContract(program []byte, gi int, aid basics.AppIndex, params *EvalParam
 	var err error
 	if params.wasmPrograms != nil && params.wasmPrograms[aid] != nil {
 		// Current AVM allows 700 ops and each op is roughly 15 nanoseconds
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Nanosecond*700)
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second*700)
 		defer cancel()
 
 		result, wasmErr := params.wasmPrograms[aid].Call(ctx)
 		err = wasmErr
-		pass = result[0] != 0
+		if len(result) != 1 {
+			err = fmt.Errorf("wasm program for app %d returned %d results, expected 1 %x", aid, len(result), params.wasmPrograms[aid].Definition().ResultTypes()[0])
+		} else {
+			pass = result[0] != 0
+		}
 
 	} else {
 		pass, err = eval(program, &cx)

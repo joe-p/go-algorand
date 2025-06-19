@@ -3691,8 +3691,9 @@ func TestWasmAppLoop(t *testing.T) {
 	ep, _, _ := makeSampleEnv()
 	ep.TxnGroup[0].Txn.ApplicationID = 0
 
-	wasmFile := "/Users/joe/git/algorand/go-algorand/test/wasm/assembly_script/build/release.wasm"
-	// wasmFile := "/Users/joe/git/algorand/go-algorand/test/wasm/host_hello/target/wasm32-unknown-unknown/release/host_hello.wasm"
+	// wasmFile := "/Users/joe/git/algorand/go-algorand/test/wasm/assembly_script/build/release.wasm"
+	// wasmFile := "/Users/joe/git/algorand/go-algorand/test/wasm/tinygo/program.wasm"
+	wasmFile := "/Users/joe/git/algorand/go-algorand/test/wasm/rust/target/wasm32-unknown-unknown/release/program.wasm"
 
 	// TODO(wasm): Have wasm binaries/source in this repo
 	file, err := os.Open(wasmFile)
@@ -3790,6 +3791,11 @@ func TestWasmAppLoop(t *testing.T) {
 	}
 
 	fn := module.ExportedFunction("program")
+
+	if fn == nil {
+		panic("WASM program does not have a 'program' function exported")
+	}
+
 	ep.wasmPrograms = map[basics.AppIndex]wazeroapi.Function{}
 	ep.wasmPrograms[888] = fn
 

@@ -486,7 +486,7 @@ func testAppsBytes(t *testing.T, programs [][]byte, ep *EvalParams, expected ...
 	return nil
 }
 
-func testApp(t *testing.T, program string, ep *EvalParams, problems ...string) (transactions.EvalDelta, error) {
+func testApp(t testing.TB, program string, ep *EvalParams, problems ...string) (transactions.EvalDelta, error) {
 	t.Helper()
 	if ep == nil {
 		ep = defaultAppParamsWithVersion(LogicVersion)
@@ -498,7 +498,7 @@ func testApp(t *testing.T, program string, ep *EvalParams, problems ...string) (
 // testAppCreator is the creator of the 888 app that is inserted when testing an app call
 const testAppCreator = "47YPQTIGQEO7T4Y4RWDYWEKV6RTR2UNBQXBABEEGM72ESWDQNCQ52OPASU"
 
-func testAppBytes(t *testing.T, program []byte, ep *EvalParams, problems ...string) (transactions.EvalDelta, error) {
+func testAppBytes(t testing.TB, program []byte, ep *EvalParams, problems ...string) (transactions.EvalDelta, error) {
 	t.Helper()
 	if ep == nil {
 		ep = defaultAppParamsWithVersion(LogicVersion)
@@ -522,7 +522,7 @@ func testAppBytes(t *testing.T, program []byte, ep *EvalParams, problems ...stri
 // ep.reset() is in testAppBytes, not here. This means that ADs in the ep are
 // not cleared, so repeated use of a single ep is probably not a good idea
 // unless you are *intending* to see how ep is modified as you go.
-func testAppFull(t *testing.T, program []byte, gi int, aid basics.AppIndex, ep *EvalParams, problems ...string) (transactions.EvalDelta, error) {
+func testAppFull(t testing.TB, program []byte, gi int, aid basics.AppIndex, ep *EvalParams, problems ...string) (transactions.EvalDelta, error) {
 	t.Helper()
 
 	var checkProblem string
@@ -559,7 +559,14 @@ func testAppFull(t *testing.T, program []byte, gi int, aid basics.AppIndex, ep *
 		ep.Ledger = NewLedger(nil)
 	}
 
+	if b, ok := t.(*testing.B); ok {
+		b.StartTimer()
+	}
 	pass, err := EvalApp(program, gi, aid, ep)
+	if b, ok := t.(*testing.B); ok {
+		b.StopTimer()
+	}
+
 	delta := ep.TxnGroup[gi].EvalDelta
 	if evalProblem == "" {
 		require.NoError(t, err, "Eval\n%sExpected: PASS", ep.Trace)
@@ -3684,13 +3691,94 @@ func TestAppLoop(t *testing.T) {
 	testApp(t, stateful+"int 1; loop:; int 1; *; dup; int 10; <; bnz loop; int 16; ==", ep, "dynamic cost")
 }
 
+const globalCounterLoopTeal = `
+
+	b program
+	get_counter: 
+		byte "counter"
+		app_global_get
+		retsub
+	increment_counter:
+		byte "counter"
+		dup
+		app_global_get
+		int 1
+		+
+		app_global_put
+		retsub
+
+	program:
+		callsub increment_counter
+		callsub get_counter
+		int 10
+		<
+		bnz program
+
+	int 1
+	return	
+	`
+
+func BenchmarkWasmLoop(b *testing.B) {
+	b.ReportAllocs()
+
+	wasmFiles := map[string]string{
+		// "assembly_script": "/Users/joe/git/algorand/go-algorand/test/wasm/assembly_script/build/release.wasm",
+		// "tinygo": "/Users/joe/git/algorand/go-algorand/test/wasm/tinygo/program.wasm",
+		"rust": "/Users/joe/git/algorand/go-algorand/test/wasm/rust/target/wasm32-unknown-unknown/release/program.wasm",
+	}
+
+	for name, wasmFile := range wasmFiles {
+		b.ResetTimer()
+		b.Run(name, func(b *testing.B) {
+			ep, runtime := getWasmEp(wasmFile)
+			defer runtime.Close(context.Background())
+
+			for i := 0; i < b.N; i++ {
+				b.StopTimer()
+				testAppBytes(b, []byte{}, ep)
+				b.StopTimer()
+
+				// Reset the counter after each run
+				tv, exists, err := ep.Ledger.GetGlobal(basics.AppIndex(888), "counter")
+
+				require.NoError(b, err, "getting counter global should not error")
+				require.True(b, exists, "counter global should exist")
+				require.Equal(b, uint64(10), tv.Uint, "counter global should be 10")
+
+				err = ep.Ledger.SetGlobal(basics.AppIndex(888), "counter", basics.TealValue{Type: basics.TealUintType, Uint: 0})
+				require.NoError(b, err, "resetting counter global should not error")
+			}
+		})
+	}
+
+	b.Run("teal", func(b *testing.B) {
+		ep, _, _ := makeSampleEnv()
+		ep.TxnGroup[0].Txn.ApplicationID = 0
+
+		for i := 0; i < b.N; i++ {
+			b.StopTimer()
+			testApp(b, globalCounterLoopTeal, ep)
+			b.StopTimer()
+
+			// Reset the counter after each run
+			tv, exists, err := ep.Ledger.GetGlobal(basics.AppIndex(888), "counter")
+
+			require.NoError(b, err, "getting counter global should not error")
+			require.True(b, exists, "counter global should exist")
+			require.Equal(b, uint64(10), tv.Uint, "counter global should be 10")
+
+			err = ep.Ledger.SetGlobal(basics.AppIndex(888), "counter", basics.TealValue{Type: basics.TealUintType, Uint: 0})
+			require.NoError(b, err, "resetting counter global should not error")
+			err = ep.Ledger.SetGlobal(basics.AppIndex(888), "counter", basics.TealValue{Type: basics.TealUintType, Uint: 0})
+			require.NoError(b, err, "resetting counter global should not error")
+		}
+
+	})
+}
+
 func TestWasmLoop(t *testing.T) {
 	partitiontest.PartitionTest(t)
 	t.Parallel()
-
-	// wasmFile := "/Users/joe/git/algorand/go-algorand/test/wasm/assembly_script/build/release.wasm"
-	// wasmFile := "/Users/joe/git/algorand/go-algorand/test/wasm/tinygo/program.wasm"
-	// wasmFile := "/Users/joe/git/algorand/go-algorand/test/wasm/rust/target/wasm32-unknown-unknown/release/program.wasm"
 
 	wasmFiles := map[string]string{
 		"assembly_script": "/Users/joe/git/algorand/go-algorand/test/wasm/assembly_script/build/release.wasm",
@@ -3712,6 +3800,21 @@ func TestWasmLoop(t *testing.T) {
 			require.Equal(t, uint64(10), tv.Uint, "counter global should be 10")
 		})
 	}
+
+	t.Run("teal", func(t *testing.T) {
+		partitiontest.PartitionTest(t)
+		t.Parallel()
+
+		ep, _, _ := makeSampleEnv()
+		ep.TxnGroup[0].Txn.ApplicationID = 0
+
+		testApp(t, globalCounterLoopTeal, ep)
+
+		tv, exists, err := ep.Ledger.GetGlobal(basics.AppIndex(888), "counter")
+		require.NoError(t, err, "getting counter global should not error")
+		require.True(t, exists, "counter global should exist")
+		require.Equal(t, uint64(10), tv.Uint, "counter global should be 10")
+	})
 
 }
 

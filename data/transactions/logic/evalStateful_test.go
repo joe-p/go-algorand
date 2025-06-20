@@ -3725,14 +3725,15 @@ func BenchmarkWasmLoop(b *testing.B) {
 		// "assembly_script": "/Users/joe/git/algorand/go-algorand/test/wasm/assembly_script/build/release.wasm",
 		// "tinygo": "/Users/joe/git/algorand/go-algorand/test/wasm/tinygo/program.wasm",
 		"rust": "/Users/joe/git/algorand/go-algorand/test/wasm/rust/target/wasm32-unknown-unknown/release/program.wasm",
+		"zig":  "/Users/joe/git/algorand/go-algorand/test/wasm/zig/program.wasm",
 	}
 
 	for name, wasmFile := range wasmFiles {
-		b.ResetTimer()
 		b.Run(name, func(b *testing.B) {
 			ep, runtime := getWasmEp(wasmFile)
 			defer runtime.Close(context.Background())
 
+			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				b.StopTimer()
 				testAppBytes(b, []byte{}, ep)
@@ -3755,6 +3756,7 @@ func BenchmarkWasmLoop(b *testing.B) {
 		ep, _, _ := makeSampleEnv()
 		ep.TxnGroup[0].Txn.ApplicationID = 0
 
+		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
 			b.StopTimer()
 			testApp(b, globalCounterLoopTeal, ep)
@@ -3784,6 +3786,7 @@ func TestWasmLoop(t *testing.T) {
 		"assembly_script": "/Users/joe/git/algorand/go-algorand/test/wasm/assembly_script/build/release.wasm",
 		"tinygo":          "/Users/joe/git/algorand/go-algorand/test/wasm/tinygo/program.wasm",
 		"rust":            "/Users/joe/git/algorand/go-algorand/test/wasm/rust/target/wasm32-unknown-unknown/release/program.wasm",
+		"zig":             "/Users/joe/git/algorand/go-algorand/test/wasm/zig/program.wasm",
 	}
 
 	for name, wasmFile := range wasmFiles {

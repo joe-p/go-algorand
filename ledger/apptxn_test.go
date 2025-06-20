@@ -19,6 +19,9 @@ package ledger
 import (
 	"encoding/hex"
 	"fmt"
+	"io"
+	"os"
+	"slices"
 	"strconv"
 	"testing"
 
@@ -1216,7 +1219,7 @@ func TestInnerAppCall(t *testing.T) {
   itxn_submit
 `),
 		}
-		dl.createApp()
+		dl.createApp(addrs[0], main(""))
 		vb := dl.fullBlock(&app0)
 		id0 := vb.Block().Payset[0].ApplicationID
 
@@ -3769,5 +3772,41 @@ func TestAppCallAppDuringInit(t *testing.T) {
 			problem = "balance 0 below min"
 		}
 		dl.txn(&callInInit, problem)
+	})
+}
+
+func TestWasmProgram(t *testing.T) {
+	partitiontest.PartitionTest(t)
+
+	wasmFiles := map[string]string{
+		// "assembly_script": "/Users/joe/git/algorand/go-algorand/test/wasm/assembly_script/build/release.wasm",
+		// "tinygo": "/Users/joe/git/algorand/go-algorand/test/wasm/tinygo/program.wasm",
+		"rust": "/Users/joe/git/algorand/go-algorand/test/wasm/rust/target/wasm32-unknown-unknown/release/program.wasm",
+		// "zig":  "/Users/joe/git/algorand/go-algorand/test/wasm/zig/program.wasm",
+	}
+
+	file, err := os.Open(wasmFiles["rust"])
+	if err != nil {
+		panic(err)
+	}
+	defer file.Close()
+
+	// Read the file into a byte slice
+	data, err := io.ReadAll(file)
+	if err != nil {
+		panic(err)
+	}
+
+	genBalances, addrs, _ := ledgertesting.NewTestGenesis()
+	ledgertesting.TestConsensusRange(t, 40, 40, func(t *testing.T, ver int, cv protocol.ConsensusVersion, cfg config.Local) {
+		dl := NewDoubleLedger(t, genBalances, cv, cfg)
+		defer dl.Close()
+		wasmAppCall := txntest.Txn{
+			Type:        "appl",
+			Sender:      addrs[0],
+			WasmProgram: slices.Clone(data),
+		}
+
+		dl.txgroup("", &wasmAppCall)
 	})
 }

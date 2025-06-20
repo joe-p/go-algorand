@@ -541,7 +541,7 @@ func testAppFull(t testing.TB, program []byte, gi int, aid basics.AppIndex, ep *
 
 	ep.Trace = &strings.Builder{}
 
-	if ep.wasmPrograms == nil || ep.wasmPrograms[aid] == nil {
+	if ep.WasmPrograms == nil || ep.WasmPrograms[gi] == nil {
 		err := CheckContract(program, ep)
 		if checkProblem == "" {
 			require.NoError(t, err, "Error in CheckContract %v", ep.Trace)
@@ -3842,8 +3842,8 @@ func BenchmarkWasmSetup(b *testing.B) {
 func getWasmEp(wasmFile string) (*EvalParams, wazero.Runtime) {
 	ep, _, _ := makeSampleEnv()
 	ep.TxnGroup[0].Txn.ApplicationID = 0
-	ep.wasmPrograms = map[basics.AppIndex]chan wazeroapi.Function{}
-	ep.wasmPrograms[888] = make(chan wazeroapi.Function, 1)
+	ep.WasmPrograms = map[int]chan wazeroapi.Function{}
+	ep.WasmPrograms[0] = make(chan wazeroapi.Function, 1)
 
 	// TODO(wasm): Have wasm binaries/source in this repo
 	file, err := os.Open(wasmFile)
@@ -3867,7 +3867,7 @@ func getWasmEp(wasmFile string) (*EvalParams, wazero.Runtime) {
 	runtime := wazero.NewRuntimeWithConfig(ctx, runCfg)
 
 	getCurrentApplicationId := func(ctx context.Context, m wazeroapi.Module) uint64 {
-		return uint64(ep.currentContext.appID)
+		return uint64(ep.CurrentContext.appID)
 	}
 
 	getGlobalUint := func(ctx context.Context, m wazeroapi.Module, appId uint64, key_pointer int32, key_length int32) uint64 {
@@ -3936,7 +3936,7 @@ func getWasmEp(wasmFile string) (*EvalParams, wazero.Runtime) {
 		panic("WASM program does not have a 'program' function exported")
 	}
 
-	ep.wasmPrograms[888] <- fn
+	ep.WasmPrograms[0] <- fn
 	return ep, runtime
 }
 

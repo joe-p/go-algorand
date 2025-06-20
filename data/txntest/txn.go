@@ -88,6 +88,7 @@ type Txn struct {
 	ApprovalProgram   interface{} // string, nil, or []bytes if already compiled
 	ClearStateProgram interface{} // string, nil or []bytes if already compiled
 	ExtraProgramPages uint32
+	WasmProgram       []byte
 
 	StateProofType protocol.StateProofType
 	StateProof     stateproof.StateProof
@@ -125,6 +126,10 @@ func (tx *Txn) internalCopy() {
 	}
 	if program, ok := tx.ClearStateProgram.([]byte); ok {
 		tx.ClearStateProgram = append([]byte(nil), program...)
+	}
+
+	if tx.WasmProgram != nil {
+		tx.WasmProgram = append([]byte(nil), tx.WasmProgram...)
 	}
 }
 
@@ -293,6 +298,7 @@ func (tx Txn) Txn() transactions.Transaction {
 			ApprovalProgram:   assemble(tx.ApprovalProgram),
 			ClearStateProgram: assemble(tx.ClearStateProgram),
 			ExtraProgramPages: tx.ExtraProgramPages,
+			WasmProgram:       append([]byte(nil), tx.WasmProgram...),
 		},
 		StateProofTxnFields: transactions.StateProofTxnFields{
 			StateProofType: tx.StateProofType,

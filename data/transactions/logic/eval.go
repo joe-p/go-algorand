@@ -318,12 +318,14 @@ func RuntimeEvalConstants() EvalConstants {
 
 // EvalParams contains data that comes into condition evaluation.
 type EvalParams struct {
+	// WasmPrograms is a map of group IDs to channels that contain the wazero.Function
+	//
 	// TODO(wasm): Potentially we need to zero out the memory after each function call,
 	// so we don't "leak" memory between calls but that would require have the module here
 	// and not just the function.
-	wasmPrograms map[basics.AppIndex]chan wazeroapi.Function
+	WasmPrograms map[int]chan wazeroapi.Function
 
-	currentContext *EvalContext
+	CurrentContext *EvalContext
 
 	runMode RunMode
 
@@ -1139,7 +1141,7 @@ func EvalContract(program []byte, gi int, aid basics.AppIndex, params *EvalParam
 		appID:      aid,
 	}
 
-	params.currentContext = &cx
+	params.CurrentContext = &cx
 
 	// Save scratch for `gload`. We used to copy, but cx.scratch is quite large,
 	// about 8k, and caused measurable CPU and memory demands.  Of course, these
@@ -1223,13 +1225,14 @@ func EvalContract(program []byte, gi int, aid basics.AppIndex, params *EvalParam
 
 	var pass bool
 	var err error
-	if params.wasmPrograms != nil && params.wasmPrograms[aid] != nil {
+	if params.WasmPrograms != nil && params.WasmPrograms[gi] != nil {
 		// Current AVM allows 700 ops and each op is roughly 15 nanoseconds
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second*700)
 		defer cancel()
 
+		fmt.Printf("Executing wasm program for txn %d ", gi)
 		select {
-		case fn := <-params.wasmPrograms[aid]:
+		case fn := <-params.WasmPrograms[gi]:
 			result, wasmErr := fn.Call(ctx)
 			err = wasmErr
 

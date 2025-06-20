@@ -3684,15 +3684,40 @@ func TestAppLoop(t *testing.T) {
 	testApp(t, stateful+"int 1; loop:; int 1; *; dup; int 10; <; bnz loop; int 16; ==", ep, "dynamic cost")
 }
 
-func TestWasmAppLoop(t *testing.T) {
+func TestWasmLoop(t *testing.T) {
 	partitiontest.PartitionTest(t)
 	t.Parallel()
-	ep, _, _ := makeSampleEnv()
-	ep.TxnGroup[0].Txn.ApplicationID = 0
 
-	wasmFile := "/Users/joe/git/algorand/go-algorand/test/wasm/assembly_script/build/release.wasm"
+	// wasmFile := "/Users/joe/git/algorand/go-algorand/test/wasm/assembly_script/build/release.wasm"
 	// wasmFile := "/Users/joe/git/algorand/go-algorand/test/wasm/tinygo/program.wasm"
 	// wasmFile := "/Users/joe/git/algorand/go-algorand/test/wasm/rust/target/wasm32-unknown-unknown/release/program.wasm"
+
+	wasmFiles := map[string]string{
+		"assembly_script": "/Users/joe/git/algorand/go-algorand/test/wasm/assembly_script/build/release.wasm",
+		"tinygo":          "/Users/joe/git/algorand/go-algorand/test/wasm/tinygo/program.wasm",
+		"rust":            "/Users/joe/git/algorand/go-algorand/test/wasm/rust/target/wasm32-unknown-unknown/release/program.wasm",
+	}
+
+	for name, wasmFile := range wasmFiles {
+		t.Run(name, func(t *testing.T) {
+			ep, runtime := getWasmEp(wasmFile)
+			defer runtime.Close(context.Background())
+
+			testAppBytes(t, []byte{}, ep)
+
+			tv, exists, err := ep.Ledger.GetGlobal(basics.AppIndex(888), "counter")
+
+			require.NoError(t, err, "getting counter global should not error")
+			require.True(t, exists, "counter global should exist")
+			require.Equal(t, uint64(10), tv.Uint, "counter global should be 10")
+		})
+	}
+
+}
+
+func getWasmEp(wasmFile string) (*EvalParams, wazero.Runtime) {
+	ep, _, _ := makeSampleEnv()
+	ep.TxnGroup[0].Txn.ApplicationID = 0
 
 	// TODO(wasm): Have wasm binaries/source in this repo
 	file, err := os.Open(wasmFile)
@@ -3714,7 +3739,6 @@ func TestWasmAppLoop(t *testing.T) {
 	// WithMemoryCapacityFromMax(true) means that the memory is pre-allocated
 	runCfg := wazero.NewRuntimeConfig().WithMemoryLimitPages(62).WithMemoryCapacityFromMax(true)
 	runtime := wazero.NewRuntimeWithConfig(ctx, runCfg)
-	defer runtime.Close(ctx)
 
 	getGlobalUint := func(ctx context.Context, m wazeroapi.Module, appId uint64, key_pointer int32, key_length int32) uint64 {
 		mem := m.Memory()
@@ -3783,13 +3807,7 @@ func TestWasmAppLoop(t *testing.T) {
 	ep.wasmPrograms = map[basics.AppIndex]wazeroapi.Function{}
 	ep.wasmPrograms[888] = fn
 
-	testAppBytes(t, data, ep)
-
-	tv, exists, err := ep.Ledger.GetGlobal(basics.AppIndex(888), "counter")
-
-	require.True(t, exists, "counter global should exist")
-	require.Equal(t, uint64(10), tv.Uint, "counter global should be 10")
-
+	return ep, runtime
 }
 
 func TestPooledAppCallsVerifyOp(t *testing.T) {

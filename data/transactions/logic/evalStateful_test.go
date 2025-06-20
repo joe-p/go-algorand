@@ -3730,12 +3730,12 @@ func BenchmarkWasmLoop(b *testing.B) {
 
 	for name, wasmFile := range wasmFiles {
 		b.Run(name, func(b *testing.B) {
-			ep, runtime := getWasmEp(wasmFile)
-			defer runtime.Close(context.Background())
 
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				b.StopTimer()
+				ep, runtime := getWasmEp(wasmFile)
+				defer runtime.Close(context.Background())
 				testAppBytes(b, []byte{}, ep)
 				b.StopTimer()
 
@@ -3842,6 +3842,8 @@ func BenchmarkWasmSetup(b *testing.B) {
 func getWasmEp(wasmFile string) (*EvalParams, wazero.Runtime) {
 	ep, _, _ := makeSampleEnv()
 	ep.TxnGroup[0].Txn.ApplicationID = 0
+	ep.wasmPrograms = map[basics.AppIndex]chan wazeroapi.Function{}
+	ep.wasmPrograms[888] = make(chan wazeroapi.Function, 1)
 
 	// TODO(wasm): Have wasm binaries/source in this repo
 	file, err := os.Open(wasmFile)
@@ -3934,9 +3936,7 @@ func getWasmEp(wasmFile string) (*EvalParams, wazero.Runtime) {
 		panic("WASM program does not have a 'program' function exported")
 	}
 
-	ep.wasmPrograms = map[basics.AppIndex]wazeroapi.Function{}
-	ep.wasmPrograms[888] = fn
-
+	ep.wasmPrograms[888] <- fn
 	return ep, runtime
 }
 

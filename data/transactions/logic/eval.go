@@ -321,7 +321,7 @@ type EvalParams struct {
 	// TODO(wasm): Potentially we need to zero out the memory after each function call,
 	// so we don't "leak" memory between calls but that would require have the module here
 	// and not just the function.
-	wasmPrograms map[basics.AppIndex]wazeroapi.Function
+	wasmPrograms map[basics.AppIndex]chan wazeroapi.Function
 
 	currentContext *EvalContext
 
@@ -1228,12 +1228,20 @@ func EvalContract(program []byte, gi int, aid basics.AppIndex, params *EvalParam
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second*700)
 		defer cancel()
 
-		result, wasmErr := params.wasmPrograms[aid].Call(ctx)
-		err = wasmErr
-		if err == nil && len(result) != 1 {
-			err = fmt.Errorf("wasm program for app %d returned %d results, expected 1 %x", aid, len(result), params.wasmPrograms[aid].Definition().ResultTypes()[0])
-		} else if err == nil {
-			pass = result[0] != 0
+		select {
+		case fn := <-params.wasmPrograms[aid]:
+			result, wasmErr := fn.Call(ctx)
+			err = wasmErr
+
+			if err == nil && len(result) != 1 {
+				err = fmt.Errorf("wasm program for app %d returned %d results, expected 1 %x", aid, len(result), fn.Definition().ResultTypes()[0])
+			} else if err == nil {
+				pass = result[0] != 0
+			}
+
+		// TODO(wasm): figure out a good timeout value
+		case <-time.After(5 * time.Second):
+			err = fmt.Errorf("wasm program for app %d timed out", aid)
 		}
 
 	} else {

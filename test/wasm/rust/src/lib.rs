@@ -1,3 +1,5 @@
+#![no_std]
+
 mod algokit;
 
 use algokit::{get_global_uint, set_global_uint};

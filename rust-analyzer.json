@@ -1,0 +1,3 @@
+{
+  "linkedProjects": ["test/wasm/rust/Cargo.toml"]
+}

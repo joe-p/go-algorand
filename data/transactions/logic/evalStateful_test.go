@@ -3818,6 +3818,24 @@ func TestWasmLoop(t *testing.T) {
 
 }
 
+func BenchmarkWasmSetup(b *testing.B) {
+	b.ReportAllocs()
+
+	wasmFiles := map[string]string{
+		"assembly_script": "/Users/joe/git/algorand/go-algorand/test/wasm/assembly_script/build/release.wasm",
+		"tinygo":          "/Users/joe/git/algorand/go-algorand/test/wasm/tinygo/program.wasm",
+		"rust":            "/Users/joe/git/algorand/go-algorand/test/wasm/rust/target/wasm32-unknown-unknown/release/program.wasm",
+	}
+
+	for name, wasmFile := range wasmFiles {
+		b.Run(name, func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				getWasmEp(wasmFile)
+			}
+		})
+	}
+}
+
 func getWasmEp(wasmFile string) (*EvalParams, wazero.Runtime) {
 	ep, _, _ := makeSampleEnv()
 	ep.TxnGroup[0].Txn.ApplicationID = 0

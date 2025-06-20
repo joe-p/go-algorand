@@ -1,5 +1,6 @@
 extern "algorand" fn host_get_global_uint(app: u64, key: [*]const u8, len: i32) u64;
 extern "algorand" fn host_set_global_uint(app: u64, key: [*]const u8, len: i32, value: u64) void;
+extern "algorand" fn host_get_current_application_id() u64;
 
 pub fn get_global_uint(app: u64, key: []const u8) u64 {
     return host_get_global_uint(app, key.ptr, @intCast(key.len));
@@ -7,4 +8,8 @@ pub fn get_global_uint(app: u64, key: []const u8) u64 {
 
 pub fn set_global_uint(app: u64, key: []const u8, value: u64) void {
     host_set_global_uint(app, key.ptr, @intCast(key.len), value);
+}
+
+pub fn get_current_application_id() u64 {
+    return host_get_current_application_id();
 }

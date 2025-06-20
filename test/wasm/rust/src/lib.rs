@@ -2,16 +2,17 @@
 
 mod algokit;
 
-use algokit::{get_global_uint, set_global_uint};
+use algokit::{get_global_uint, set_global_uint, get_current_application_id};
 
 pub fn increment_counter() {
     let key = "counter";
+    let app_id = get_current_application_id();
 
-    set_global_uint(888, key, get_global_uint(888, key) + 1);
+    set_global_uint(app_id, key, get_global_uint(app_id, key) + 1);
 }
 
 pub fn get_counter() -> u64 {
-    get_global_uint(888, "counter")
+    get_global_uint(get_current_application_id(), "counter")
 }
 
 #[unsafe(no_mangle)]

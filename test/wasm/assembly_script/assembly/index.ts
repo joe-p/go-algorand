@@ -6,6 +6,9 @@ declare function host_get_global_uint(app: u64, key: i32, len: i32): u64;
 @external("algorand", "host_set_global_uint")
 declare function host_set_global_uint(app: u64, key: i32, len: i32, value: u64): void;
 
+@external("algorand", "host_get_current_application_id")
+declare function host_get_current_application_id(): u64;
+
 // Helper function to convert string to C string pointer
 function stringToCString(str: string): i32 {
   const utf8Bytes = String.UTF8.encode(str, true); // null-terminated
@@ -30,12 +33,16 @@ export function setGlobalUint(app: u64, key: string, value: u64): void {
   heap.free(keyPtr); // Clean up allocated memory
 }
 
+export function getCurrentAppId(): u64 {
+  return host_get_current_application_id();
+}
+
 function getCounter(): u64 {
-  return getGlobalUint(888, "counter");
+  return getGlobalUint(getCurrentAppId(), "counter");
 }
 
 function incrementCounter(): void {
-  setGlobalUint(888, "counter", getCounter() + 1);
+  setGlobalUint(getCurrentAppId(), "counter", getCounter() + 1);
 }
 
 

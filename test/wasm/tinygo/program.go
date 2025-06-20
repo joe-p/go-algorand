@@ -12,6 +12,9 @@ func hostGetGlobalUint(app uint64, key *byte, length int32) uint64
 //go:wasmimport algorand host_set_global_uint
 func hostSetGlobalUint(app uint64, key *byte, length int32, value uint64)
 
+//go:wasmimport algorand host_get_current_application_id
+func hostGetCurrentApplicationId() uint64
+
 // Helper function to convert Go string to C-style null-terminated byte pointer
 func stringToCPtr(s string) *byte {
 	if len(s) == 0 {
@@ -35,17 +38,22 @@ func SetGlobalUint(app uint64, key string, value uint64) {
 	hostSetGlobalUint(app, keyPtr, int32(len(key)), value)
 }
 
+func GetCurrentAppId() uint64 {
+	return hostGetCurrentApplicationId()
+}
+
 // The user-written program
 
 func getCounter() uint64 {
 	key := "counter"
-	return GetGlobalUint(888, key)
+	return GetGlobalUint(GetCurrentAppId(), key)
 }
 
 func incrementCounter() {
 	key := "counter"
-	counter := GetGlobalUint(888, key)
-	SetGlobalUint(888, key, counter+1)
+	appId := GetCurrentAppId()
+	counter := GetGlobalUint(appId, key)
+	SetGlobalUint(appId, key, counter+1)
 }
 
 //export program

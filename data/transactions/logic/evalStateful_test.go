@@ -3864,6 +3864,10 @@ func getWasmEp(wasmFile string) (*EvalParams, wazero.Runtime) {
 	runCfg := wazero.NewRuntimeConfig().WithMemoryLimitPages(62).WithMemoryCapacityFromMax(true)
 	runtime := wazero.NewRuntimeWithConfig(ctx, runCfg)
 
+	getCurrentApplicationId := func(ctx context.Context, m wazeroapi.Module) uint64 {
+		return uint64(ep.currentContext.appID)
+	}
+
 	getGlobalUint := func(ctx context.Context, m wazeroapi.Module, appId uint64, key_pointer int32, key_length int32) uint64 {
 		mem := m.Memory()
 		// TODO(wasm): Figure out best way to handle out of range memory access
@@ -3904,7 +3908,9 @@ func getWasmEp(wasmFile string) (*EvalParams, wazero.Runtime) {
 
 	_, err = runtime.NewHostModuleBuilder("algorand").
 		NewFunctionBuilder().WithFunc(getGlobalUint).Export("host_get_global_uint").
-		NewFunctionBuilder().WithFunc(setGlobalUint).Export("host_set_global_uint").Instantiate(ctx)
+		NewFunctionBuilder().WithFunc(setGlobalUint).Export("host_set_global_uint").
+		NewFunctionBuilder().WithFunc(getCurrentApplicationId).Export("host_get_current_application_id").
+		Instantiate(ctx)
 
 	// Needed for AssemblyScript to work, which uses the abort function
 	_, err = runtime.NewHostModuleBuilder("env").

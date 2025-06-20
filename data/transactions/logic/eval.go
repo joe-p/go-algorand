@@ -323,6 +323,8 @@ type EvalParams struct {
 	// and not just the function.
 	wasmPrograms map[basics.AppIndex]wazeroapi.Function
 
+	currentContext *EvalContext
+
 	runMode RunMode
 
 	Proto *config.ConsensusParams
@@ -1136,6 +1138,9 @@ func EvalContract(program []byte, gi int, aid basics.AppIndex, params *EvalParam
 		txn:        &params.TxnGroup[gi],
 		appID:      aid,
 	}
+
+	params.currentContext = &cx
+
 	// Save scratch for `gload`. We used to copy, but cx.scratch is quite large,
 	// about 8k, and caused measurable CPU and memory demands.  Of course, these
 	// should never be changed by later transactions.

@@ -1216,6 +1216,7 @@ func TestInnerAppCall(t *testing.T) {
   itxn_submit
 `),
 		}
+		dl.createApp()
 		vb := dl.fullBlock(&app0)
 		id0 := vb.Block().Payset[0].ApplicationID
 

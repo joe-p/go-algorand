@@ -2,11 +2,12 @@ const algokit = @import("algokit.zig");
 
 fn increment_counter() void {
     const key = "counter";
-    algokit.set_global_uint(888, key, algokit.get_global_uint(888, key) + 1);
+    const app_id = algokit.get_current_application_id();
+    algokit.set_global_uint(app_id, key, algokit.get_global_uint(app_id, key) + 1);
 }
 
 fn get_counter() u64 {
-    return algokit.get_global_uint(888, "counter");
+    return algokit.get_global_uint(algokit.get_current_application_id(), "counter");
 }
 
 export fn program() u64 {

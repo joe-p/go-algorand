@@ -3692,6 +3692,7 @@ func TestAppLoop(t *testing.T) {
 }
 
 const globalCounterLoopTeal = `
+	#pragma version 11
 
 	b program
 	get_counter: 

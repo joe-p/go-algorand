@@ -3797,16 +3797,115 @@ func TestWasmProgram(t *testing.T) {
 		panic(err)
 	}
 
-	genBalances, addrs, _ := ledgertesting.NewTestGenesis()
-	ledgertesting.TestConsensusRange(t, 40, 40, func(t *testing.T, ver int, cv protocol.ConsensusVersion, cfg config.Local) {
-		dl := NewDoubleLedger(t, genBalances, cv, cfg)
-		defer dl.Close()
-		wasmAppCall := txntest.Txn{
-			Type:        "appl",
-			Sender:      addrs[0],
-			WasmProgram: slices.Clone(data),
-		}
+	cfg := config.GetDefaultLocal()
 
-		dl.txgroup("", &wasmAppCall)
-	})
+	genBalances, addrs, _ := ledgertesting.NewTestGenesis()
+	wasmAppCall := txntest.Txn{
+		Type:        "appl",
+		Sender:      addrs[0],
+		WasmProgram: slices.Clone(data),
+		GlobalStateSchema: basics.StateSchema{
+			NumUint: 1,
+		},
+	}
+
+	var cv protocol.ConsensusVersion = "future"
+
+	l := newSimpleLedgerWithConsensusVersion(t, genBalances, cv, cfg)
+
+	eval := nextBlock(t, l)
+	txgroup(t, l, eval, &wasmAppCall)
+}
+
+func BenchmarkWasmProgram(b *testing.B) {
+	partitiontest.PartitionTest(b)
+
+	wasmFiles := map[string]string{
+		// "assembly_script": "/Users/joe/git/algorand/go-algorand/test/wasm/assembly_script/build/release.wasm",
+		// "tinygo": "/Users/joe/git/algorand/go-algorand/test/wasm/tinygo/program.wasm",
+		"rust": "/Users/joe/git/algorand/go-algorand/test/wasm/rust/target/wasm32-unknown-unknown/release/program.wasm",
+		// "zig":  "/Users/joe/git/algorand/go-algorand/test/wasm/zig/program.wasm",
+		"teal": `
+	#pragma version 11
+	b program
+	get_counter: 
+		byte "counter"
+		app_global_get
+		retsub
+	increment_counter:
+		byte "counter"
+		dup
+		app_global_get
+		int 1
+		+
+		app_global_put
+		retsub
+
+	program:
+		callsub increment_counter
+		callsub get_counter
+		int 10
+		<
+		bnz program
+
+	int 1
+	return	
+	`,
+	}
+
+	for lang, wasmFile := range wasmFiles {
+		b.Run(lang, func(b *testing.B) {
+			cfg := config.GetDefaultLocal()
+			genBalances, addrs, _ := ledgertesting.NewTestGenesis()
+
+			var appl txntest.Txn
+
+			if lang == "teal" {
+				appl = txntest.Txn{
+					Type:   "appl",
+					Sender: addrs[0],
+					GlobalStateSchema: basics.StateSchema{
+						NumUint: 1,
+					},
+					ApprovalProgram: wasmFile,
+				}
+
+			} else {
+				file, err := os.Open(wasmFile)
+				if err != nil {
+					panic(err)
+				}
+				defer file.Close()
+
+				// Read the file into a byte slice
+				data, err := io.ReadAll(file)
+				if err != nil {
+					panic(err)
+				}
+
+				appl = txntest.Txn{
+					Type:        "appl",
+					Sender:      addrs[0],
+					WasmProgram: slices.Clone(data),
+					GlobalStateSchema: basics.StateSchema{
+						NumUint: 1,
+					},
+				}
+			}
+
+			var cv protocol.ConsensusVersion = "future"
+
+			l := newSimpleLedgerWithConsensusVersion(b, genBalances, cv, cfg)
+
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				b.StopTimer()
+				eval := nextBlock(b, l)
+				b.StartTimer()
+				err := txgroup(b, l, eval, &appl)
+				b.StopTimer()
+				require.NoError(b, err, "failed to process app call")
+			}
+		})
+	}
 }

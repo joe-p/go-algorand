@@ -1230,7 +1230,6 @@ func EvalContract(program []byte, gi int, aid basics.AppIndex, params *EvalParam
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second*700)
 		defer cancel()
 
-		fmt.Printf("Executing wasm program for txn %d ", gi)
 		select {
 		case fn := <-params.WasmPrograms[gi]:
 			result, wasmErr := fn.Call(ctx)

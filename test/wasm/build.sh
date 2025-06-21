@@ -44,4 +44,12 @@ echo ""
 cd ..
 
 
+echo "Building Rust (arc200)"
+cd arc200
+cargo build --release --target wasm32-unknown-unknown
+wasm-opt -Oz target/wasm32-unknown-unknown/release/arc200.wasm -o target/wasm32-unknown-unknown/release/arc200.wasm
+echo "*** Rust WASM Size: `ls -lh target/wasm32-unknown-unknown/release/arc200.wasm | awk '{print $5}'` bytes ***"
+echo ""
+cd ..
+
 echo "Done!"

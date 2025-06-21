@@ -1228,6 +1228,7 @@ func EvalContract(program []byte, gi int, aid basics.AppIndex, params *EvalParam
 			err = fmt.Errorf("wasm program returned %d results, expected 1", len(results))
 		} else {
 			pass = results[0] != 0
+			// println("wasm program result:", results[0])
 		}
 
 		if err != nil {

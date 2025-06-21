@@ -1,3 +1,6 @@
 {
-  "linkedProjects": ["test/wasm/rust/Cargo.toml"]
+  "linkedProjects": [
+    "test/wasm/rust/Cargo.toml",
+    "test/wasm/algokit_rs/Cargo.toml"
+  ]
 }

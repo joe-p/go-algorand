@@ -3783,9 +3783,10 @@ func TestWasmProgram(t *testing.T) {
 		// "tinygo": "/Users/joe/git/algorand/go-algorand/test/wasm/tinygo/program.wasm",
 		"rust": "/Users/joe/git/algorand/go-algorand/test/wasm/rust/target/wasm32-unknown-unknown/release/program.wasm",
 		// "zig":  "/Users/joe/git/algorand/go-algorand/test/wasm/zig/program.wasm",
+		"arc200": "/Users/joe/git/algorand/go-algorand/test/wasm/arc200/target/wasm32-unknown-unknown/release/arc200.wasm",
 	}
 
-	file, err := os.Open(wasmFiles["rust"])
+	file, err := os.Open(wasmFiles["arc200"])
 	if err != nil {
 		panic(err)
 	}
@@ -3805,7 +3806,8 @@ func TestWasmProgram(t *testing.T) {
 		Sender:      addrs[0],
 		WasmProgram: slices.Clone(data),
 		GlobalStateSchema: basics.StateSchema{
-			NumUint: 1,
+			NumUint:      1,
+			NumByteSlice: 1,
 		},
 	}
 
@@ -3922,7 +3924,8 @@ func benchWasm(b *testing.B, langs map[string]string, groupSizes []int) {
 						Sender:      addrs[0],
 						WasmProgram: slices.Clone(data),
 						GlobalStateSchema: basics.StateSchema{
-							NumUint: 1,
+							NumUint:      1,
+							NumByteSlice: 1,
 						},
 					}
 				}
@@ -3958,7 +3961,7 @@ func BenchmarkWasmStateLoop(b *testing.B) {
 		"tinygo":          "/Users/joe/git/algorand/go-algorand/test/wasm/tinygo/program.wasm",
 		"rust":            "/Users/joe/git/algorand/go-algorand/test/wasm/rust/target/wasm32-unknown-unknown/release/program.wasm",
 		"zig":             "/Users/joe/git/algorand/go-algorand/test/wasm/zig/program.wasm",
-		"rust_fibo":       "/Users/joe/git/algorand/go-algorand/test/wasm/fibo/target/wasm32-unknown-unknown/release/fibo.wasm",
+		"arc200":          "/Users/joe/git/algorand/go-algorand/test/wasm/arc200/target/wasm32-unknown-unknown/release/arc200.wasm",
 		"teal":            tealStateLoop,
 	}
 

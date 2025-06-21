@@ -907,6 +907,66 @@ func StartEvaluator(l LedgerForEvaluator, hdr bookkeeping.BlockHeader, evalOpts 
 		panic("getCurrentApplicationId called without evalContext in context")
 	}
 
+	//  fn host_get_global_bytes(
+	//     app: u64,
+	//     key: *const u8,
+	//     key_len: i32,
+	//     byte_buffer: *mut u8,
+	//     byte_buffer_len: i32,
+	// ) -> i32;
+	// fn host_set_global_bytes(
+	//     app: u64,
+	//     key: *const u8,
+	//     key_len: i32,
+	//     bytes: *const u8,
+	//     bytes_len: i32,
+	// );
+
+	getGlobalBytes := func(ctx context.Context, m wazeroapi.Module, appId uint64, key_pointer int32, key_length int32, byte_buffer_pointer int32, byte_buffer_len int32) int32 {
+		if evalContext, ok := ctx.Value("evalContext").(*logic.EvalContext); ok {
+			mem := m.Memory()
+			key, _ := mem.Read(uint32(key_pointer), uint32(key_length))
+			tv, _, err := evalContext.Ledger.GetGlobal(basics.AppIndex(appId), string(key))
+			if err != nil {
+				panic(fmt.Sprintf("Error getting global value: %v\n", err))
+			}
+			bytes := tv.Bytes
+
+			if len(bytes) > int(byte_buffer_len) {
+				panic(fmt.Sprintf("Error: bytes length %d exceeds buffer length %d\n", len(bytes), byte_buffer_len))
+			}
+
+			if len(bytes) > 0 {
+				// Write the bytes to memory
+				ok := mem.Write(uint32(byte_buffer_pointer), []byte(bytes))
+				if !ok {
+					panic(fmt.Sprintf("Writing memory out of range"))
+				}
+				return int32(len(bytes))
+			} else {
+				return 0
+			}
+		}
+		panic("getGlobalBytes called without evalContext in context")
+	}
+
+	setGlobalBytes := func(ctx context.Context, m wazeroapi.Module, appId uint64, key_pointer int32, key_length int32, byte_value_pointer int32, byte_value_len int32) {
+		if evalContext, ok := ctx.Value("evalContext").(*logic.EvalContext); ok {
+			mem := m.Memory()
+			key, _ := mem.Read(uint32(key_pointer), uint32(key_length))
+			bytes, _ := mem.Read(uint32(byte_value_pointer), uint32(byte_value_len))
+			tv := basics.TealValue{Type: basics.TealBytesType, Bytes: string(bytes)}
+			err := evalContext.Ledger.SetGlobal(basics.AppIndex(appId), string(key), tv)
+			if err != nil {
+				panic(fmt.Sprintf("Error setting global value: %v\n", err))
+			}
+
+			return
+		}
+
+		panic("setGlobalBytes called without evalContext in context")
+	}
+
 	getGlobalUint := func(ctx context.Context, m wazeroapi.Module, appId uint64, key_pointer int32, key_length int32) uint64 {
 		if evalContext, ok := ctx.Value("evalContext").(*logic.EvalContext); ok {
 			mem := m.Memory()
@@ -957,6 +1017,8 @@ func StartEvaluator(l LedgerForEvaluator, hdr bookkeeping.BlockHeader, evalOpts 
 	_, err = runtime.NewHostModuleBuilder("algorand").
 		NewFunctionBuilder().WithFunc(getGlobalUint).Export("host_get_global_uint").
 		NewFunctionBuilder().WithFunc(setGlobalUint).Export("host_set_global_uint").
+		NewFunctionBuilder().WithFunc(getGlobalBytes).Export("host_get_global_bytes").
+		NewFunctionBuilder().WithFunc(setGlobalBytes).Export("host_set_global_bytes").
 		NewFunctionBuilder().WithFunc(getCurrentApplicationId).Export("host_get_current_application_id").
 		Instantiate(runtimeCtx)
 
@@ -1132,15 +1194,10 @@ func (eval *BlockEvaluator) TransactionGroup(txgroup []transactions.SignedTxnWit
 	cow := eval.state.child(len(txgroup))
 	defer cow.recycle()
 
-	// TODO(wasm): Here we should start compilation of the WASM programs in the background in parallel.
 	evalParams := logic.NewAppEvalParams(txgroup, &eval.proto, &eval.specials)
 	evalParams.Tracer = eval.Tracer
 
 	evalParams.WasmProgramFunctions = make(map[int]chan *wazeroapi.Function)
-
-	for gi, _ := range txgroup {
-		evalParams.WasmProgramFunctions[gi] = make(chan *wazeroapi.Function, 1)
-	}
 
 	hashToIdxs := make(map[[16]byte][]int, len(txgroup))
 
@@ -1151,6 +1208,8 @@ func (eval *BlockEvaluator) TransactionGroup(txgroup []transactions.SignedTxnWit
 		if wasmProgram == nil {
 			continue
 		}
+
+		evalParams.WasmProgramFunctions[gi] = make(chan *wazeroapi.Function, 1)
 
 		var hash [16]byte
 		copy(hash[:], hasher.Sum(wasmProgram)[:])

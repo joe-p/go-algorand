@@ -3885,30 +3885,16 @@ program:
 	callsub fibonacci
 	return`
 
-func BenchmarkWasmProgram(b *testing.B) {
-	partitiontest.PartitionTest(b)
-
-	wasmFiles := map[string]string{
-		"assembly_script_state_loop": "/Users/joe/git/algorand/go-algorand/test/wasm/assembly_script/build/release.wasm",
-		"tinygo_state_loop":          "/Users/joe/git/algorand/go-algorand/test/wasm/tinygo/program.wasm",
-		"rust_state_loop":            "/Users/joe/git/algorand/go-algorand/test/wasm/rust/target/wasm32-unknown-unknown/release/program.wasm",
-		"zig_state_loop":             "/Users/joe/git/algorand/go-algorand/test/wasm/zig/program.wasm",
-		"rust_fibo":                  "/Users/joe/git/algorand/go-algorand/test/wasm/fibo/target/wasm32-unknown-unknown/release/fibo.wasm",
-		"teal_state_loop":            tealStateLoop,
-		"teal_fibo":                  tealFibo,
-	}
-
-	groupSizes := []int{1, 2, 16}
-
+func benchWasm(b *testing.B, langs map[string]string, groupSizes []int) {
 	for _, groupSize := range groupSizes {
-		for lang, wasmFile := range wasmFiles {
+		for lang, wasmFile := range langs {
 			b.Run(fmt.Sprintf("%s group of %d", lang, groupSize), func(b *testing.B) {
 				cfg := config.GetDefaultLocal()
 				genBalances, addrs, _ := ledgertesting.NewTestGenesis()
 
 				var appl txntest.Txn
 
-				if lang[:4] == "teal" {
+				if lang == "teal" {
 					appl = txntest.Txn{
 						Type:   "appl",
 						Sender: addrs[0],
@@ -3962,4 +3948,32 @@ func BenchmarkWasmProgram(b *testing.B) {
 			})
 		}
 	}
+}
+
+func BenchmarkWasmStateLoop(b *testing.B) {
+	partitiontest.PartitionTest(b)
+
+	wasmFiles := map[string]string{
+		"assembly_script": "/Users/joe/git/algorand/go-algorand/test/wasm/assembly_script/build/release.wasm",
+		"tinygo":          "/Users/joe/git/algorand/go-algorand/test/wasm/tinygo/program.wasm",
+		"rust":            "/Users/joe/git/algorand/go-algorand/test/wasm/rust/target/wasm32-unknown-unknown/release/program.wasm",
+		"zig":             "/Users/joe/git/algorand/go-algorand/test/wasm/zig/program.wasm",
+		"rust_fibo":       "/Users/joe/git/algorand/go-algorand/test/wasm/fibo/target/wasm32-unknown-unknown/release/fibo.wasm",
+		"teal":            tealStateLoop,
+	}
+
+	groupSizes := []int{1}
+	benchWasm(b, wasmFiles, groupSizes)
+}
+
+func BenchmarkWasmRustVsTealFibo(b *testing.B) {
+	partitiontest.PartitionTest(b)
+
+	wasmFiles := map[string]string{
+		"rust": "/Users/joe/git/algorand/go-algorand/test/wasm/fibo/target/wasm32-unknown-unknown/release/fibo.wasm",
+		"teal": tealFibo,
+	}
+
+	groupSizes := []int{1, 2, 16}
+	benchWasm(b, wasmFiles, groupSizes)
 }

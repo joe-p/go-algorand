@@ -1216,7 +1216,9 @@ func EvalContract(program []byte, gi int, aid basics.AppIndex, params *EvalParam
 	var pass bool
 	var err error
 
+	freeList := []uint32{65536 + 4096} // free list for wasm program evaluation
 	ctx := context.WithValue(context.Background(), "evalContext", &cx)
+	ctx = context.WithValue(ctx, "freeList", &freeList)
 	wasmProgram := cx.TxnGroup[gi].Txn.WasmProgram
 	if wasmProgram != nil {
 		fn := <-cx.EvalParams.WasmProgramFunctions[gi]

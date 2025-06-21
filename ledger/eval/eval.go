@@ -907,20 +907,49 @@ func StartEvaluator(l LedgerForEvaluator, hdr bookkeeping.BlockHeader, evalOpts 
 		panic("getCurrentApplicationId called without evalContext in context")
 	}
 
-	//  fn host_get_global_bytes(
-	//     app: u64,
-	//     key: *const u8,
-	//     key_len: i32,
-	//     byte_buffer: *mut u8,
-	//     byte_buffer_len: i32,
-	// ) -> i32;
-	// fn host_set_global_bytes(
-	//     app: u64,
-	//     key: *const u8,
-	//     key_len: i32,
-	//     bytes: *const u8,
-	//     bytes_len: i32,
-	// );
+	alloc := func(ctx context.Context, m wazeroapi.Module, size uint32) uint32 {
+		if freeListPtr, ok := ctx.Value("freeList").(*[]uint32); ok {
+
+			freeList := *freeListPtr
+
+			if len(freeList) == 0 {
+				panic("alloc called with empty free list")
+			}
+
+			offset := freeList[len(freeList)-1]
+			freeList = freeList[:len(freeList)-1]
+
+			maxPages, _ := m.Memory().Definition().Max()
+
+			maxMem := maxPages * 65536
+			if len(freeList) == 0 && offset+4096 < maxMem {
+				freeList = append(freeList, offset+4096)
+			}
+
+			*freeListPtr = freeList
+
+			fmt.Println("freeList after alloc:", freeList)
+			return offset
+
+		}
+
+		panic("alloc called without freeList in context")
+	}
+
+	dealloc := func(ctx context.Context, m wazeroapi.Module, offset uint32) {
+		if freeListPtr, ok := ctx.Value("freeList").(*[]uint32); ok {
+			freeList := *freeListPtr
+
+			freeList = append(freeList, offset)
+
+			*freeListPtr = freeList
+
+			fmt.Println("freeList after dealloc:", freeList)
+			return
+		}
+
+		panic("dealloc called without freeList in context")
+	}
 
 	getGlobalBytes := func(ctx context.Context, m wazeroapi.Module, appId uint64, key_pointer int32, key_length int32, byte_buffer_pointer int32, byte_buffer_len int32) int32 {
 		if evalContext, ok := ctx.Value("evalContext").(*logic.EvalContext); ok {
@@ -1020,6 +1049,8 @@ func StartEvaluator(l LedgerForEvaluator, hdr bookkeeping.BlockHeader, evalOpts 
 		NewFunctionBuilder().WithFunc(getGlobalBytes).Export("host_get_global_bytes").
 		NewFunctionBuilder().WithFunc(setGlobalBytes).Export("host_set_global_bytes").
 		NewFunctionBuilder().WithFunc(getCurrentApplicationId).Export("host_get_current_application_id").
+		NewFunctionBuilder().WithFunc(alloc).Export("host_alloc").
+		NewFunctionBuilder().WithFunc(dealloc).Export("host_dealloc").
 		Instantiate(runtimeCtx)
 
 	// Needed for AssemblyScript to work, which uses the abort function

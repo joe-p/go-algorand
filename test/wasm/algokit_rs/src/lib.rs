@@ -2,12 +2,11 @@
 
 extern crate alloc;
 
+use core::alloc::{GlobalAlloc, Layout};
 use core::panic::PanicInfo;
+use core::ptr;
 
 use alloc::vec::Vec;
-
-#[global_allocator]
-static ALLOCATOR: talc::TalckWasm = unsafe { talc::TalckWasm::new_global() };
 
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
@@ -37,7 +36,35 @@ unsafe extern "C" {
     );
 
     fn host_get_current_application_id() -> u64;
+
+    fn host_alloc(size: u32) -> *mut u8;
+    fn host_dealloc(ptr: *mut u8);
 }
+
+struct HostAllocator;
+
+unsafe impl GlobalAlloc for HostAllocator {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        if layout.size() == 0 {
+            return ptr::null_mut();
+        }
+
+        // Host allocator uses 4k chunks, providing excellent alignment
+        // No need for custom alignment handling
+        unsafe { host_alloc(layout.size() as u32) }
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, _layout: Layout) {
+        if !ptr.is_null() {
+            unsafe {
+                host_dealloc(ptr);
+            }
+        }
+    }
+}
+
+#[global_allocator]
+static ALLOCATOR: HostAllocator = HostAllocator;
 
 pub fn get_global_uint(app: u64, key: &[u8]) -> u64 {
     unsafe {

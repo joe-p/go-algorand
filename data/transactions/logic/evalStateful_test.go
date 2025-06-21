@@ -3692,8 +3692,6 @@ func TestAppLoop(t *testing.T) {
 }
 
 const globalCounterLoopTeal = `
-	#pragma version 11
-
 	b program
 	get_counter: 
 		byte "counter"
@@ -3864,7 +3862,7 @@ func getWasmEp(wasmFile string) (*EvalParams, wazero.Runtime) {
 	// Current AVM allows stack depth of 1k with 4k for each value, so 4MB total
 	// Each page is 64k, so 62 pages is a little under 4MB
 	// WithMemoryCapacityFromMax(true) means that the memory is pre-allocated
-	runCfg := wazero.NewRuntimeConfig().WithMemoryLimitPages(62).WithMemoryCapacityFromMax(true)
+	runCfg := wazero.NewRuntimeConfigInterpreter().WithMemoryLimitPages(62).WithMemoryCapacityFromMax(true)
 	runtime := wazero.NewRuntimeWithConfig(ctx, runCfg)
 
 	getCurrentApplicationId := func(ctx context.Context, m wazeroapi.Module) uint64 {
@@ -3920,18 +3918,13 @@ func getWasmEp(wasmFile string) (*EvalParams, wazero.Runtime) {
 		NewFunctionBuilder().WithFunc(abort).Export("abort").
 		Instantiate(ctx)
 
-	compiled, err := runtime.CompileModule(ctx, data)
+	instance, err := runtime.InstantiateWithConfig(ctx, data, wazero.NewModuleConfig().WithStartFunctions())
 
 	if err != nil {
 		panic(err)
 	}
 
-	module, err := runtime.InstantiateModule(ctx, compiled, wazero.NewModuleConfig())
-	if err != nil {
-		panic(err)
-	}
-
-	fn := module.ExportedFunction("program")
+	fn := instance.ExportedFunction("program")
 
 	if fn == nil {
 		panic("WASM program does not have a 'program' function exported")

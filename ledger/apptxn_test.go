@@ -3891,6 +3891,8 @@ func BenchmarkWasmProgram(b *testing.B) {
 						NumUint: 1,
 					},
 				}
+
+				fmt.Printf("Wasm program %s loaded with size %d bytes\n", lang, len(appl.WasmProgram))
 			}
 
 			var cv protocol.ConsensusVersion = "future"

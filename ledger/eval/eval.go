@@ -692,6 +692,8 @@ type BlockEvaluator struct {
 	maxTxnBytesPerBlock int
 
 	Tracer logic.EvalTracer
+
+	wasmRuntime wazero.Runtime
 }
 
 // LedgerForEvaluator defines the ledger interface needed by the evaluator.
@@ -883,6 +885,80 @@ func StartEvaluator(l LedgerForEvaluator, hdr bookkeeping.BlockHeader, evalOpts 
 		eval.Tracer.BeforeBlock(&eval.block.BlockHeader)
 	}
 
+	runtimeCtx := context.Background()
+
+	// Current AVM allows stack depth of 1k with 4k for each value, so 4MB total
+	// Each page is 64k, so 62 pages is a little under 4MB
+	// WithMemoryCapacityFromMax(true) means that the memory is pre-allocated
+	runCfg := wazero.NewRuntimeConfigInterpreter().WithMemoryLimitPages(62).WithMemoryCapacityFromMax(true)
+	runtime := wazero.NewRuntimeWithConfig(runtimeCtx, runCfg)
+
+	getCurrentApplicationId := func(ctx context.Context, m wazeroapi.Module) uint64 {
+		if evalContext, ok := ctx.Value("evalContext").(*logic.EvalContext); ok {
+			return uint64(evalContext.AppID())
+		}
+		panic("getCurrentApplicationId called without evalContext in context")
+	}
+
+	getGlobalUint := func(ctx context.Context, m wazeroapi.Module, appId uint64, key_pointer int32, key_length int32) uint64 {
+		if evalContext, ok := ctx.Value("evalContext").(*logic.EvalContext); ok {
+			mem := m.Memory()
+			// TODO(wasm): Figure out best way to handle out of range memory access
+			key, _ := mem.Read(uint32(key_pointer), uint32(key_length))
+
+			tv, _, err := evalContext.Ledger.GetGlobal(basics.AppIndex(appId), string(key))
+			if err != nil {
+				fmt.Printf("Error getting global value: %v\n", err)
+				// TODO(wasm): Figure out best way to handle errors in general
+				return 1337
+			}
+
+			return tv.Uint
+		}
+		panic("getCurrentApplicationId called without evalContext in context")
+
+	}
+
+	setGlobalUint := func(ctx context.Context, m wazeroapi.Module, appId uint64, key_pointer int32, key_length int32, value uint64) {
+		if evalContext, ok := ctx.Value("evalContext").(*logic.EvalContext); ok {
+			mem := m.Memory()
+
+			// TODO(wasm): Figure out best way to handle out of range memory access
+			key, _ := mem.Read(uint32(key_pointer), uint32(key_length))
+
+			tv := basics.TealValue{Type: basics.TealUintType, Uint: value}
+			err := evalContext.Ledger.SetGlobal(basics.AppIndex(appId), string(key), tv)
+			if err != nil {
+				fmt.Printf("Error setting global value: %v\n", err)
+				// TODO(wasm): Figure out best way to handle errors in general
+				return
+			}
+
+			return
+		}
+
+		panic("setGlobalUint called without evalContext in context")
+	}
+
+	abort := func(ctx context.Context, m wazeroapi.Module, a int32, b int32, c int32, d int32) {
+		fmt.Printf("WASM program aborted!\n")
+
+		// TODO(wasm): Figure out best way to handle aborts
+		runtime.Close(ctx)
+	}
+
+	_, err = runtime.NewHostModuleBuilder("algorand").
+		NewFunctionBuilder().WithFunc(getGlobalUint).Export("host_get_global_uint").
+		NewFunctionBuilder().WithFunc(setGlobalUint).Export("host_set_global_uint").
+		NewFunctionBuilder().WithFunc(getCurrentApplicationId).Export("host_get_current_application_id").
+		Instantiate(runtimeCtx)
+
+	// Needed for AssemblyScript to work, which uses the abort function
+	_, err = runtime.NewHostModuleBuilder("env").
+		NewFunctionBuilder().WithFunc(abort).Export("abort").
+		Instantiate(runtimeCtx)
+
+	eval.wasmRuntime = runtime
 	return eval, nil
 }
 
@@ -1052,103 +1128,7 @@ func (eval *BlockEvaluator) TransactionGroup(txgroup []transactions.SignedTxnWit
 	// TODO(wasm): Here we should start compilation of the WASM programs in the background in parallel.
 	evalParams := logic.NewAppEvalParams(txgroup, &eval.proto, &eval.specials)
 	evalParams.Tracer = eval.Tracer
-	evalParams.WasmPrograms = make(map[int]chan wazeroapi.Function, len(txgroup))
-
-	var wg sync.WaitGroup
-	for gi, tx := range txgroup {
-		if tx.Txn.Type != protocol.ApplicationCallTx {
-			continue
-		}
-
-		if tx.Txn.WasmProgram == nil {
-			continue
-		}
-
-		evalParams.WasmPrograms[gi] = make(chan wazeroapi.Function, 1)
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			ctx := context.Background()
-
-			// Current AVM allows stack devalParamsth of 1k with 4k for each value, so 4MB total
-			// Each page is 64k, so 62 pages is a little under 4MB
-			// WithMemoryCapacityFromMax(true) means that the memory is pre-allocated
-			runCfg := wazero.NewRuntimeConfig().WithMemoryLimitPages(62).WithMemoryCapacityFromMax(true)
-			runtime := wazero.NewRuntimeWithConfig(ctx, runCfg)
-
-			getCurrentApplicationId := func(ctx context.Context, m wazeroapi.Module) uint64 {
-				return uint64(evalParams.CurrentContext.AppID())
-			}
-
-			getGlobalUint := func(ctx context.Context, m wazeroapi.Module, appId uint64, key_pointer int32, key_length int32) uint64 {
-				mem := m.Memory()
-				// TODO(wasm): Figure out best way to handle out of range memory access
-				key, _ := mem.Read(uint32(key_pointer), uint32(key_length))
-
-				tv, _, err := evalParams.Ledger.GetGlobal(basics.AppIndex(appId), string(key))
-				if err != nil {
-					fmt.Printf("Error getting global value: %v\n", err)
-					// TODO(wasm): Figure out best way to handle errors in general
-					return 1337
-				}
-
-				return tv.Uint
-
-			}
-
-			setGlobalUint := func(ctx context.Context, m wazeroapi.Module, appId uint64, key_pointer int32, key_length int32, value uint64) {
-				mem := m.Memory()
-
-				// TODO(wasm): Figure out best way to handle out of range memory access
-				key, _ := mem.Read(uint32(key_pointer), uint32(key_length))
-
-				tv := basics.TealValue{Type: basics.TealUintType, Uint: value}
-				err := evalParams.Ledger.SetGlobal(basics.AppIndex(appId), string(key), tv)
-				if err != nil {
-					fmt.Printf("Error setting global value: %v\n", err)
-					// TODO(wasm): Figure out best way to handle errors in general
-					return
-				}
-			}
-
-			abort := func(ctx context.Context, m wazeroapi.Module, a int32, b int32, c int32, d int32) {
-				fmt.Printf("WASM program aborted!\n")
-
-				// TODO(wasm): Figure out best way to handle aborts
-				runtime.Close(ctx)
-			}
-
-			_, err = runtime.NewHostModuleBuilder("algorand").
-				NewFunctionBuilder().WithFunc(getGlobalUint).Export("host_get_global_uint").
-				NewFunctionBuilder().WithFunc(setGlobalUint).Export("host_set_global_uint").
-				NewFunctionBuilder().WithFunc(getCurrentApplicationId).Export("host_get_current_application_id").
-				Instantiate(ctx)
-
-			// Needed for AssemblyScript to work, which uses the abort function
-			_, err = runtime.NewHostModuleBuilder("env").
-				NewFunctionBuilder().WithFunc(abort).Export("abort").
-				Instantiate(ctx)
-
-			compiled, err := runtime.CompileModule(ctx, tx.Txn.WasmProgram)
-
-			if err != nil {
-				panic(err)
-			}
-
-			module, err := runtime.InstantiateModule(ctx, compiled, wazero.NewModuleConfig())
-			if err != nil {
-				panic(err)
-			}
-
-			fn := module.ExportedFunction("program")
-
-			if fn == nil {
-				panic("WASM program does not have a 'program' function exported")
-			}
-
-			evalParams.WasmPrograms[gi] <- fn
-		}()
-	}
+	evalParams.WasmRuntime = &eval.wasmRuntime
 
 	if eval.Tracer != nil {
 		eval.Tracer.BeforeTxnGroup(evalParams)
@@ -1224,7 +1204,6 @@ func (eval *BlockEvaluator) TransactionGroup(txgroup []transactions.SignedTxnWit
 	eval.blockTxBytes += groupTxBytes
 	cow.commitToParent()
 
-	wg.Wait()
 	return nil
 }
 

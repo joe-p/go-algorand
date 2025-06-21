@@ -32,7 +32,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/algorand/go-algorand/config"
 	"github.com/algorand/go-algorand/config/bounds"
@@ -43,7 +42,7 @@ import (
 	"github.com/algorand/go-algorand/ledger/ledgercore"
 	"github.com/algorand/go-algorand/logging"
 	"github.com/algorand/go-algorand/protocol"
-	wazeroapi "github.com/tetratelabs/wazero/api"
+	"github.com/tetratelabs/wazero"
 )
 
 // The constants below control opcode evaluation and MAY NOT be changed without
@@ -318,14 +317,7 @@ func RuntimeEvalConstants() EvalConstants {
 
 // EvalParams contains data that comes into condition evaluation.
 type EvalParams struct {
-	// WasmPrograms is a map of group IDs to channels that contain the wazero.Function
-	//
-	// TODO(wasm): Potentially we need to zero out the memory after each function call,
-	// so we don't "leak" memory between calls but that would require have the module here
-	// and not just the function.
-	WasmPrograms map[int]chan wazeroapi.Function
-
-	CurrentContext *EvalContext
+	WasmRuntime *wazero.Runtime
 
 	runMode RunMode
 
@@ -1141,8 +1133,6 @@ func EvalContract(program []byte, gi int, aid basics.AppIndex, params *EvalParam
 		appID:      aid,
 	}
 
-	params.CurrentContext = &cx
-
 	// Save scratch for `gload`. We used to copy, but cx.scratch is quite large,
 	// about 8k, and caused measurable CPU and memory demands.  Of course, these
 	// should never be changed by later transactions.
@@ -1225,27 +1215,30 @@ func EvalContract(program []byte, gi int, aid basics.AppIndex, params *EvalParam
 
 	var pass bool
 	var err error
-	if params.WasmPrograms != nil && params.WasmPrograms[gi] != nil {
-		// Current AVM allows 700 ops and each op is roughly 15 nanoseconds
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second*700)
-		defer cancel()
 
-		select {
-		case fn := <-params.WasmPrograms[gi]:
-			result, wasmErr := fn.Call(ctx)
-			err = wasmErr
+	ctx := context.WithValue(context.Background(), "evalContext", &cx)
+	wasmProgram := cx.TxnGroup[gi].Txn.WasmProgram
+	if wasmProgram != nil {
+		instance, err := (*params.WasmRuntime).InstantiateWithConfig(ctx, wasmProgram, wazero.NewModuleConfig().WithStartFunctions())
 
-			if err == nil && len(result) != 1 {
-				err = fmt.Errorf("wasm program for app %d returned %d results, expected 1 %x", aid, len(result), fn.Definition().ResultTypes()[0])
-			} else if err == nil {
-				pass = result[0] != 0
-			}
-
-		// TODO(wasm): figure out a good timeout value
-		case <-time.After(5 * time.Second):
-			err = fmt.Errorf("wasm program for app %d timed out", aid)
+		if err != nil {
+			panic(err)
 		}
 
+		fn := instance.ExportedFunction("program")
+		results, wasmErr := fn.Call(ctx)
+
+		if wasmErr != nil {
+			err = wasmErr
+		} else if len(results) != 1 {
+			err = fmt.Errorf("wasm program returned %d results, expected 1", len(results))
+		} else {
+			pass = results[0] != 0
+		}
+
+		if err != nil {
+			fmt.Println("wasm program error:", err)
+		}
 	} else {
 		pass, err = eval(program, &cx)
 	}

@@ -3817,43 +3817,88 @@ func TestWasmProgram(t *testing.T) {
 	txgroup(t, l, eval, &wasmAppCall)
 }
 
+const tealStateLoop = `
+#pragma version 11
+b program
+get_counter:
+	byte "counter"
+	app_global_get
+	retsub
+increment_counter:
+	byte "counter"
+	dup
+	app_global_get
+	int 1
+	+
+	app_global_put
+	retsub
+
+program:
+	callsub increment_counter
+	callsub get_counter
+	int 10
+	<
+	bnz program
+
+int 1
+return`
+
+const tealFibo = `
+#pragma version 11
+b program
+
+// fibonacci(n: uint64): uint64
+fibonacci:
+	proto 1 1
+
+	// *if1_condition
+	// examples/calculator/calculator.algo.ts:49
+	// n <= 1
+	frame_dig -1 // n: uint64
+	int 1
+	<=
+	bz *if1_end
+
+	// *if1_consequent
+	// examples/calculator/calculator.algo.ts:50
+	// return n;
+	frame_dig -1 // n: uint64
+	retsub
+
+*if1_end:
+	// examples/calculator/calculator.algo.ts:52
+	// return this.fibonacci(n - 1) + this.fibonacci(n - 2);
+	frame_dig -1 // n: uint64
+	int 1
+	-
+	callsub fibonacci
+	frame_dig -1 // n: uint64
+	pushint 2
+	-
+	callsub fibonacci
+	+
+	retsub
+
+
+program:
+	int 7
+	callsub fibonacci
+	return`
+
 func BenchmarkWasmProgram(b *testing.B) {
 	partitiontest.PartitionTest(b)
 
 	wasmFiles := map[string]string{
-		"assembly_script": "/Users/joe/git/algorand/go-algorand/test/wasm/assembly_script/build/release.wasm",
-		"tinygo":          "/Users/joe/git/algorand/go-algorand/test/wasm/tinygo/program.wasm",
-		"rust":            "/Users/joe/git/algorand/go-algorand/test/wasm/rust/target/wasm32-unknown-unknown/release/program.wasm",
-		"zig":             "/Users/joe/git/algorand/go-algorand/test/wasm/zig/program.wasm",
-		"teal": `
-	#pragma version 11
-	b program
-	get_counter: 
-		byte "counter"
-		app_global_get
-		retsub
-	increment_counter:
-		byte "counter"
-		dup
-		app_global_get
-		int 1
-		+
-		app_global_put
-		retsub
-
-	program:
-		callsub increment_counter
-		callsub get_counter
-		int 10
-		<
-		bnz program
-
-	int 1
-	return	
-	`,
+		"assembly_script_state_loop": "/Users/joe/git/algorand/go-algorand/test/wasm/assembly_script/build/release.wasm",
+		"tinygo_state_loop":          "/Users/joe/git/algorand/go-algorand/test/wasm/tinygo/program.wasm",
+		"rust_state_loop":            "/Users/joe/git/algorand/go-algorand/test/wasm/rust/target/wasm32-unknown-unknown/release/program.wasm",
+		"zig_state_loop":             "/Users/joe/git/algorand/go-algorand/test/wasm/zig/program.wasm",
+		"rust_fibo":                  "/Users/joe/git/algorand/go-algorand/test/wasm/fibo/target/wasm32-unknown-unknown/release/fibo.wasm",
+		"teal_state_loop":            tealStateLoop,
+		"teal_fibo":                  tealFibo,
 	}
 
-	groupSizes := []int{1, 16}
+	groupSizes := []int{1, 2, 16}
 
 	for _, groupSize := range groupSizes {
 		for lang, wasmFile := range wasmFiles {
@@ -3863,7 +3908,7 @@ func BenchmarkWasmProgram(b *testing.B) {
 
 				var appl txntest.Txn
 
-				if lang == "teal" {
+				if lang[:4] == "teal" {
 					appl = txntest.Txn{
 						Type:   "appl",
 						Sender: addrs[0],

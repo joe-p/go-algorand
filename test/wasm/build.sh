@@ -32,5 +32,16 @@ zig build-exe src/lib.zig -target wasm32-freestanding -O ReleaseSmall -fno-entry
 wasm-opt -Oz program.wasm -o program.wasm
 echo "*** Zig WASM Size: `ls -lh program.wasm | awk '{print $5}'` bytes ***"
 echo ""
+cd ..
+
+
+echo "Building Rust (fibo)"
+cd fibo
+cargo build --release --target wasm32-unknown-unknown
+wasm-opt -Oz target/wasm32-unknown-unknown/release/fibo.wasm -o target/wasm32-unknown-unknown/release/fibo.wasm
+echo "*** Rust WASM Size: `ls -lh target/wasm32-unknown-unknown/release/fibo.wasm | awk '{print $5}'` bytes ***"
+echo ""
+cd ..
+
 
 echo "Done!"

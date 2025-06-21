@@ -1,3 +1,4 @@
+wazero-cache/
 target/
 *.wasm
 *.wasm.o

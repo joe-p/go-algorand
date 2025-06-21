@@ -3821,10 +3821,10 @@ func BenchmarkWasmProgram(b *testing.B) {
 	partitiontest.PartitionTest(b)
 
 	wasmFiles := map[string]string{
-		// "assembly_script": "/Users/joe/git/algorand/go-algorand/test/wasm/assembly_script/build/release.wasm",
-		// "tinygo": "/Users/joe/git/algorand/go-algorand/test/wasm/tinygo/program.wasm",
-		"rust": "/Users/joe/git/algorand/go-algorand/test/wasm/rust/target/wasm32-unknown-unknown/release/program.wasm",
-		// "zig":  "/Users/joe/git/algorand/go-algorand/test/wasm/zig/program.wasm",
+		"assembly_script": "/Users/joe/git/algorand/go-algorand/test/wasm/assembly_script/build/release.wasm",
+		"tinygo":          "/Users/joe/git/algorand/go-algorand/test/wasm/tinygo/program.wasm",
+		"rust":            "/Users/joe/git/algorand/go-algorand/test/wasm/rust/target/wasm32-unknown-unknown/release/program.wasm",
+		"zig":             "/Users/joe/git/algorand/go-algorand/test/wasm/zig/program.wasm",
 		"teal": `
 	#pragma version 11
 	b program
@@ -3853,61 +3853,68 @@ func BenchmarkWasmProgram(b *testing.B) {
 	`,
 	}
 
-	for lang, wasmFile := range wasmFiles {
-		b.Run(lang, func(b *testing.B) {
-			cfg := config.GetDefaultLocal()
-			genBalances, addrs, _ := ledgertesting.NewTestGenesis()
+	groupSizes := []int{1, 16}
 
-			var appl txntest.Txn
+	for _, groupSize := range groupSizes {
+		for lang, wasmFile := range wasmFiles {
+			b.Run(fmt.Sprintf("%s group of %d", lang, groupSize), func(b *testing.B) {
+				cfg := config.GetDefaultLocal()
+				genBalances, addrs, _ := ledgertesting.NewTestGenesis()
 
-			if lang == "teal" {
-				appl = txntest.Txn{
-					Type:   "appl",
-					Sender: addrs[0],
-					GlobalStateSchema: basics.StateSchema{
-						NumUint: 1,
-					},
-					ApprovalProgram: wasmFile,
+				var appl txntest.Txn
+
+				if lang == "teal" {
+					appl = txntest.Txn{
+						Type:   "appl",
+						Sender: addrs[0],
+						GlobalStateSchema: basics.StateSchema{
+							NumUint: 1,
+						},
+						ApprovalProgram: wasmFile,
+					}
+
+				} else {
+					file, err := os.Open(wasmFile)
+					if err != nil {
+						panic(err)
+					}
+					defer file.Close()
+
+					// Read the file into a byte slice
+					data, err := io.ReadAll(file)
+					if err != nil {
+						panic(err)
+					}
+
+					appl = txntest.Txn{
+						Type:        "appl",
+						Sender:      addrs[0],
+						WasmProgram: slices.Clone(data),
+						GlobalStateSchema: basics.StateSchema{
+							NumUint: 1,
+						},
+					}
 				}
 
-			} else {
-				file, err := os.Open(wasmFile)
-				if err != nil {
-					panic(err)
-				}
-				defer file.Close()
-
-				// Read the file into a byte slice
-				data, err := io.ReadAll(file)
-				if err != nil {
-					panic(err)
+				txns := make([]*txntest.Txn, groupSize)
+				for i := range groupSize {
+					txns[i] = appl.Noted(fmt.Sprintf("txn %d", i))
 				}
 
-				appl = txntest.Txn{
-					Type:        "appl",
-					Sender:      addrs[0],
-					WasmProgram: slices.Clone(data),
-					GlobalStateSchema: basics.StateSchema{
-						NumUint: 1,
-					},
+				var cv protocol.ConsensusVersion = "future"
+
+				l := newSimpleLedgerWithConsensusVersion(b, genBalances, cv, cfg)
+
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					b.StopTimer()
+					eval := nextBlock(b, l)
+					b.StartTimer()
+					err := txgroup(b, l, eval, txns...)
+					b.StopTimer()
+					require.NoError(b, err, "failed to process app call")
 				}
-
-				fmt.Printf("Wasm program %s loaded with size %d bytes\n", lang, len(appl.WasmProgram))
-			}
-
-			var cv protocol.ConsensusVersion = "future"
-
-			l := newSimpleLedgerWithConsensusVersion(b, genBalances, cv, cfg)
-
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				b.StopTimer()
-				eval := nextBlock(b, l)
-				b.StartTimer()
-				err := txgroup(b, l, eval, &appl)
-				b.StopTimer()
-				require.NoError(b, err, "failed to process app call")
-			}
-		})
+			})
+		}
 	}
 }

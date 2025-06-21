@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"math"
 	"sync"
 
@@ -887,10 +888,16 @@ func StartEvaluator(l LedgerForEvaluator, hdr bookkeeping.BlockHeader, evalOpts 
 
 	runtimeCtx := context.Background()
 
+	cache, err := wazero.NewCompilationCacheWithDir("/Users/joe/git/algorand/go-algorand/test/wasm/wazero-cache")
+
+	if err != nil {
+		panic(fmt.Sprintf("failed to create wazero compilation cache: %v", err))
+	}
+
 	// Current AVM allows stack depth of 1k with 4k for each value, so 4MB total
 	// Each page is 64k, so 62 pages is a little under 4MB
 	// WithMemoryCapacityFromMax(true) means that the memory is pre-allocated
-	runCfg := wazero.NewRuntimeConfigInterpreter().WithMemoryLimitPages(62).WithMemoryCapacityFromMax(true)
+	runCfg := wazero.NewRuntimeConfigCompiler().WithMemoryLimitPages(62).WithMemoryCapacityFromMax(true).WithCompilationCache(cache)
 	runtime := wazero.NewRuntimeWithConfig(runtimeCtx, runCfg)
 
 	getCurrentApplicationId := func(ctx context.Context, m wazeroapi.Module) uint64 {
@@ -1135,9 +1142,9 @@ func (eval *BlockEvaluator) TransactionGroup(txgroup []transactions.SignedTxnWit
 		evalParams.WasmProgramFunctions[gi] = make(chan *wazeroapi.Function, 1)
 	}
 
-	var wg sync.WaitGroup
-	defer wg.Wait()
-	ctx := context.Background()
+	hashToIdxs := make(map[[16]byte][]int, len(txgroup))
+
+	hasher := fnv.New128a()
 	for gi, txad := range txgroup {
 		wasmProgram := txad.SignedTxn.Txn.WasmProgram
 
@@ -1145,18 +1152,49 @@ func (eval *BlockEvaluator) TransactionGroup(txgroup []transactions.SignedTxnWit
 			continue
 		}
 
+		var hash [16]byte
+		copy(hash[:], hasher.Sum(wasmProgram)[:])
+		hasher.Reset()
+
+		if idxs, ok := hashToIdxs[hash]; ok {
+			hashToIdxs[hash] = append(idxs, gi)
+		} else {
+			hashToIdxs[hash] = []int{gi}
+		}
+	}
+
+	var wg sync.WaitGroup
+	defer wg.Wait()
+	ctx := context.Background()
+
+	for hash, idxs := range hashToIdxs {
+		wasmProgram := txgroup[idxs[0]].SignedTxn.Txn.WasmProgram
+
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			// Takes about ~100us
-			instance, err := eval.wasmRuntime.InstantiateWithConfig(ctx, wasmProgram, wazero.NewModuleConfig().WithStartFunctions())
 
-			if err != nil {
-				panic(err)
+			name := string(hash[:])
+			module := eval.wasmRuntime.Module(name)
+
+			if module == nil {
+				compiledModule, err := eval.wasmRuntime.CompileModule(ctx, wasmProgram)
+
+				if err != nil {
+					panic(err)
+				}
+				module, err = eval.wasmRuntime.InstantiateModule(ctx, compiledModule, wazero.NewModuleConfig().WithStartFunctions().WithName(name))
+
+				if err != nil {
+					panic(fmt.Sprintf("failed to instantiate WASM module: %v", err))
+				}
 			}
 
-			fn := instance.ExportedFunction("program")
-			evalParams.WasmProgramFunctions[gi] <- &fn
+			fn := module.ExportedFunction("program")
+
+			for _, gi := range idxs {
+				evalParams.WasmProgramFunctions[gi] <- &fn
+			}
 		}()
 
 	}

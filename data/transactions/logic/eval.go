@@ -42,7 +42,7 @@ import (
 	"github.com/algorand/go-algorand/ledger/ledgercore"
 	"github.com/algorand/go-algorand/logging"
 	"github.com/algorand/go-algorand/protocol"
-	"github.com/tetratelabs/wazero"
+	wazeroapi "github.com/tetratelabs/wazero/api"
 )
 
 // The constants below control opcode evaluation and MAY NOT be changed without
@@ -317,7 +317,7 @@ func RuntimeEvalConstants() EvalConstants {
 
 // EvalParams contains data that comes into condition evaluation.
 type EvalParams struct {
-	WasmRuntime *wazero.Runtime
+	WasmProgramFunctions map[int]chan *wazeroapi.Function
 
 	runMode RunMode
 
@@ -1219,14 +1219,8 @@ func EvalContract(program []byte, gi int, aid basics.AppIndex, params *EvalParam
 	ctx := context.WithValue(context.Background(), "evalContext", &cx)
 	wasmProgram := cx.TxnGroup[gi].Txn.WasmProgram
 	if wasmProgram != nil {
-		instance, err := (*params.WasmRuntime).InstantiateWithConfig(ctx, wasmProgram, wazero.NewModuleConfig().WithStartFunctions())
-
-		if err != nil {
-			panic(err)
-		}
-
-		fn := instance.ExportedFunction("program")
-		results, wasmErr := fn.Call(ctx)
+		fn := <-cx.EvalParams.WasmProgramFunctions[gi]
+		results, wasmErr := (*fn).Call(ctx)
 
 		if wasmErr != nil {
 			err = wasmErr

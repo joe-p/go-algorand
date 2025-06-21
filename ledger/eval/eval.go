@@ -1128,7 +1128,38 @@ func (eval *BlockEvaluator) TransactionGroup(txgroup []transactions.SignedTxnWit
 	// TODO(wasm): Here we should start compilation of the WASM programs in the background in parallel.
 	evalParams := logic.NewAppEvalParams(txgroup, &eval.proto, &eval.specials)
 	evalParams.Tracer = eval.Tracer
-	evalParams.WasmRuntime = &eval.wasmRuntime
+
+	evalParams.WasmProgramFunctions = make(map[int]chan *wazeroapi.Function)
+
+	for gi, _ := range txgroup {
+		evalParams.WasmProgramFunctions[gi] = make(chan *wazeroapi.Function, 1)
+	}
+
+	var wg sync.WaitGroup
+	defer wg.Wait()
+	ctx := context.Background()
+	for gi, txad := range txgroup {
+		wasmProgram := txad.SignedTxn.Txn.WasmProgram
+
+		if wasmProgram == nil {
+			continue
+		}
+
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			// Takes about ~100us
+			instance, err := eval.wasmRuntime.InstantiateWithConfig(ctx, wasmProgram, wazero.NewModuleConfig().WithStartFunctions())
+
+			if err != nil {
+				panic(err)
+			}
+
+			fn := instance.ExportedFunction("program")
+			evalParams.WasmProgramFunctions[gi] <- &fn
+		}()
+
+	}
 
 	if eval.Tracer != nil {
 		eval.Tracer.BeforeTxnGroup(evalParams)

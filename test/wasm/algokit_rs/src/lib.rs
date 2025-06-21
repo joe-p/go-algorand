@@ -1,3 +1,5 @@
+#![no_std]
+
 use core::panic::PanicInfo;
 
 #[panic_handler]
@@ -27,7 +29,5 @@ pub fn set_global_uint(app: u64, key: &str, value: u64) {
 }
 
 pub fn get_current_application_id() -> u64 {
-    unsafe {
-        host_get_current_application_id()
-    }
+    unsafe { host_get_current_application_id() }
 }

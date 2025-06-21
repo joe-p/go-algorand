@@ -1,8 +1,6 @@
 #![no_std]
 
-mod algokit;
-
-use algokit::{get_global_uint, set_global_uint, get_current_application_id};
+use algokit::{get_current_application_id, get_global_uint, set_global_uint};
 
 pub fn increment_counter() {
     let key = "counter";

@@ -1,6 +1,11 @@
 #![no_std]
 
-mod algokit;
+use core::panic::PanicInfo;
+
+#[panic_handler]
+fn panic(_info: &PanicInfo) -> ! {
+    core::arch::wasm32::unreachable()
+}
 
 fn fibo(n: u64) -> u64 {
     if n <= 1 {

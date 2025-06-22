@@ -154,6 +154,9 @@ func txgroup(t testing.TB, ledger *Ledger, eval *eval.BlockEvaluator, txns ...*t
 	}
 	txgroup := txntest.Group(txns...)
 
+	if b, ok := t.(*testing.B); ok {
+		b.StartTimer()
+	}
 	return eval.TransactionGroup(transactions.WrapSignedTxnsWithAD(txgroup))
 }
 
@@ -169,15 +172,15 @@ func txgroupWithPrefetcher(t testing.TB, ledger *Ledger, eval *eval.BlockEvaluat
 	// Use the prefetcher to precompile WASM programs
 	ctx := context.Background()
 	paysetgroups := [][]transactions.SignedTxnWithAD{wrappedTxns}
-	
+
 	// Get the consensus protocol from the evaluator
 	rnd := eval.Round()
 	prevRnd := rnd - 1
-	
+
 	// Try to get the block header, but handle the case where it doesn't exist yet (e.g., in benchmarks)
 	var feeSink basics.Address
 	var consensusParams config.ConsensusParams
-	
+
 	hdr, err := ledger.BlockHdr(rnd)
 	if err != nil {
 		// If we can't get the current round's header, try the previous round
@@ -205,19 +208,23 @@ func txgroupWithPrefetcher(t testing.TB, ledger *Ledger, eval *eval.BlockEvaluat
 		feeSink = hdr.FeeSink
 		consensusParams = config.Consensus[hdr.CurrentProtocol]
 	}
-	
+
 	// Use the prefetcher with the evaluator's WASM runtime
 	preloadedTxnsData, wasmCache := prefetcher.PrefetchAccounts(ctx, ledger, eval.WasmRuntime(), prevRnd, paysetgroups, feeSink, consensusParams)
-	
+
 	// Populate the evaluator's WASM cache
 	eval.SetWasmFunctionCache(wasmCache)
-	
+
 	// Get the preloaded transaction group
 	loadedGroup := <-preloadedTxnsData
 	if loadedGroup.Err != nil {
 		return fmt.Errorf("prefetcher error: %v", loadedGroup.Err)
 	}
-	
+
+	if b, ok := t.(*testing.B); ok {
+		b.StartTimer()
+	}
+
 	// Process the transaction group with preloaded WASM functions
 	return eval.TransactionGroup(loadedGroup.TxnGroup, loadedGroup.WasmProgramHashes)
 }

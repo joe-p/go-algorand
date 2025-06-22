@@ -1258,12 +1258,10 @@ func (eval *BlockEvaluator) TransactionGroup(txgroup []transactions.SignedTxnWit
 		if cachedFunctions := eval.createWasmFunctionChannels(wasmHashes[0]); cachedFunctions != nil {
 			evalParams.WasmProgramFunctions = cachedFunctions
 		} else {
-			panic("TODO: remove?")
 			// Fallback to inline compilation if cache is incomplete
 			evalParams.WasmProgramFunctions = eval.compileWasmProgramsInline(txgroup)
 		}
 	} else {
-		panic("TODO: remove?")
 		// Fallback to inline WASM compilation for backwards compatibility
 		evalParams.WasmProgramFunctions = eval.compileWasmProgramsInline(txgroup)
 	}

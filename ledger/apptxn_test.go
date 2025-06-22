@@ -3989,132 +3989,75 @@ program:
 func benchWasm(b *testing.B, langs map[string]string, groupSizes []int) {
 	for _, groupSize := range groupSizes {
 		for lang, wasmFile := range langs {
-			b.Run(fmt.Sprintf("%s group of %d", lang, groupSize), func(b *testing.B) {
-				cfg := config.GetDefaultLocal()
-				genBalances, addrs, _ := ledgertesting.NewTestGenesis()
-
-				var appl txntest.Txn
-
-				if lang == "teal" {
-					appl = txntest.Txn{
-						Type:   "appl",
-						Sender: addrs[0],
-						GlobalStateSchema: basics.StateSchema{
-							NumUint: 1,
-						},
-						ApprovalProgram: wasmFile,
-					}
-
-				} else {
-					file, err := os.Open(wasmFile)
-					if err != nil {
-						panic(err)
-					}
-					defer file.Close()
-
-					// Read the file into a byte slice
-					data, err := io.ReadAll(file)
-					if err != nil {
-						panic(err)
-					}
-
-					appl = txntest.Txn{
-						Type:        "appl",
-						Sender:      addrs[0],
-						WasmProgram: slices.Clone(data),
-						GlobalStateSchema: basics.StateSchema{
-							NumUint:      1,
-							NumByteSlice: 1,
-						},
-					}
+			for _, usePrefetcher := range []bool{false, true} {
+				suffix := ""
+				if usePrefetcher {
+					suffix = " with prefetcher"
 				}
+				b.Run(fmt.Sprintf("%s group of %d%s", lang, groupSize, suffix), func(b *testing.B) {
+					cfg := config.GetDefaultLocal()
+					genBalances, addrs, _ := ledgertesting.NewTestGenesis()
 
-				txns := make([]*txntest.Txn, groupSize)
-				for i := range groupSize {
-					txns[i] = appl.Noted(fmt.Sprintf("txn %d", i))
-				}
+					var appl txntest.Txn
 
-				var cv protocol.ConsensusVersion = "future"
+					if lang == "teal" {
+						appl = txntest.Txn{
+							Type:   "appl",
+							Sender: addrs[0],
+							GlobalStateSchema: basics.StateSchema{
+								NumUint: 1,
+							},
+							ApprovalProgram: wasmFile,
+						}
 
-				l := newSimpleLedgerWithConsensusVersion(b, genBalances, cv, cfg)
+					} else {
+						file, err := os.Open(wasmFile)
+						if err != nil {
+							panic(err)
+						}
+						defer file.Close()
 
-				b.ResetTimer()
-				for i := 0; i < b.N; i++ {
-					b.StopTimer()
-					eval := nextBlock(b, l)
-					b.StartTimer()
-					err := txgroup(b, l, eval, txns...)
-					b.StopTimer()
-					require.NoError(b, err, "failed to process app call")
-				}
-			})
-		}
-	}
-}
+						// Read the file into a byte slice
+						data, err := io.ReadAll(file)
+						if err != nil {
+							panic(err)
+						}
 
-func benchWasmWithPrefetcher(b *testing.B, langs map[string]string, groupSizes []int) {
-	for _, groupSize := range groupSizes {
-		for lang, wasmFile := range langs {
-			b.Run(fmt.Sprintf("%s group of %d with prefetcher", lang, groupSize), func(b *testing.B) {
-				cfg := config.GetDefaultLocal()
-				genBalances, addrs, _ := ledgertesting.NewTestGenesis()
-
-				var appl txntest.Txn
-
-				if lang == "teal" {
-					appl = txntest.Txn{
-						Type:   "appl",
-						Sender: addrs[0],
-						GlobalStateSchema: basics.StateSchema{
-							NumUint: 1,
-						},
-						ApprovalProgram: wasmFile,
+						appl = txntest.Txn{
+							Type:        "appl",
+							Sender:      addrs[0],
+							WasmProgram: slices.Clone(data),
+							GlobalStateSchema: basics.StateSchema{
+								NumUint:      1,
+								NumByteSlice: 1,
+							},
+						}
 					}
 
-				} else {
-					file, err := os.Open(wasmFile)
-					if err != nil {
-						panic(err)
-					}
-					defer file.Close()
-
-					// Read the file into a byte slice
-					data, err := io.ReadAll(file)
-					if err != nil {
-						panic(err)
+					txns := make([]*txntest.Txn, groupSize)
+					for i := range groupSize {
+						txns[i] = appl.Noted(fmt.Sprintf("txn %d", i))
 					}
 
-					appl = txntest.Txn{
-						Type:        "appl",
-						Sender:      addrs[0],
-						WasmProgram: slices.Clone(data),
-						GlobalStateSchema: basics.StateSchema{
-							NumUint:      1,
-							NumByteSlice: 1,
-						},
+					var cv protocol.ConsensusVersion = "future"
+
+					l := newSimpleLedgerWithConsensusVersion(b, genBalances, cv, cfg)
+
+					b.ResetTimer()
+					for i := 0; i < b.N; i++ {
+						b.StopTimer() // start timer called in txgroup functions
+						eval := nextBlock(b, l)
+						var err error
+						if usePrefetcher {
+							err = txgroupWithPrefetcher(b, l, eval, txns...)
+						} else {
+							err = txgroup(b, l, eval, txns...)
+						}
+						b.StopTimer()
+						require.NoError(b, err, "failed to process app call")
 					}
-				}
-
-				txns := make([]*txntest.Txn, groupSize)
-				for i := range groupSize {
-					txns[i] = appl.Noted(fmt.Sprintf("txn %d", i))
-				}
-
-				var cv protocol.ConsensusVersion = "future"
-
-				l := newSimpleLedgerWithConsensusVersion(b, genBalances, cv, cfg)
-
-				b.ResetTimer()
-				for i := 0; i < b.N; i++ {
-					b.StopTimer()
-					eval := nextBlock(b, l)
-					b.StartTimer()
-					// Use the prefetcher-enabled function instead of regular txgroup
-					err := txgroupWithPrefetcher(b, l, eval, txns...)
-					b.StopTimer()
-					require.NoError(b, err, "failed to process app call")
-				}
-			})
+				})
+			}
 		}
 	}
 }
@@ -4145,32 +4088,4 @@ func BenchmarkWasmRustVsTealFibo(b *testing.B) {
 
 	groupSizes := []int{1, 2, 16}
 	benchWasm(b, wasmFiles, groupSizes)
-}
-
-func BenchmarkWasmStateLoopWithPrefetcher(b *testing.B) {
-	partitiontest.PartitionTest(b)
-
-	wasmFiles := map[string]string{
-		"assembly_script": "/Users/joe/git/algorand/go-algorand/test/wasm/assembly_script/build/release.wasm",
-		"tinygo":          "/Users/joe/git/algorand/go-algorand/test/wasm/tinygo/program.wasm",
-		"rust":            "/Users/joe/git/algorand/go-algorand/test/wasm/rust/target/wasm32-unknown-unknown/release/program.wasm",
-		"zig":             "/Users/joe/git/algorand/go-algorand/test/wasm/zig/program.wasm",
-		"arc200":          "/Users/joe/git/algorand/go-algorand/test/wasm/arc200/target/wasm32-unknown-unknown/release/arc200.wasm",
-		"teal":            tealStateLoop,
-	}
-
-	groupSizes := []int{1}
-	benchWasmWithPrefetcher(b, wasmFiles, groupSizes)
-}
-
-func BenchmarkWasmRustVsTealFiboWithPrefetcher(b *testing.B) {
-	partitiontest.PartitionTest(b)
-
-	wasmFiles := map[string]string{
-		"rust": "/Users/joe/git/algorand/go-algorand/test/wasm/fibo/target/wasm32-unknown-unknown/release/fibo.wasm",
-		"teal": tealFibo,
-	}
-
-	groupSizes := []int{1, 2, 16}
-	benchWasmWithPrefetcher(b, wasmFiles, groupSizes)
 }

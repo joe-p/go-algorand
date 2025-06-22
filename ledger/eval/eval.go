@@ -899,8 +899,8 @@ func StartEvaluator(l LedgerForEvaluator, hdr bookkeeping.BlockHeader, evalOpts 
 
 	// Current AVM allows stack depth of 1k with 4k for each value, so 4MB total
 	// Each page is 64k, so 62 pages is a little under 4MB
-	// WithMemoryCapacityFromMax(true) means that the memory is pre-allocated
-	runCfg := wazero.NewRuntimeConfigCompiler().WithMemoryLimitPages(62).WithMemoryCapacityFromMax(true).WithCompilationCache(cache)
+	// WithMemoryCapacityFromMax(false) means that we manually grow the memory as needed when allocating
+	runCfg := wazero.NewRuntimeConfigCompiler().WithMemoryLimitPages(62).WithMemoryCapacityFromMax(false).WithCompilationCache(cache)
 	runtime := wazero.NewRuntimeWithConfig(runtimeCtx, runCfg)
 
 	getCurrentApplicationId := func(ctx context.Context, m wazeroapi.Module) uint64 {
@@ -924,6 +924,12 @@ func StartEvaluator(l LedgerForEvaluator, hdr bookkeeping.BlockHeader, evalOpts 
 
 			offset := freeList[len(freeList)-1]
 			freeList = freeList[:len(freeList)-1]
+
+			// I thought Wazero should be reserving all the pages upfront, but doesn't seem to be the case
+			// Might be because it is prioritizxing the memory page size in the first module over our specific limit?
+			if offset > m.Memory().Size() {
+				m.Memory().Grow(1)
+			}
 
 			maxPages, _ := m.Memory().Definition().Max()
 

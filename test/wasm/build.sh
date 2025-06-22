@@ -4,7 +4,7 @@ set -e
 
 echo "Building tinygo..."
 cd tinygo
-tinygo build -o program.wasm -target wasm-unknown -no-debug -gc leaking -panic=trap -scheduler=none program.go
+tinygo build -o program.wasm -target wasm-unknown -no-debug -gc leaking -panic=trap -scheduler=none -ldflags="-extldflags '-z stack-size=32768 --max-memory=65536'" program.go
 wasm-opt -Oz program.wasm -o program.wasm
 echo "*** TinyGo WASM Size: `ls -lh program.wasm | awk '{print $5}'` bytes ***"
 echo ""
@@ -28,9 +28,9 @@ cd ..
 
 echo "Building Zig..."
 cd zig
-zig build-exe src/lib.zig -target wasm32-freestanding -O ReleaseSmall -fno-entry -rdynamic --export=program -femit-bin=program.wasm
-wasm-opt -Oz program.wasm -o program.wasm
-echo "*** Zig WASM Size: `ls -lh program.wasm | awk '{print $5}'` bytes ***"
+zig build
+wasm-opt -Oz zig-out/bin/program.wasm -o zig-out/bin/program.wasm
+echo "*** Zig WASM Size: `ls -lh zig-out/bin/program.wasm | awk '{print $5}'` bytes ***"
 echo ""
 cd ..
 

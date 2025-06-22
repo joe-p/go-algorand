@@ -3782,7 +3782,7 @@ func TestWasmProgram(t *testing.T) {
 		// "assembly_script": "/Users/joe/git/algorand/go-algorand/test/wasm/assembly_script/build/release.wasm",
 		// "tinygo": "/Users/joe/git/algorand/go-algorand/test/wasm/tinygo/program.wasm",
 		"rust": "/Users/joe/git/algorand/go-algorand/test/wasm/rust/target/wasm32-unknown-unknown/release/program.wasm",
-		// "zig":  "/Users/joe/git/algorand/go-algorand/test/wasm/zig/program.wasm",
+		// "zig":  "/Users/joe/git/algorand/go-algorand/test/wasm/zig/zig-out/bin/program.wasm",
 		"arc200": "/Users/joe/git/algorand/go-algorand/test/wasm/arc200/target/wasm32-unknown-unknown/release/arc200.wasm",
 	}
 
@@ -3826,7 +3826,7 @@ func TestWasmProgramWithPrefetcher(t *testing.T) {
 		// "assembly_script": "/Users/joe/git/algorand/go-algorand/test/wasm/assembly_script/build/release.wasm",
 		// "tinygo": "/Users/joe/git/algorand/go-algorand/test/wasm/tinygo/program.wasm",
 		"rust": "/Users/joe/git/algorand/go-algorand/test/wasm/rust/target/wasm32-unknown-unknown/release/program.wasm",
-		// "zig":  "/Users/joe/git/algorand/go-algorand/test/wasm/zig/program.wasm",
+		// "zig":  "/Users/joe/git/algorand/go-algorand/test/wasm/zig/zig-out/bin/program.wasm",
 		"arc200": "/Users/joe/git/algorand/go-algorand/test/wasm/arc200/target/wasm32-unknown-unknown/release/arc200.wasm",
 	}
 
@@ -4067,14 +4067,13 @@ func BenchmarkWasmStateLoop(b *testing.B) {
 
 	wasmFiles := map[string]string{
 		"assembly_script": "/Users/joe/git/algorand/go-algorand/test/wasm/assembly_script/build/release.wasm",
-		"tinygo":          "/Users/joe/git/algorand/go-algorand/test/wasm/tinygo/program.wasm",
-		"rust":            "/Users/joe/git/algorand/go-algorand/test/wasm/rust/target/wasm32-unknown-unknown/release/program.wasm",
-		"zig":             "/Users/joe/git/algorand/go-algorand/test/wasm/zig/program.wasm",
-		"arc200":          "/Users/joe/git/algorand/go-algorand/test/wasm/arc200/target/wasm32-unknown-unknown/release/arc200.wasm",
-		"teal":            tealStateLoop,
+		// "tinygo":          "/Users/joe/git/algorand/go-algorand/test/wasm/tinygo/program.wasm",
+		"rust": "/Users/joe/git/algorand/go-algorand/test/wasm/rust/target/wasm32-unknown-unknown/release/program.wasm",
+		"zig":  "/Users/joe/git/algorand/go-algorand/test/wasm/zig/zig-out/bin/program.wasm",
+		"teal": tealStateLoop,
 	}
 
-	groupSizes := []int{1}
+	groupSizes := []int{1, 2, 16}
 	benchWasm(b, wasmFiles, groupSizes)
 }
 

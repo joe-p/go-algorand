@@ -173,13 +173,38 @@ func txgroupWithPrefetcher(t testing.TB, ledger *Ledger, eval *eval.BlockEvaluat
 	// Get the consensus protocol from the evaluator
 	rnd := eval.Round()
 	prevRnd := rnd - 1
-	// Get the current block header from the ledger
+	
+	// Try to get the block header, but handle the case where it doesn't exist yet (e.g., in benchmarks)
+	var feeSink basics.Address
+	var consensusParams config.ConsensusParams
+	
 	hdr, err := ledger.BlockHdr(rnd)
 	if err != nil {
-		return err
+		// If we can't get the current round's header, try the previous round
+		if prevRnd > 0 {
+			prevHdr, prevErr := ledger.BlockHdr(prevRnd)
+			if prevErr != nil {
+				// Fallback to genesis if both fail
+				prevHdr, prevErr = ledger.BlockHdr(0)
+				if prevErr != nil {
+					return fmt.Errorf("failed to get block header: %v", prevErr)
+				}
+			}
+			feeSink = prevHdr.FeeSink
+			consensusParams = config.Consensus[prevHdr.CurrentProtocol]
+		} else {
+			// Fallback for round 0 or earlier
+			genesisHdr, genesisErr := ledger.BlockHdr(0)
+			if genesisErr != nil {
+				return fmt.Errorf("failed to get genesis header: %v", genesisErr)
+			}
+			feeSink = genesisHdr.FeeSink
+			consensusParams = config.Consensus[genesisHdr.CurrentProtocol]
+		}
+	} else {
+		feeSink = hdr.FeeSink
+		consensusParams = config.Consensus[hdr.CurrentProtocol]
 	}
-	feeSink := hdr.FeeSink
-	consensusParams := config.Consensus[hdr.CurrentProtocol]
 	
 	// Use the prefetcher with the evaluator's WASM runtime
 	preloadedTxnsData, wasmCache := prefetcher.PrefetchAccounts(ctx, ledger, eval.WasmRuntime(), prevRnd, paysetgroups, feeSink, consensusParams)

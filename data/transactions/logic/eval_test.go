@@ -4064,6 +4064,22 @@ func BenchmarkByteMath(b *testing.B) {
 	}
 }
 
+func BenchmarkSliceAlloc(b *testing.B) {
+	benches := [][]string{
+		{"alloc (5)", "int 5; slice_alloc; slice_free"},
+		{"alloc (50)", "int 50; slice_alloc; slice_free"},
+		{"alloc (500)", "int 500; slice_alloc; slice_free"},
+		{"alloc (5000)", "int 5000; slice_alloc; slice_free"},
+	}
+	for _, bench := range benches {
+		b.Run(bench[0], func(b *testing.B) {
+			b.ReportAllocs()
+			benchmarkOperation(b, "", bench[1], "int 1")
+		})
+	}
+
+}
+
 func BenchmarkByteCompare(b *testing.B) {
 	u64 := "byte 0x8090a0b0c0d0e0f0;"
 	hex128 := "102030405060708090a0b0c0d0e0f000"

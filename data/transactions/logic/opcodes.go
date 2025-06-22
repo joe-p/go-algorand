@@ -810,6 +810,10 @@ var OpSpecs = []OpSpec{
 			chunkCost: 550,
 			chunkSize: 32,
 		}})},
+	{0xe7, "slice_alloc", opSliceAlloc, proto("i:S"), mimcVersion, costly(1)},
+	{0xe8, "slice_append", opSliceAppend, proto("Sa:"), mimcVersion, costly(1)},
+	{0xe9, "slice_get", opSliceGet, proto("Si:a"), mimcVersion, costly(1)},
+	{0xea, "slice_free", opSliceFree, proto("S:"), mimcVersion, costly(1)},
 }
 
 // OpcodesByVersion returns list of opcodes available in a specific version of TEAL

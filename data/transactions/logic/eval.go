@@ -72,6 +72,8 @@ const maxStackDepth = 1000
 // match.
 const maxTxGroupSize = 16
 
+const sliceSize = 50
+
 // stackValue is the type for the operand stack.
 // Each stackValue is either a valid []byte value or a uint64 value.
 // If (.Bytes != nil) the stackValue is a []byte value, otherwise uint64 value.
@@ -701,6 +703,10 @@ type EvalContext struct {
 	instructionStarts []bool
 
 	programHashCached crypto.Digest
+
+	slices [sliceSize][]stackValue
+
+	freeSlices []int
 }
 
 // GroupIndex returns the group index of the transaction being evaluated
@@ -801,6 +807,8 @@ var (
 	// StackZeroBytes is a StackBytes with a minimum length of 0 and a maximum length of 0
 	StackZeroBytes = NewStackType(avmUint64, bound(0, 0), "''")
 
+	StackSliceHandle = NewStackType(avmUint64, bound(0, sliceSize), "sliceHandle")
+
 	// AllStackTypes is a map of all the stack types we recognize
 	// so that we can iterate over them in doc prep
 	// and use them for opcode proto shorthand
@@ -815,6 +823,7 @@ var (
 		'M': StackMethodSelector,
 		'K': StackStateKey,
 		'N': StackBoxName,
+		'S': StackSliceHandle,
 	}
 )
 
@@ -1285,6 +1294,14 @@ func eval(program []byte, cx *EvalContext) (pass bool, err error) {
 	cx.txn.EvalDelta.GlobalDelta = basics.StateDelta{}
 	cx.txn.EvalDelta.LocalDeltas = make(map[uint64]basics.StateDelta)
 
+	// TODO(slice): figure out a good size for slices
+	cx.slices = [sliceSize][]stackValue{}
+
+	cx.freeSlices = make([]int, sliceSize-1)
+	for i := range len(cx.freeSlices) {
+		cx.freeSlices[i] = i + 1 // 1-49
+	}
+
 	// We get the error here, but defer reporting so that the Tracer can be
 	// called with an basically initialized cx.
 	verr := cx.begin(program)
@@ -1720,6 +1737,107 @@ func (cx *EvalContext) ensureStackCap(targetCap int) {
 		copy(newStack, cx.Stack)
 		cx.Stack = newStack
 	}
+}
+
+func checkSlicehandle(cx *EvalContext, handle int) error {
+	if slices.Contains(cx.freeSlices, handle) {
+		return fmt.Errorf("slice handle %d is freed", handle)
+	}
+
+	if handle == 0 {
+		return fmt.Errorf("slice handle is nil")
+	}
+
+	if handle >= len(cx.slices) {
+		return fmt.Errorf("slice handle %d out of bounds, only have %d slices", handle, len(cx.slices))
+	}
+
+	return nil
+}
+
+func opSliceAlloc(cx *EvalContext) error {
+	last := len(cx.Stack) - 1 // size on top
+
+	stackVal := cx.Stack[last]
+	size := stackVal.Uint
+
+	if size == 0 {
+		return nil
+	}
+
+	if len(cx.freeSlices) == 0 {
+		return fmt.Errorf("no free slices available")
+	}
+
+	sliceHandle := cx.freeSlices[len(cx.freeSlices)-1]
+	cx.freeSlices = cx.freeSlices[:len(cx.freeSlices)-1]
+
+	cx.slices[sliceHandle] = make([]stackValue, 0, size)
+
+	cx.Stack[last].Uint = uint64(sliceHandle)
+
+	return nil
+}
+
+func opSliceFree(cx *EvalContext) error {
+	last := len(cx.Stack) - 1 // handle
+	handle := cx.Stack[last].Uint
+
+	if handle > uint64(len(cx.slices)) || handle == 0 {
+		return fmt.Errorf("slice handle %d out of bounds, valid range is 1-%d", handle, len(cx.slices)-1)
+	}
+
+	if slices.Contains(cx.freeSlices, int(handle)) {
+		return fmt.Errorf("slice handle %d is already freed", handle)
+	}
+
+	cx.freeSlices = append(cx.freeSlices, int(handle))
+	cx.slices[int(handle)] = nil
+
+	cx.Stack = cx.Stack[:last] // remove handle from stack
+
+	return nil
+}
+
+func opSliceAppend(cx *EvalContext) error {
+	last := len(cx.Stack) - 1 // value
+	prev := last - 1          // handle
+
+	sv := cx.Stack[last]
+	handle := cx.Stack[prev].Uint
+
+	if err := checkSlicehandle(cx, int(handle)); err != nil {
+		return fmt.Errorf("%w in opPushSlice", err)
+	}
+
+	cx.slices[handle] = append(cx.slices[handle], sv)
+
+	cx.Stack = cx.Stack[:prev]
+
+	return nil
+}
+
+func opSliceGet(cx *EvalContext) error {
+	last := len(cx.Stack) - 1 // index
+	prev := last - 1          // handle
+
+	index := cx.Stack[last].Uint
+	handle := cx.Stack[prev].Uint
+
+	if err := checkSlicehandle(cx, int(handle)); err != nil {
+		return fmt.Errorf("%w in opSliceGet", err)
+	}
+
+	if index >= uint64(len(cx.slices[handle])) {
+		return fmt.Errorf("slice index %d out of bounds for handle %d", index, handle)
+	}
+
+	sv := cx.slices[handle][index]
+
+	cx.Stack[prev] = sv        // replace handle with value
+	cx.Stack = cx.Stack[:last] // remove index
+
+	return nil
 }
 
 func opErr(cx *EvalContext) error {

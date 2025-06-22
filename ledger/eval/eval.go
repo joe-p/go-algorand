@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"math"
+	"math/big"
 	"sync"
 
 	"github.com/algorand/go-algorand/agreement"
@@ -909,8 +910,11 @@ func StartEvaluator(l LedgerForEvaluator, hdr bookkeeping.BlockHeader, evalOpts 
 
 	alloc := func(ctx context.Context, m wazeroapi.Module, size uint32) uint32 {
 		if freeListPtr, ok := ctx.Value("freeList").(*[]uint32); ok {
-
 			freeList := *freeListPtr
+
+			if size > 4096 {
+				panic(fmt.Sprintf("alloc called with size %d > 4096", size))
+			}
 
 			if len(freeList) == 0 {
 				panic("alloc called with empty free list")
@@ -928,7 +932,6 @@ func StartEvaluator(l LedgerForEvaluator, hdr bookkeeping.BlockHeader, evalOpts 
 
 			*freeListPtr = freeList
 
-			fmt.Println("freeList after alloc:", freeList)
 			return offset
 
 		}
@@ -944,7 +947,6 @@ func StartEvaluator(l LedgerForEvaluator, hdr bookkeeping.BlockHeader, evalOpts 
 
 			*freeListPtr = freeList
 
-			fmt.Println("freeList after dealloc:", freeList)
 			return
 		}
 
@@ -1043,6 +1045,26 @@ func StartEvaluator(l LedgerForEvaluator, hdr bookkeeping.BlockHeader, evalOpts 
 		runtime.Close(ctx)
 	}
 
+	bigintAdd := func(ctx context.Context, m wazeroapi.Module, aPtr uint32, aLen uint32, bPtr uint32, bLen uint32, cPtr uint32) uint32 {
+		mem := m.Memory()
+		aBytes, _ := mem.Read(uint32(aPtr), uint32(aLen))
+		bBytes, _ := mem.Read(uint32(bPtr), uint32(bLen))
+
+		c := new(big.Int)
+
+		a := new(big.Int).SetBytes(aBytes)
+		b := new(big.Int).SetBytes(bBytes)
+
+		c.Add(a, b)
+
+		ok := mem.Write(cPtr, c.Bytes())
+		if !ok {
+			panic(fmt.Sprintf("Writing memory out of range"))
+		}
+
+		return uint32(len(c.Bytes()))
+	}
+
 	_, err = runtime.NewHostModuleBuilder("algorand").
 		NewFunctionBuilder().WithFunc(getGlobalUint).Export("host_get_global_uint").
 		NewFunctionBuilder().WithFunc(setGlobalUint).Export("host_set_global_uint").
@@ -1051,6 +1073,7 @@ func StartEvaluator(l LedgerForEvaluator, hdr bookkeeping.BlockHeader, evalOpts 
 		NewFunctionBuilder().WithFunc(getCurrentApplicationId).Export("host_get_current_application_id").
 		NewFunctionBuilder().WithFunc(alloc).Export("host_alloc").
 		NewFunctionBuilder().WithFunc(dealloc).Export("host_dealloc").
+		NewFunctionBuilder().WithFunc(bigintAdd).Export("host_bigint_add").
 		Instantiate(runtimeCtx)
 
 	// Needed for AssemblyScript to work, which uses the abort function

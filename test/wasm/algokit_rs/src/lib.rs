@@ -6,6 +6,7 @@ use core::alloc::{GlobalAlloc, Layout};
 use core::panic::PanicInfo;
 use core::ptr;
 
+use alloc::vec;
 use alloc::vec::Vec;
 
 #[panic_handler]
@@ -36,6 +37,14 @@ unsafe extern "C" {
     );
 
     fn host_get_current_application_id() -> u64;
+
+    fn host_bigint_add(
+        aPtr: *const u8,
+        aLen: u32,
+        bPtr: *const u8,
+        bLen: u32,
+        cPtr: *mut u8,
+    ) -> u32;
 
     fn host_alloc(size: u32) -> *mut u8;
     fn host_dealloc(ptr: *mut u8);
@@ -169,14 +178,54 @@ impl<T: AvmBytes> GlobalStateKey<T> {
     }
 }
 
-#[cfg(feature = "bigint")]
-impl GlobalStateKey<crypto_bigint::U256> {
-    pub fn get(&self) -> crypto_bigint::U256 {
-        let bytes = get_global_bytes(self.app_id(), self.key, DEFAULT_BUFFER_LEN);
-        crypto_bigint::U256::from_be_slice(bytes.as_slice())
+#[derive(PartialEq, Eq)]
+pub struct BigInt {
+    pub bytes: Vec<u8>,
+}
+
+impl BigInt {
+    pub fn new(bytes: Vec<u8>) -> Self {
+        BigInt { bytes }
     }
 
-    pub fn set(&self, value: &crypto_bigint::U256) {
-        set_global_bytes(self.app_id(), self.key, value.to_be_bytes().as_ref());
+    pub fn add(&self, other: &BigInt) -> BigInt {
+        let mut result = vec![0; 4096];
+        let len = unsafe {
+            host_bigint_add(
+                self.bytes.as_ptr(),
+                self.bytes.len() as u32,
+                other.bytes.as_ptr(),
+                other.bytes.len() as u32,
+                result.as_mut_ptr(),
+            )
+        };
+        result.truncate(len as usize);
+        BigInt::new(result)
+    }
+}
+
+impl core::ops::Add for BigInt {
+    type Output = BigInt;
+
+    fn add(self, other: BigInt) -> BigInt {
+        (&self).add(&other)
+    }
+}
+
+impl From<u64> for BigInt {
+    fn from(value: u64) -> Self {
+        let mut bytes = vec![0; 8];
+        bytes.copy_from_slice(&value.to_le_bytes());
+        BigInt::new(bytes)
+    }
+}
+
+impl AvmBytes for BigInt {
+    fn as_bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    fn from_bytes(bytes: &[u8]) -> Self {
+        BigInt::new(bytes.to_vec())
     }
 }

@@ -1,31 +1,32 @@
 #![no_std]
 
+use algokit::BigInt;
 use algokit::GlobalStateKey;
-use crypto_bigint::U256;
 
-const TOTAL_SUPPLY: GlobalStateKey<U256> = GlobalStateKey::new(b"ts");
+const TOTAL_SUPPLY: GlobalStateKey<BigInt> = GlobalStateKey::new(b"ts");
 
-fn get_total_supply() -> U256 {
+fn get_total_supply() -> BigInt {
     TOTAL_SUPPLY.get()
 }
 
-fn set_total_supply(value: U256) {
-    TOTAL_SUPPLY.set(&value);
+fn set_total_supply(value: &BigInt) {
+    TOTAL_SUPPLY.set(value);
 }
 
 #[unsafe(no_mangle)]
 pub fn program() -> u64 {
-    let amt = U256::from(100 as u64);
-    set_total_supply(amt);
+    let amt = BigInt::from(100 as u64);
+    set_total_supply(&amt);
     let current_supply = get_total_supply();
 
     let new_supply = current_supply + amt;
-    set_total_supply(new_supply);
+    set_total_supply(&new_supply);
 
     // Return the new total supply as an example
 
-    let mut u64_bytes = [0 as u8; 8];
-    u64_bytes[7] = *get_total_supply().to_be_bytes().last().unwrap();
-
-    u64::from_be_bytes(u64_bytes.try_into().unwrap())
+    if get_total_supply() == BigInt::from(200 as u64) {
+        1 // Indicating success
+    } else {
+        0 // Indicating failure
+    }
 }

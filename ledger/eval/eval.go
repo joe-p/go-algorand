@@ -695,7 +695,8 @@ type BlockEvaluator struct {
 
 	Tracer logic.EvalTracer
 
-	wasmRuntime wazero.Runtime
+	wasmRuntime       wazero.Runtime
+	wasmFunctionCache map[[16]byte]wazeroapi.Function
 }
 
 // LedgerForEvaluator defines the ledger interface needed by the evaluator.
@@ -775,6 +776,7 @@ func StartEvaluator(l LedgerForEvaluator, hdr bookkeeping.BlockHeader, evalOpts 
 		l:                   l,
 		maxTxnBytesPerBlock: evalOpts.MaxTxnBytesPerBlock,
 		Tracer:              evalOpts.Tracer,
+		wasmFunctionCache:   make(map[[16]byte]wazeroapi.Function),
 	}
 
 	// Preallocate space for the payset so that we don't have to
@@ -1228,7 +1230,7 @@ func (eval *BlockEvaluator) Transaction(txn transactions.SignedTxn, ad transacti
 // TransactionGroup tentatively adds a new transaction group as part of this block evaluation.
 // If the transaction group cannot be added to the block without violating some constraints,
 // an error is returned and the block evaluator state is unchanged.
-func (eval *BlockEvaluator) TransactionGroup(txgroup []transactions.SignedTxnWithAD) (err error) {
+func (eval *BlockEvaluator) TransactionGroup(txgroup []transactions.SignedTxnWithAD, wasmHashes ...map[int][16]byte) (err error) {
 	// Nothing to do if there are no transactions.
 	if len(txgroup) == 0 {
 		return nil
@@ -1251,65 +1253,19 @@ func (eval *BlockEvaluator) TransactionGroup(txgroup []transactions.SignedTxnWit
 	evalParams := logic.NewAppEvalParams(txgroup, &eval.proto, &eval.specials)
 	evalParams.Tracer = eval.Tracer
 
-	evalParams.WasmProgramFunctions = make(map[int]chan *wazeroapi.Function)
-
-	hashToIdxs := make(map[[16]byte][]int, len(txgroup))
-
-	hasher := fnv.New128a()
-	for gi, txad := range txgroup {
-		wasmProgram := txad.SignedTxn.Txn.WasmProgram
-
-		if wasmProgram == nil {
-			continue
-		}
-
-		evalParams.WasmProgramFunctions[gi] = make(chan *wazeroapi.Function, 1)
-
-		var hash [16]byte
-		copy(hash[:], hasher.Sum(wasmProgram)[:])
-		hasher.Reset()
-
-		if idxs, ok := hashToIdxs[hash]; ok {
-			hashToIdxs[hash] = append(idxs, gi)
+	// Use block-level WASM cache if available, otherwise compile inline
+	if len(wasmHashes) > 0 && wasmHashes[0] != nil {
+		if cachedFunctions := eval.createWasmFunctionChannels(wasmHashes[0]); cachedFunctions != nil {
+			evalParams.WasmProgramFunctions = cachedFunctions
 		} else {
-			hashToIdxs[hash] = []int{gi}
+			panic("TODO: remove?")
+			// Fallback to inline compilation if cache is incomplete
+			evalParams.WasmProgramFunctions = eval.compileWasmProgramsInline(txgroup)
 		}
-	}
-
-	var wg sync.WaitGroup
-	defer wg.Wait()
-	ctx := context.Background()
-
-	for hash, idxs := range hashToIdxs {
-		wasmProgram := txgroup[idxs[0]].SignedTxn.Txn.WasmProgram
-
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-
-			name := string(hash[:])
-			module := eval.wasmRuntime.Module(name)
-
-			if module == nil {
-				compiledModule, err := eval.wasmRuntime.CompileModule(ctx, wasmProgram)
-
-				if err != nil {
-					panic(err)
-				}
-				module, err = eval.wasmRuntime.InstantiateModule(ctx, compiledModule, wazero.NewModuleConfig().WithStartFunctions().WithName(name))
-
-				if err != nil {
-					panic(fmt.Sprintf("failed to instantiate WASM module: %v", err))
-				}
-			}
-
-			fn := module.ExportedFunction("program")
-
-			for _, gi := range idxs {
-				evalParams.WasmProgramFunctions[gi] <- &fn
-			}
-		}()
-
+	} else {
+		panic("TODO: remove?")
+		// Fallback to inline WASM compilation for backwards compatibility
+		evalParams.WasmProgramFunctions = eval.compileWasmProgramsInline(txgroup)
 	}
 
 	if eval.Tracer != nil {
@@ -1387,6 +1343,115 @@ func (eval *BlockEvaluator) TransactionGroup(txgroup []transactions.SignedTxnWit
 	cow.commitToParent()
 
 	return nil
+}
+
+// compileWasmProgramsInline compiles WASM programs inline for backwards compatibility
+func (eval *BlockEvaluator) compileWasmProgramsInline(txgroup []transactions.SignedTxnWithAD) map[int]chan *wazeroapi.Function {
+	wasmProgramFunctions := make(map[int]chan *wazeroapi.Function)
+
+	// If wasmRuntime is nil, return empty map - no WASM execution possible
+	if eval.wasmRuntime == nil {
+		return wasmProgramFunctions
+	}
+
+	hashToIdxs := make(map[[16]byte][]int, len(txgroup))
+
+	hasher := fnv.New128a()
+	for gi, txad := range txgroup {
+		wasmProgram := txad.SignedTxn.Txn.WasmProgram
+
+		if wasmProgram == nil {
+			continue
+		}
+
+		wasmProgramFunctions[gi] = make(chan *wazeroapi.Function, 1)
+
+		var hash [16]byte
+		copy(hash[:], hasher.Sum(wasmProgram)[:])
+		hasher.Reset()
+
+		if idxs, ok := hashToIdxs[hash]; ok {
+			hashToIdxs[hash] = append(idxs, gi)
+		} else {
+			hashToIdxs[hash] = []int{gi}
+		}
+	}
+
+	var wg sync.WaitGroup
+	defer wg.Wait()
+	ctx := context.Background()
+
+	for hash, idxs := range hashToIdxs {
+		wasmProgram := txgroup[idxs[0]].SignedTxn.Txn.WasmProgram
+
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+
+			name := string(hash[:])
+			module := eval.wasmRuntime.Module(name)
+
+			if module == nil {
+				compiledModule, err := eval.wasmRuntime.CompileModule(ctx, wasmProgram)
+
+				if err != nil {
+					panic(err)
+				}
+				module, err = eval.wasmRuntime.InstantiateModule(ctx, compiledModule, wazero.NewModuleConfig().WithStartFunctions().WithName(name))
+
+				if err != nil {
+					panic(fmt.Sprintf("failed to instantiate WASM module: %v", err))
+				}
+			}
+
+			fn := module.ExportedFunction("program")
+			if fn == nil {
+				panic("WASM module does not export 'program' function")
+			}
+
+			for _, gi := range idxs {
+				wasmProgramFunctions[gi] <- &fn
+			}
+		}()
+	}
+
+	return wasmProgramFunctions
+}
+
+// createWasmFunctionChannels creates channels for WASM functions using the block-level cache
+func (eval *BlockEvaluator) createWasmFunctionChannels(wasmHashes map[int][16]byte) map[int]chan *wazeroapi.Function {
+	// If cache is not initialized, return nil to trigger fallback compilation
+	if eval.wasmFunctionCache == nil {
+		return nil
+	}
+
+	wasmFunctions := make(map[int]chan *wazeroapi.Function)
+
+	// Check if all required functions are available in cache
+	for _, hash := range wasmHashes {
+		if _, exists := eval.wasmFunctionCache[hash]; !exists {
+			// If any function is missing, return nil to trigger fallback compilation
+			return nil
+		}
+	}
+
+	for gi, hash := range wasmHashes {
+		wasmFunctions[gi] = make(chan *wazeroapi.Function, 1)
+		fn := eval.wasmFunctionCache[hash]
+		wasmFunctions[gi] <- &fn
+	}
+
+	return wasmFunctions
+}
+
+// WasmRuntime returns the WASM runtime for this evaluator
+func (eval *BlockEvaluator) WasmRuntime() prefetcher.WasmRuntime {
+	return eval.wasmRuntime
+}
+
+// SetWasmFunctionCache sets the block-level WASM function cache
+func (eval *BlockEvaluator) SetWasmFunctionCache(cache map[[16]byte]wazeroapi.Function) {
+	eval.wasmFunctionCache = cache
 }
 
 // Check the minimum balance requirement for the modified accounts in `cow`.
@@ -2349,7 +2414,9 @@ func Eval(ctx context.Context, l LedgerForEvaluator, blk bookkeeping.Block, vali
 	}
 
 	accountLoadingCtx, accountLoadingCancel := context.WithCancel(ctx)
-	preloadedTxnsData := prefetcher.PrefetchAccounts(accountLoadingCtx, l, blk.Round()-1, paysetgroups, blk.BlockHeader.FeeSink, blk.ConsensusProtocol())
+	preloadedTxnsData, wasmCache := prefetcher.PrefetchAccounts(accountLoadingCtx, l, eval.wasmRuntime, blk.Round()-1, paysetgroups, blk.BlockHeader.FeeSink, blk.ConsensusProtocol())
+	// Populate the block-level WASM function cache
+	eval.wasmFunctionCache = wasmCache
 	// ensure that before we exit from this method, the account loading is no longer active.
 	defer func() {
 		accountLoadingCancel()
@@ -2437,7 +2504,7 @@ transactionGroupLoop:
 					}
 				}
 			}
-			err = eval.TransactionGroup(txgroup.TxnGroup)
+			err = eval.TransactionGroup(txgroup.TxnGroup, txgroup.WasmProgramHashes)
 			if err != nil {
 				return ledgercore.StateDelta{}, err
 			}

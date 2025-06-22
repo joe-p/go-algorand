@@ -3819,6 +3819,105 @@ func TestWasmProgram(t *testing.T) {
 	txgroup(t, l, eval, &wasmAppCall)
 }
 
+func TestWasmProgramWithPrefetcher(t *testing.T) {
+	partitiontest.PartitionTest(t)
+
+	wasmFiles := map[string]string{
+		// "assembly_script": "/Users/joe/git/algorand/go-algorand/test/wasm/assembly_script/build/release.wasm",
+		// "tinygo": "/Users/joe/git/algorand/go-algorand/test/wasm/tinygo/program.wasm",
+		"rust": "/Users/joe/git/algorand/go-algorand/test/wasm/rust/target/wasm32-unknown-unknown/release/program.wasm",
+		// "zig":  "/Users/joe/git/algorand/go-algorand/test/wasm/zig/program.wasm",
+		"arc200": "/Users/joe/git/algorand/go-algorand/test/wasm/arc200/target/wasm32-unknown-unknown/release/arc200.wasm",
+	}
+
+	file, err := os.Open(wasmFiles["arc200"])
+	if err != nil {
+		panic(err)
+	}
+	defer file.Close()
+
+	// Read the file into a byte slice
+	data, err := io.ReadAll(file)
+	if err != nil {
+		panic(err)
+	}
+
+	cfg := config.GetDefaultLocal()
+
+	genBalances, addrs, _ := ledgertesting.NewTestGenesis()
+	wasmAppCall := txntest.Txn{
+		Type:        "appl",
+		Sender:      addrs[0],
+		WasmProgram: slices.Clone(data),
+		GlobalStateSchema: basics.StateSchema{
+			NumUint:      1,
+			NumByteSlice: 1,
+		},
+	}
+
+	var cv protocol.ConsensusVersion = "future"
+
+	l := newSimpleLedgerWithConsensusVersion(t, genBalances, cv, cfg)
+
+	eval := nextBlock(t, l)
+	// Use the prefetcher-enabled function instead of the regular txgroup
+	txgroupWithPrefetcher(t, l, eval, &wasmAppCall)
+}
+
+func TestWasmProgramWithPrefetcherMultiple(t *testing.T) {
+	partitiontest.PartitionTest(t)
+
+	wasmFiles := map[string]string{
+		"arc200": "/Users/joe/git/algorand/go-algorand/test/wasm/arc200/target/wasm32-unknown-unknown/release/arc200.wasm",
+	}
+
+	file, err := os.Open(wasmFiles["arc200"])
+	if err != nil {
+		panic(err)
+	}
+	defer file.Close()
+
+	// Read the file into a byte slice
+	data, err := io.ReadAll(file)
+	if err != nil {
+		panic(err)
+	}
+
+	cfg := config.GetDefaultLocal()
+
+	genBalances, addrs, _ := ledgertesting.NewTestGenesis()
+
+	// Create multiple transactions with the same WASM program to test deduplication
+	wasmAppCall1 := txntest.Txn{
+		Type:        "appl",
+		Sender:      addrs[0],
+		WasmProgram: slices.Clone(data),
+		GlobalStateSchema: basics.StateSchema{
+			NumUint:      1,
+			NumByteSlice: 1,
+		},
+	}
+
+	wasmAppCall2 := txntest.Txn{
+		Type:        "appl",
+		Sender:      addrs[1],
+		WasmProgram: slices.Clone(data), // Same WASM program - should be deduplicated
+		GlobalStateSchema: basics.StateSchema{
+			NumUint:      1,
+			NumByteSlice: 1,
+		},
+	}
+
+	var cv protocol.ConsensusVersion = "future"
+
+	l := newSimpleLedgerWithConsensusVersion(t, genBalances, cv, cfg)
+
+	eval := nextBlock(t, l)
+	// Process multiple WASM transactions to test the block-level cache efficiency
+	txgroupWithPrefetcher(t, l, eval, &wasmAppCall1)
+	txgroupWithPrefetcher(t, l, eval, &wasmAppCall2)
+}
+
 const tealStateLoop = `
 #pragma version 11
 b program

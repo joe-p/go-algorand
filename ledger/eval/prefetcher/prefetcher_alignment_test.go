@@ -299,8 +299,8 @@ func (ld *ledgerData) pretend(before ...basics.Address) {
 func prefetch(t *testing.T, l prefetcher.Ledger, txn transactions.Transaction) ledgerData {
 	group := makeGroupFromTxn(txn)
 
-	ch := prefetcher.PrefetchAccounts(
-		context.Background(), l, 1,
+	ch, _ := prefetcher.PrefetchAccounts(
+		context.Background(), l, nil, 1,
 		[][]transactions.SignedTxnWithAD{group},
 		feeSink(), config.Consensus[proto])
 	loaded, ok := <-ch

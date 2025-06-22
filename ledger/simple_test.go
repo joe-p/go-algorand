@@ -34,6 +34,7 @@ import (
 	"github.com/algorand/go-algorand/data/transactions/verify"
 	"github.com/algorand/go-algorand/data/txntest"
 	"github.com/algorand/go-algorand/ledger/eval"
+	"github.com/algorand/go-algorand/ledger/eval/prefetcher"
 	"github.com/algorand/go-algorand/ledger/ledgercore"
 	"github.com/algorand/go-algorand/logging"
 	"github.com/algorand/go-algorand/protocol"
@@ -154,6 +155,46 @@ func txgroup(t testing.TB, ledger *Ledger, eval *eval.BlockEvaluator, txns ...*t
 	txgroup := txntest.Group(txns...)
 
 	return eval.TransactionGroup(transactions.WrapSignedTxnsWithAD(txgroup))
+}
+
+// txgroupWithPrefetcher processes a transaction group using the prefetcher for WASM compilation
+func txgroupWithPrefetcher(t testing.TB, ledger *Ledger, eval *eval.BlockEvaluator, txns ...*txntest.Txn) error {
+	t.Helper()
+	for _, txn := range txns {
+		fillDefaults(t, ledger, eval, txn)
+	}
+	txgroup := txntest.Group(txns...)
+	wrappedTxns := transactions.WrapSignedTxnsWithAD(txgroup)
+
+	// Use the prefetcher to precompile WASM programs
+	ctx := context.Background()
+	paysetgroups := [][]transactions.SignedTxnWithAD{wrappedTxns}
+	
+	// Get the consensus protocol from the evaluator
+	rnd := eval.Round()
+	prevRnd := rnd - 1
+	// Get the current block header from the ledger
+	hdr, err := ledger.BlockHdr(rnd)
+	if err != nil {
+		return err
+	}
+	feeSink := hdr.FeeSink
+	consensusParams := config.Consensus[hdr.CurrentProtocol]
+	
+	// Use the prefetcher with the evaluator's WASM runtime
+	preloadedTxnsData, wasmCache := prefetcher.PrefetchAccounts(ctx, ledger, eval.WasmRuntime(), prevRnd, paysetgroups, feeSink, consensusParams)
+	
+	// Populate the evaluator's WASM cache
+	eval.SetWasmFunctionCache(wasmCache)
+	
+	// Get the preloaded transaction group
+	loadedGroup := <-preloadedTxnsData
+	if loadedGroup.Err != nil {
+		return fmt.Errorf("prefetcher error: %v", loadedGroup.Err)
+	}
+	
+	// Process the transaction group with preloaded WASM functions
+	return eval.TransactionGroup(loadedGroup.TxnGroup, loadedGroup.WasmProgramHashes)
 }
 
 // endBlock completes the block being created, returning the ValidatedBlock for

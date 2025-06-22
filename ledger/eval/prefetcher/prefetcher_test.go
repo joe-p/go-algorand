@@ -577,7 +577,7 @@ func TestEvaluatorPrefetcher(t *testing.T) {
 			groups[0] = make([]transactions.SignedTxnWithAD, 1)
 			groups[0][0].SignedTxn = testCase.signedTxn
 
-			preloadedTxnGroupsCh := prefetcher.PrefetchAccounts(context.Background(), ledger, rnd, groups, feeSinkAddr, config.Consensus[proto])
+			preloadedTxnGroupsCh, _ := prefetcher.PrefetchAccounts(context.Background(), ledger, nil, rnd, groups, feeSinkAddr, config.Consensus[proto])
 
 			loadedTxnGroup, ok := <-preloadedTxnGroupsCh
 			require.True(t, ok)
@@ -629,7 +629,7 @@ func TestAssetLookupError(t *testing.T) {
 		}
 	}
 
-	preloadedTxnGroupsCh := prefetcher.PrefetchAccounts(context.Background(), ledger, rnd+100, groups, feeSinkAddr, config.Consensus[proto])
+	preloadedTxnGroupsCh, _ := prefetcher.PrefetchAccounts(context.Background(), ledger, nil, rnd+100, groups, feeSinkAddr, config.Consensus[proto])
 
 	receivedNumGroups := 0
 	for loadedTxnGroup := range preloadedTxnGroupsCh {
@@ -686,7 +686,7 @@ func TestGetCreatorForRoundError(t *testing.T) {
 			}
 		}
 	}
-	preloadedTxnGroupsCh := prefetcher.PrefetchAccounts(context.Background(), ledger, rnd+100, groups, feeSinkAddr, config.Consensus[proto])
+	preloadedTxnGroupsCh, _ := prefetcher.PrefetchAccounts(context.Background(), ledger, nil, rnd+100, groups, feeSinkAddr, config.Consensus[proto])
 
 	receivedNumGroups := 0
 	for loadedTxnGroup := range preloadedTxnGroupsCh {
@@ -743,7 +743,7 @@ func TestLookupWithoutRewards(t *testing.T) {
 		}
 	}
 	ledger.errorTriggerAddress[createAssetFailedTxn.Txn.Sender] = true
-	preloadedTxnGroupsCh := prefetcher.PrefetchAccounts(context.Background(), ledger, rnd+100, groups, feeSinkAddr, config.Consensus[proto])
+	preloadedTxnGroupsCh, _ := prefetcher.PrefetchAccounts(context.Background(), ledger, nil, rnd+100, groups, feeSinkAddr, config.Consensus[proto])
 
 	receivedNumGroups := 0
 	for loadedTxnGroup := range preloadedTxnGroupsCh {
@@ -801,7 +801,7 @@ func TestEvaluatorPrefetcherQueueExpansion(t *testing.T) {
 			addr += 2
 		}
 	}
-	preloadedTxnGroupsCh := prefetcher.PrefetchAccounts(context.Background(), ledger, rnd, txnGroups, feeSinkAddr, config.Consensus[proto])
+	preloadedTxnGroupsCh, _ := prefetcher.PrefetchAccounts(context.Background(), ledger, nil, rnd, txnGroups, feeSinkAddr, config.Consensus[proto])
 	groupsCount := 0
 	addressCount := 0
 	uniqueAccounts := make(map[basics.Address]bool)
@@ -861,7 +861,7 @@ func BenchmarkPrefetcherApps(b *testing.B) {
 	}
 
 	b.ResetTimer()
-	preloadedTxnGroupsCh := prefetcher.PrefetchAccounts(context.Background(), ledger, rnd, groups, feeSinkAddr, config.Consensus[proto])
+	preloadedTxnGroupsCh, _ := prefetcher.PrefetchAccounts(context.Background(), ledger, nil, rnd, groups, feeSinkAddr, config.Consensus[proto])
 	for k := range preloadedTxnGroupsCh {
 		require.NoError(b, k.Err)
 	}
@@ -899,7 +899,7 @@ func BenchmarkPrefetcherPayment(b *testing.B) {
 	}
 
 	b.ResetTimer()
-	preloadedTxnGroupsCh := prefetcher.PrefetchAccounts(context.Background(), ledger, rnd, groups, feeSinkAddr, config.Consensus[proto])
+	preloadedTxnGroupsCh, _ := prefetcher.PrefetchAccounts(context.Background(), ledger, nil, rnd, groups, feeSinkAddr, config.Consensus[proto])
 	for k := range preloadedTxnGroupsCh {
 		require.NoError(b, k.Err)
 	}

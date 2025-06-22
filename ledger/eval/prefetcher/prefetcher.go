@@ -18,6 +18,9 @@ package prefetcher
 
 import (
 	"context"
+	"fmt"
+	"hash/fnv"
+	"sync"
 	"sync/atomic"
 
 	"github.com/algorand/go-algorand/config"
@@ -25,6 +28,9 @@ import (
 	"github.com/algorand/go-algorand/data/transactions"
 	"github.com/algorand/go-algorand/ledger/ledgercore"
 	"github.com/algorand/go-algorand/protocol"
+
+	"github.com/tetratelabs/wazero"
+	wazeroapi "github.com/tetratelabs/wazero/api"
 )
 
 // asyncAccountLoadingThreadCount controls how many go routines would be used
@@ -38,6 +44,13 @@ type Ledger interface {
 	LookupAsset(basics.Round, basics.Address, basics.AssetIndex) (ledgercore.AssetResource, error)
 	LookupApplication(basics.Round, basics.Address, basics.AppIndex) (ledgercore.AppResource, error)
 	GetCreatorForRound(basics.Round, basics.CreatableIndex, basics.CreatableType) (basics.Address, bool, error)
+}
+
+// WasmRuntime interface for WASM runtime operations needed by prefetcher
+type WasmRuntime interface {
+	Module(name string) wazeroapi.Module
+	CompileModule(ctx context.Context, binary []byte) (wazero.CompiledModule, error)
+	InstantiateModule(ctx context.Context, compiled wazero.CompiledModule, config wazero.ModuleConfig) (wazeroapi.Module, error)
 }
 
 // LoadedAccountDataEntry describes a loaded account.
@@ -67,6 +80,9 @@ type LoadedTransactionGroup struct {
 	// the following four are the Resources used by the account
 	Resources []LoadedResourcesEntry
 
+	// WasmProgramHashes maps transaction index to WASM program hash for this group
+	WasmProgramHashes map[int][16]byte
+
 	// Err indicates whether any of the balances in this structure have failed to load. In case of an error, at least
 	// one of the entries in the balances would be uninitialized.
 	Err *GroupTaskError
@@ -75,6 +91,7 @@ type LoadedTransactionGroup struct {
 // accountPrefetcher used to prefetch accounts balances and resources before the evaluator is being called.
 type accountPrefetcher struct {
 	ledger          Ledger
+	wasmRuntime     WasmRuntime
 	rnd             basics.Round
 	txnGroups       [][]transactions.SignedTxnWithAD
 	feeSinkAddr     basics.Address
@@ -84,9 +101,10 @@ type accountPrefetcher struct {
 
 // PrefetchAccounts loads the account data for the provided transaction group list. It also loads the feeSink account and add it to the first returned transaction group.
 // The order of the transaction groups returned by the channel is identical to the one in the input array.
-func PrefetchAccounts(ctx context.Context, l Ledger, rnd basics.Round, txnGroups [][]transactions.SignedTxnWithAD, feeSinkAddr basics.Address, consensusParams config.ConsensusParams) <-chan LoadedTransactionGroup {
+func PrefetchAccounts(ctx context.Context, l Ledger, wasmRuntime WasmRuntime, rnd basics.Round, txnGroups [][]transactions.SignedTxnWithAD, feeSinkAddr basics.Address, consensusParams config.ConsensusParams) (<-chan LoadedTransactionGroup, map[[16]byte]wazeroapi.Function) {
 	prefetcher := &accountPrefetcher{
 		ledger:          l,
+		wasmRuntime:     wasmRuntime,
 		rnd:             rnd,
 		txnGroups:       txnGroups,
 		feeSinkAddr:     feeSinkAddr,
@@ -94,8 +112,11 @@ func PrefetchAccounts(ctx context.Context, l Ledger, rnd basics.Round, txnGroups
 		outChan:         make(chan LoadedTransactionGroup, len(txnGroups)),
 	}
 
+	// Precompile all WASM programs across all transaction groups
+	wasmCache := prefetcher.precompileAllWasmPrograms(ctx)
+
 	go prefetcher.prefetch(ctx)
-	return prefetcher.outChan
+	return prefetcher.outChan, wasmCache
 }
 
 // groupTask helps to organize the account loading for each transaction group.
@@ -448,11 +469,13 @@ func (p *accountPrefetcher) prefetch(ctx context.Context) {
 
 			// write the result to the output channel.
 			// this write will not block since we preallocated enough space on the channel.
+			wasmHashes := p.getWasmProgramHashes(p.txnGroups[next])
 			p.outChan <- LoadedTransactionGroup{
-				Err:       groupsReady[next].err,
-				TxnGroup:  p.txnGroups[next],
-				Accounts:  groupsReady[next].balances,
-				Resources: groupsReady[next].resources,
+				Err:               groupsReady[next].err,
+				TxnGroup:          p.txnGroups[next],
+				Accounts:          groupsReady[next].balances,
+				Resources:         groupsReady[next].resources,
+				WasmProgramHashes: wasmHashes,
 			}
 		}
 		// if we get to this point, it means that we have no more transaction to process.
@@ -581,4 +604,87 @@ func (p *accountPrefetcher) asyncPrefetchRoutine(queue *preloaderTaskQueue, task
 			wt.markCompletionResource(task.groupTasksIndices[i], re, groupDoneCh)
 		}
 	}
+}
+
+// precompileAllWasmPrograms precompiles all WASM programs across all transaction groups
+func (p *accountPrefetcher) precompileAllWasmPrograms(ctx context.Context) map[[16]byte]wazeroapi.Function {
+	if p.wasmRuntime == nil {
+		return nil
+	}
+
+	wasmCache := make(map[[16]byte]wazeroapi.Function)
+	uniquePrograms := make(map[[16]byte][]byte)
+
+	// Collect all unique WASM programs across all transaction groups
+	hasher := fnv.New128a()
+	for _, txgroup := range p.txnGroups {
+		for _, txad := range txgroup {
+			wasmProgram := txad.SignedTxn.Txn.WasmProgram
+			if wasmProgram == nil {
+				continue
+			}
+
+			var hash [16]byte
+			copy(hash[:], hasher.Sum(wasmProgram)[:])
+			hasher.Reset()
+
+			if _, exists := uniquePrograms[hash]; !exists {
+				uniquePrograms[hash] = wasmProgram
+			}
+		}
+	}
+
+	// Compile all unique programs
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+
+	for hash, wasmProgram := range uniquePrograms {
+		wg.Add(1)
+		go func(h [16]byte, program []byte) {
+			defer wg.Done()
+
+			name := string(h[:])
+			module := p.wasmRuntime.Module(name)
+
+			if module == nil {
+				compiledModule, err := p.wasmRuntime.CompileModule(ctx, program)
+				if err != nil {
+					panic(err)
+				}
+				module, err = p.wasmRuntime.InstantiateModule(ctx, compiledModule, wazero.NewModuleConfig().WithStartFunctions().WithName(name))
+				if err != nil {
+					panic(fmt.Sprintf("failed to instantiate WASM module: %v", err))
+				}
+			}
+
+			fn := module.ExportedFunction("program")
+			mu.Lock()
+			wasmCache[h] = fn
+			mu.Unlock()
+		}(hash, wasmProgram)
+	}
+
+	wg.Wait()
+	return wasmCache
+}
+
+// getWasmProgramHashes returns a map of transaction index to WASM program hash for a transaction group
+func (p *accountPrefetcher) getWasmProgramHashes(txgroup []transactions.SignedTxnWithAD) map[int][16]byte {
+	wasmHashes := make(map[int][16]byte)
+	hasher := fnv.New128a()
+
+	for gi, txad := range txgroup {
+		wasmProgram := txad.SignedTxn.Txn.WasmProgram
+		if wasmProgram == nil {
+			continue
+		}
+
+		var hash [16]byte
+		copy(hash[:], hasher.Sum(wasmProgram)[:])
+		hasher.Reset()
+
+		wasmHashes[gi] = hash
+	}
+
+	return wasmHashes
 }

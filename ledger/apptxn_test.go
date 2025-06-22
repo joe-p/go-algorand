@@ -3770,3 +3770,36 @@ func TestAppCallAppDuringInit(t *testing.T) {
 		dl.txn(&callInInit, problem)
 	})
 }
+
+func BenchmarkSimpleProgram(b *testing.B) {
+	genBalances, addrs, _ := ledgertesting.NewTestGenesis()
+
+	versionNames := map[protocol.ConsensusVersion]string{}
+	versionNames[protocol.ConsensusV30] = "v40"
+	versionNames[protocol.ConsensusFuture] = "vFuture"
+	versions := []protocol.ConsensusVersion{protocol.ConsensusV30, protocol.ConsensusFuture}
+
+	for _, cv := range versions {
+		b.Run(versionNames[cv], func(b *testing.B) {
+			cfg := config.GetDefaultLocal()
+			l := newSimpleLedgerWithConsensusVersion(b, genBalances, cv, cfg)
+			defer l.Close()
+
+			createapp := txntest.Txn{
+				ApplicationID:   0,
+				Type:            "appl",
+				Sender:          addrs[0],
+				ApprovalProgram: "int 1",
+			}
+
+			b.ResetTimer()
+			b.N = 1000
+			for i := 0; i < b.N; i++ {
+				eval := nextBlock(b, l)
+				txgroup(b, l, eval, &createapp)
+				endBlock(b, l, eval)
+			}
+			b.StopTimer()
+		})
+	}
+}

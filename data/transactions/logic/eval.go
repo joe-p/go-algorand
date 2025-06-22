@@ -72,7 +72,9 @@ const maxStackDepth = 1000
 // match.
 const maxTxGroupSize = 16
 
-const sliceSize = 50
+const numberOfSlices = 50
+
+const sliceCapacity = 500
 
 // stackValue is the type for the operand stack.
 // Each stackValue is either a valid []byte value or a uint64 value.
@@ -704,7 +706,7 @@ type EvalContext struct {
 
 	programHashCached crypto.Digest
 
-	slices [sliceSize][]stackValue
+	slices [numberOfSlices][]stackValue
 
 	freeSlices []int
 }
@@ -807,7 +809,7 @@ var (
 	// StackZeroBytes is a StackBytes with a minimum length of 0 and a maximum length of 0
 	StackZeroBytes = NewStackType(avmUint64, bound(0, 0), "''")
 
-	StackSliceHandle = NewStackType(avmUint64, bound(0, sliceSize), "sliceHandle")
+	StackSliceHandle = NewStackType(avmUint64, bound(0, numberOfSlices), "sliceHandle")
 
 	// AllStackTypes is a map of all the stack types we recognize
 	// so that we can iterate over them in doc prep
@@ -1294,12 +1296,14 @@ func eval(program []byte, cx *EvalContext) (pass bool, err error) {
 	cx.txn.EvalDelta.GlobalDelta = basics.StateDelta{}
 	cx.txn.EvalDelta.LocalDeltas = make(map[uint64]basics.StateDelta)
 
-	// TODO(slice): figure out a good size for slices
-	cx.slices = [sliceSize][]stackValue{}
+	if cx.EvalParams.Proto.LogicSigVersion >= slicesVersion {
+		cx.slices = [numberOfSlices][]stackValue{}
 
-	cx.freeSlices = make([]int, sliceSize-1)
-	for i := range len(cx.freeSlices) {
-		cx.freeSlices[i] = i + 1 // 1-49
+		cx.freeSlices = make([]int, numberOfSlices-1)
+		for i := range len(cx.freeSlices) {
+			cx.freeSlices[i] = i + 1
+			cx.slices[i+1] = make([]stackValue, 0, sliceCapacity)
+		}
 	}
 
 	// We get the error here, but defer reporting so that the Tracer can be
@@ -1756,15 +1760,6 @@ func checkSlicehandle(cx *EvalContext, handle int) error {
 }
 
 func opSliceAlloc(cx *EvalContext) error {
-	last := len(cx.Stack) - 1 // size on top
-
-	stackVal := cx.Stack[last]
-	size := stackVal.Uint
-
-	if size == 0 {
-		return nil
-	}
-
 	if len(cx.freeSlices) == 0 {
 		return fmt.Errorf("no free slices available")
 	}
@@ -1772,9 +1767,7 @@ func opSliceAlloc(cx *EvalContext) error {
 	sliceHandle := cx.freeSlices[len(cx.freeSlices)-1]
 	cx.freeSlices = cx.freeSlices[:len(cx.freeSlices)-1]
 
-	cx.slices[sliceHandle] = make([]stackValue, 0, size)
-
-	cx.Stack[last].Uint = uint64(sliceHandle)
+	cx.Stack = append(cx.Stack, stackValue{Uint: uint64(sliceHandle)})
 
 	return nil
 }
@@ -1792,7 +1785,10 @@ func opSliceFree(cx *EvalContext) error {
 	}
 
 	cx.freeSlices = append(cx.freeSlices, int(handle))
-	cx.slices[int(handle)] = nil
+
+	for i := range cx.slices[handle] {
+		cx.slices[handle][i] = stackValue{} // clear the slice
+	}
 
 	cx.Stack = cx.Stack[:last] // remove handle from stack
 

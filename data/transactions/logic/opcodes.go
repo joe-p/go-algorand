@@ -82,6 +82,7 @@ const mimcVersion = 11
 // moved from vFuture to a new consensus version. If they remain unready, bump
 // their version, and fixup TestAssemble() in assembler_test.go.
 const spOpcodesVersion = 12 // falcon_verify, sumhash512
+const slicesVersion = 12
 
 // Unlimited Global Storage opcodes
 const boxVersion = 8 // box_*
@@ -810,7 +811,7 @@ var OpSpecs = []OpSpec{
 			chunkCost: 550,
 			chunkSize: 32,
 		}})},
-	{0xe7, "slice_alloc", opSliceAlloc, proto("i:S"), mimcVersion, costly(1)},
+	{0xe7, "slice_alloc", opSliceAlloc, proto(":S"), mimcVersion, costly(1)},
 	{0xe8, "slice_append", opSliceAppend, proto("Sa:"), mimcVersion, costly(1)},
 	{0xe9, "slice_get", opSliceGet, proto("Si:a"), mimcVersion, costly(1)},
 	{0xea, "slice_free", opSliceFree, proto("S:"), mimcVersion, costly(1)},

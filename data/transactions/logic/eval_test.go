@@ -4064,12 +4064,9 @@ func BenchmarkByteMath(b *testing.B) {
 	}
 }
 
-func BenchmarkSliceAlloc(b *testing.B) {
+func BenchmarkSliceAllocAndFree(b *testing.B) {
 	benches := [][]string{
-		{"alloc (5)", "int 5; slice_alloc; slice_free"},
-		{"alloc (50)", "int 50; slice_alloc; slice_free"},
-		{"alloc (500)", "int 500; slice_alloc; slice_free"},
-		{"alloc (5000)", "int 5000; slice_alloc; slice_free"},
+		{"alloc", "slice_alloc; slice_free"},
 	}
 	for _, bench := range benches {
 		b.Run(bench[0], func(b *testing.B) {

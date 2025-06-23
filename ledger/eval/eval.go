@@ -924,9 +924,10 @@ func StartEvaluator(l LedgerForEvaluator, hdr bookkeeping.BlockHeader, evalOpts 
 		panic(fmt.Sprintf("failed to instantiate env module: %v", err))
 	}
 
-	getCurrentApplicationId := func(ctx context.Context, m wazeroapi.Module) uint64 {
+	getCurrentApplicationId := func(ctx context.Context, stack []uint64) {
 		if evalContext, ok := ctx.Value("evalContext").(*logic.EvalContext); ok {
-			return uint64(evalContext.AppID())
+			stack[0] = uint64(evalContext.AppID())
+			return
 		}
 		panic("getCurrentApplicationId called without evalContext in context")
 	}
@@ -1027,12 +1028,6 @@ func StartEvaluator(l LedgerForEvaluator, hdr bookkeeping.BlockHeader, evalOpts 
 		panic("setGlobalBytes called without evalContext in context")
 	}
 
-	// builder.WithGoFunction(api.GoFunc(func(ctx context.Context, stack []uint64) {
-	// 	x, y := api.DecodeI32(stack[0]), api.DecodeI32(stack[1])
-	// 	sum := x + y
-	// 	stack[0] = api.EncodeI32(sum)
-	// }), []api.ValueType{api.ValueTypeI32, api.ValueTypeI32}, []api.ValueType{api.ValueTypeI32})
-	//
 	// getGlobalUint := func(ctx context.Context, m wazeroapi.Module, appId uint64, key_pointer int32, key_length int32) uint64 {
 	getGlobalUint := func(ctx context.Context, stack []uint64) {
 		if evalContext, ok := ctx.Value("evalContext").(*logic.EvalContext); ok {
@@ -1132,7 +1127,7 @@ func StartEvaluator(l LedgerForEvaluator, hdr bookkeeping.BlockHeader, evalOpts 
 		NewFunctionBuilder().WithGoFunction(wazeroapi.GoFunc(setGlobalUint), []wazeroapi.ValueType{w64, w32, w32, w64}, []wazeroapi.ValueType{}).Export("host_set_global_uint").
 		NewFunctionBuilder().WithFunc(getGlobalBytes).Export("host_get_global_bytes").
 		NewFunctionBuilder().WithFunc(setGlobalBytes).Export("host_set_global_bytes").
-		NewFunctionBuilder().WithFunc(getCurrentApplicationId).Export("host_get_current_application_id").
+		NewFunctionBuilder().WithGoFunction(wazeroapi.GoFunc(getCurrentApplicationId), []wazeroapi.ValueType{}, []wazeroapi.ValueType{w64}).Export("host_get_current_application_id").
 		NewFunctionBuilder().WithFunc(alloc).Export("host_alloc").
 		NewFunctionBuilder().WithFunc(dealloc).Export("host_dealloc").
 		NewFunctionBuilder().WithFunc(bigintAdd).Export("host_bigint_add").

@@ -120,8 +120,17 @@ pub fn set_global_bytes(app: u64, key: &[u8], value: &[u8]) {
     }
 }
 
+/// Caches the current application ID to avoid repeated calls to the host function.
+static mut APP_ID: Option<u64> = None;
+
 pub fn get_current_application_id() -> u64 {
-    unsafe { host_get_current_application_id() }
+    unsafe {
+        APP_ID.unwrap_or_else(|| {
+            let id = host_get_current_application_id();
+            APP_ID = Some(id);
+            id
+        })
+    }
 }
 
 pub struct GlobalStateKey<ValueType> {

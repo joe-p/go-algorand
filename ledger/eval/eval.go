@@ -918,7 +918,7 @@ func StartEvaluator(l LedgerForEvaluator, hdr bookkeeping.BlockHeader, evalOpts 
 		panic(fmt.Sprintf("failed to compile env module: %v", err))
 	}
 
-	_, err = runtime.InstantiateModule(runtimeCtx, compiled, wazero.NewModuleConfig().WithStartFunctions().WithName("env"))
+	envModule, err := runtime.InstantiateModule(runtimeCtx, compiled, wazero.NewModuleConfig().WithStartFunctions().WithName("env"))
 
 	if err != nil {
 		panic(fmt.Sprintf("failed to instantiate env module: %v", err))
@@ -1027,9 +1027,21 @@ func StartEvaluator(l LedgerForEvaluator, hdr bookkeeping.BlockHeader, evalOpts 
 		panic("setGlobalBytes called without evalContext in context")
 	}
 
-	getGlobalUint := func(ctx context.Context, m wazeroapi.Module, appId uint64, key_pointer int32, key_length int32) uint64 {
+	// builder.WithGoFunction(api.GoFunc(func(ctx context.Context, stack []uint64) {
+	// 	x, y := api.DecodeI32(stack[0]), api.DecodeI32(stack[1])
+	// 	sum := x + y
+	// 	stack[0] = api.EncodeI32(sum)
+	// }), []api.ValueType{api.ValueTypeI32, api.ValueTypeI32}, []api.ValueType{api.ValueTypeI32})
+	//
+	// getGlobalUint := func(ctx context.Context, m wazeroapi.Module, appId uint64, key_pointer int32, key_length int32) uint64 {
+	getGlobalUint := func(ctx context.Context, stack []uint64) {
 		if evalContext, ok := ctx.Value("evalContext").(*logic.EvalContext); ok {
-			mem := m.Memory()
+			appId := stack[0]
+			key_pointer := wazeroapi.DecodeI32(stack[1])
+			key_length := wazeroapi.DecodeI32(stack[2])
+
+			mem := envModule.Memory()
+
 			// TODO(wasm): Figure out best way to handle out of range memory access
 			key, _ := mem.Read(uint32(key_pointer), uint32(key_length))
 
@@ -1037,18 +1049,26 @@ func StartEvaluator(l LedgerForEvaluator, hdr bookkeeping.BlockHeader, evalOpts 
 			if err != nil {
 				fmt.Printf("Error getting global value: %v\n", err)
 				// TODO(wasm): Figure out best way to handle errors in general
-				return 1337
+				stack[0] = 1337
+				return
 			}
 
-			return tv.Uint
+			stack[0] = tv.Uint
+			return
 		}
-		panic("getCurrentApplicationId called without evalContext in context")
+		panic("getGlobalUint called without evalContext in context")
 
 	}
 
-	setGlobalUint := func(ctx context.Context, m wazeroapi.Module, appId uint64, key_pointer int32, key_length int32, value uint64) {
+	// setGlobalUint := func(ctx context.Context, m wazeroapi.Module, appId uint64, key_pointer int32, key_length int32, value uint64) {
+	setGlobalUint := func(ctx context.Context, stack []uint64) {
 		if evalContext, ok := ctx.Value("evalContext").(*logic.EvalContext); ok {
-			mem := m.Memory()
+			appId := stack[0]
+			key_pointer := wazeroapi.DecodeI32(stack[1])
+			key_length := wazeroapi.DecodeI32(stack[2])
+			value := stack[3]
+
+			mem := envModule.Memory()
 
 			// TODO(wasm): Figure out best way to handle out of range memory access
 			key, _ := mem.Read(uint32(key_pointer), uint32(key_length))
@@ -1094,9 +1114,22 @@ func StartEvaluator(l LedgerForEvaluator, hdr bookkeeping.BlockHeader, evalOpts 
 		return uint32(len(c.Bytes()))
 	}
 
+	// builder.WithGoFunction(api.GoFunc(func(ctx context.Context, stack []uint64) {
+	// 	x, y := api.DecodeI32(stack[0]), api.DecodeI32(stack[1])
+	// 	sum := x + y
+	// 	stack[0] = api.EncodeI32(sum)
+	// }), []api.ValueType{api.ValueTypeI32, api.ValueTypeI32}, []api.ValueType{api.ValueTypeI32})
+	//
+	// getGlobalUint := func(ctx context.Context, m wazeroapi.Module, appId uint64, key_pointer int32, key_length int32) uint64 {
+
+	w64 := wazeroapi.ValueTypeI64
+	w32 := wazeroapi.ValueTypeI32
+
+	// setGlobalUint := func(ctx context.Context, m wazeroapi.Module, appId uint64, key_pointer int32, key_length int32, value uint64) {
+
 	_, err = runtime.NewHostModuleBuilder("algorand").
-		NewFunctionBuilder().WithFunc(getGlobalUint).Export("host_get_global_uint").
-		NewFunctionBuilder().WithFunc(setGlobalUint).Export("host_set_global_uint").
+		NewFunctionBuilder().WithGoFunction(wazeroapi.GoFunc(getGlobalUint), []wazeroapi.ValueType{w64, w32, w32}, []wazeroapi.ValueType{w64}).Export("host_get_global_uint").
+		NewFunctionBuilder().WithGoFunction(wazeroapi.GoFunc(setGlobalUint), []wazeroapi.ValueType{w64, w32, w32, w64}, []wazeroapi.ValueType{}).Export("host_set_global_uint").
 		NewFunctionBuilder().WithFunc(getGlobalBytes).Export("host_get_global_bytes").
 		NewFunctionBuilder().WithFunc(setGlobalBytes).Export("host_set_global_bytes").
 		NewFunctionBuilder().WithFunc(getCurrentApplicationId).Export("host_get_current_application_id").

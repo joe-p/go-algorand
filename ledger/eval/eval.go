@@ -18,6 +18,7 @@ package eval
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"hash/fnv"
@@ -899,9 +900,29 @@ func StartEvaluator(l LedgerForEvaluator, hdr bookkeeping.BlockHeader, evalOpts 
 
 	// Current AVM allows stack depth of 1k with 4k for each value, so 4MB total
 	// Each page is 64k, so 62 pages is a little under 4MB
-	// WithMemoryCapacityFromMax(false) means that we manually grow the memory as needed when allocating
-	runCfg := wazero.NewRuntimeConfigCompiler().WithMemoryLimitPages(62).WithMemoryCapacityFromMax(false).WithCompilationCache(cache)
+	// WithMemoryCapacityFromMax(true) means that the memory will be pre-allocated
+	runCfg := wazero.NewRuntimeConfigCompiler().WithMemoryLimitPages(62).WithMemoryCapacityFromMax(true).WithCompilationCache(cache)
 	runtime := wazero.NewRuntimeWithConfig(runtimeCtx, runCfg)
+
+	// $ echo '(module (memory (export "memory") 62))' > tmp.wat && wat2wasm tmp.wat && xxd -p -c 1000 tmp.wasm
+	envWasmHex := "0061736d01000000050301003e070a01066d656d6f72790200"
+	envWasm, err := hex.DecodeString(envWasmHex)
+	if err != nil {
+		panic(err)
+	}
+
+	// Compile and instantiate
+	compiled, err := runtime.CompileModule(runtimeCtx, envWasm)
+
+	if err != nil {
+		panic(fmt.Sprintf("failed to compile env module: %v", err))
+	}
+
+	_, err = runtime.InstantiateModule(runtimeCtx, compiled, wazero.NewModuleConfig().WithStartFunctions().WithName("env"))
+
+	if err != nil {
+		panic(fmt.Sprintf("failed to instantiate env module: %v", err))
+	}
 
 	getCurrentApplicationId := func(ctx context.Context, m wazeroapi.Module) uint64 {
 		if evalContext, ok := ctx.Value("evalContext").(*logic.EvalContext); ok {
@@ -1046,12 +1067,12 @@ func StartEvaluator(l LedgerForEvaluator, hdr bookkeeping.BlockHeader, evalOpts 
 		panic("setGlobalUint called without evalContext in context")
 	}
 
-	abort := func(ctx context.Context, m wazeroapi.Module, a int32, b int32, c int32, d int32) {
-		fmt.Printf("WASM program aborted!\n")
-
-		// TODO(wasm): Figure out best way to handle aborts
-		runtime.Close(ctx)
-	}
+	// abort := func(ctx context.Context, m wazeroapi.Module, a int32, b int32, c int32, d int32) {
+	// 	fmt.Printf("WASM program aborted!\n")
+	//
+	// 	// TODO(wasm): Figure out best way to handle aborts
+	// 	runtime.Close(ctx)
+	// }
 
 	bigintAdd := func(ctx context.Context, m wazeroapi.Module, aPtr uint32, aLen uint32, bPtr uint32, bLen uint32, cPtr uint32) uint32 {
 		mem := m.Memory()
@@ -1084,10 +1105,11 @@ func StartEvaluator(l LedgerForEvaluator, hdr bookkeeping.BlockHeader, evalOpts 
 		NewFunctionBuilder().WithFunc(bigintAdd).Export("host_bigint_add").
 		Instantiate(runtimeCtx)
 
+	// TODO: Figure out if we can have both the env for memory and env for abort
 	// Needed for AssemblyScript to work, which uses the abort function
-	_, err = runtime.NewHostModuleBuilder("env").
-		NewFunctionBuilder().WithFunc(abort).Export("abort").
-		Instantiate(runtimeCtx)
+	// _, err = runtime.NewHostModuleBuilder("env").
+	// 	NewFunctionBuilder().WithFunc(abort).Export("abort").
+	// 	Instantiate(runtimeCtx)
 
 	eval.wasmRuntime = runtime
 	return eval, nil

@@ -1219,18 +1219,21 @@ func EvalContract(program []byte, gi int, aid basics.AppIndex, params *EvalParam
 	freeList := []uint32{65536 + 4096} // free list for wasm program evaluation
 	ctx := context.WithValue(context.Background(), "evalContext", &cx)
 	ctx = context.WithValue(ctx, "freeList", &freeList)
-	wasmProgram := cx.TxnGroup[gi].Txn.WasmProgram
-	if wasmProgram != nil {
-		fn := <-cx.EvalParams.WasmProgramFunctions[gi]
-		results, wasmErr := (*fn).Call(ctx)
+
+	// TODO(wasm): pre-allocate this earlier
+	stack := []uint64{0}
+	if cx.EvalParams.WasmProgramFunctions[gi] != nil {
+		fnPtr := <-cx.EvalParams.WasmProgramFunctions[gi]
+
+		fn := *fnPtr
+		wasmErr := fn.CallWithStack(ctx, stack)
 
 		if wasmErr != nil {
 			err = wasmErr
-		} else if len(results) != 1 {
-			err = fmt.Errorf("wasm program returned %d results, expected 1", len(results))
+		} else if len(stack) != 1 {
+			err = fmt.Errorf("wasm program returned %d results, expected 1", len(stack))
 		} else {
-			pass = results[0] != 0
-			// println("wasm program result:", results[0])
+			pass = stack[0] != 0
 		}
 
 		if err != nil {

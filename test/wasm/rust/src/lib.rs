@@ -15,7 +15,7 @@ pub fn get_counter() -> u64 {
 
 #[unsafe(no_mangle)]
 pub fn program() -> u64 {
-    while get_counter() < 10 {
+    while get_counter() < 25 {
         increment_counter();
     }
 

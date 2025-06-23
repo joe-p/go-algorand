@@ -15,7 +15,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    lib.stack_size = 32768;
+    lib.import_memory = true;
 
 
     lib.entry = .disabled;

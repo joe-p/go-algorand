@@ -3937,7 +3937,7 @@ increment_counter:
 program:
 	callsub increment_counter
 	callsub get_counter
-	int 10
+	int 25
 	<
 	bnz program
 
@@ -3989,7 +3989,7 @@ program:
 func benchWasm(b *testing.B, langs map[string]string, groupSizes []int) {
 	for _, groupSize := range groupSizes {
 		for lang, wasmFile := range langs {
-			for _, usePrefetcher := range []bool{false, true} {
+			for _, usePrefetcher := range []bool{true} {
 				suffix := ""
 				if usePrefetcher {
 					suffix = " with prefetcher"
@@ -4066,10 +4066,10 @@ func BenchmarkWasmStateLoop(b *testing.B) {
 	partitiontest.PartitionTest(b)
 
 	wasmFiles := map[string]string{
-		"assembly_script": "/Users/joe/git/algorand/go-algorand/test/wasm/assembly_script/build/release.wasm",
-		// "tinygo":          "/Users/joe/git/algorand/go-algorand/test/wasm/tinygo/program.wasm",
+		// "assembly_script": "/Users/joe/git/algorand/go-algorand/test/wasm/assembly_script/build/release.wasm",
+		// "tinygo": "/Users/joe/git/algorand/go-algorand/test/wasm/tinygo/program.wasm",
 		"rust": "/Users/joe/git/algorand/go-algorand/test/wasm/rust/target/wasm32-unknown-unknown/release/program.wasm",
-		"zig":  "/Users/joe/git/algorand/go-algorand/test/wasm/zig/zig-out/bin/program.wasm",
+		// "zig":  "/Users/joe/git/algorand/go-algorand/test/wasm/zig/zig-out/bin/program.wasm",
 		"teal": tealStateLoop,
 	}
 

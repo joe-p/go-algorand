@@ -17,19 +17,14 @@
 package logic
 
 import (
-	"context"
 	"encoding/hex"
 	"fmt"
-	"io"
-	"os"
 	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tetratelabs/wazero"
-	wazeroapi "github.com/tetratelabs/wazero/api"
 
 	"github.com/algorand/go-algorand/config"
 	"github.com/algorand/go-algorand/crypto"
@@ -486,7 +481,7 @@ func testAppsBytes(t *testing.T, programs [][]byte, ep *EvalParams, expected ...
 	return nil
 }
 
-func testApp(t testing.TB, program string, ep *EvalParams, problems ...string) (transactions.EvalDelta, error) {
+func testApp(t *testing.T, program string, ep *EvalParams, problems ...string) (transactions.EvalDelta, error) {
 	t.Helper()
 	if ep == nil {
 		ep = defaultAppParamsWithVersion(LogicVersion)
@@ -498,7 +493,7 @@ func testApp(t testing.TB, program string, ep *EvalParams, problems ...string) (
 // testAppCreator is the creator of the 888 app that is inserted when testing an app call
 const testAppCreator = "47YPQTIGQEO7T4Y4RWDYWEKV6RTR2UNBQXBABEEGM72ESWDQNCQ52OPASU"
 
-func testAppBytes(t testing.TB, program []byte, ep *EvalParams, problems ...string) (transactions.EvalDelta, error) {
+func testAppBytes(t *testing.T, program []byte, ep *EvalParams, problems ...string) (transactions.EvalDelta, error) {
 	t.Helper()
 	if ep == nil {
 		ep = defaultAppParamsWithVersion(LogicVersion)
@@ -522,7 +517,7 @@ func testAppBytes(t testing.TB, program []byte, ep *EvalParams, problems ...stri
 // ep.reset() is in testAppBytes, not here. This means that ADs in the ep are
 // not cleared, so repeated use of a single ep is probably not a good idea
 // unless you are *intending* to see how ep is modified as you go.
-func testAppFull(t testing.TB, program []byte, gi int, aid basics.AppIndex, ep *EvalParams, problems ...string) (transactions.EvalDelta, error) {
+func testAppFull(t *testing.T, program []byte, gi int, aid basics.AppIndex, ep *EvalParams, problems ...string) (transactions.EvalDelta, error) {
 	t.Helper()
 
 	var checkProblem string
@@ -541,13 +536,11 @@ func testAppFull(t testing.TB, program []byte, gi int, aid basics.AppIndex, ep *
 
 	ep.Trace = &strings.Builder{}
 
-	if ep.WasmPrograms == nil || ep.WasmPrograms[gi] == nil {
-		err := CheckContract(program, ep)
-		if checkProblem == "" {
-			require.NoError(t, err, "Error in CheckContract %v", ep.Trace)
-		} else {
-			require.ErrorContains(t, err, checkProblem, "Wrong error in CheckContract %v", ep.Trace)
-		}
+	err := CheckContract(program, ep)
+	if checkProblem == "" {
+		require.NoError(t, err, "Error in CheckContract %v", ep.Trace)
+	} else {
+		require.ErrorContains(t, err, checkProblem, "Wrong error in CheckContract %v", ep.Trace)
 	}
 
 	// We continue on to check Eval() of things that failed Check() because it's
@@ -559,14 +552,7 @@ func testAppFull(t testing.TB, program []byte, gi int, aid basics.AppIndex, ep *
 		ep.Ledger = NewLedger(nil)
 	}
 
-	if b, ok := t.(*testing.B); ok {
-		b.StartTimer()
-	}
 	pass, err := EvalApp(program, gi, aid, ep)
-	if b, ok := t.(*testing.B); ok {
-		b.StopTimer()
-	}
-
 	delta := ep.TxnGroup[gi].EvalDelta
 	if evalProblem == "" {
 		require.NoError(t, err, "Eval\n%sExpected: PASS", ep.Trace)
@@ -3689,249 +3675,6 @@ func TestAppLoop(t *testing.T) {
 
 	// Infinite loop because multiply by one instead of two
 	testApp(t, stateful+"int 1; loop:; int 1; *; dup; int 10; <; bnz loop; int 16; ==", ep, "dynamic cost")
-}
-
-const globalCounterLoopTeal = `
-	b program
-	get_counter: 
-		byte "counter"
-		app_global_get
-		retsub
-	increment_counter:
-		byte "counter"
-		dup
-		app_global_get
-		int 1
-		+
-		app_global_put
-		retsub
-
-	program:
-		callsub increment_counter
-		callsub get_counter
-		int 10
-		<
-		bnz program
-
-	int 1
-	return	
-	`
-
-func BenchmarkWasmLoop(b *testing.B) {
-	b.ReportAllocs()
-
-	wasmFiles := map[string]string{
-		// "assembly_script": "/Users/joe/git/algorand/go-algorand/test/wasm/assembly_script/build/release.wasm",
-		// "tinygo": "/Users/joe/git/algorand/go-algorand/test/wasm/tinygo/program.wasm",
-		"rust": "/Users/joe/git/algorand/go-algorand/test/wasm/rust/target/wasm32-unknown-unknown/release/program.wasm",
-		"zig":  "/Users/joe/git/algorand/go-algorand/test/wasm/zig/program.wasm",
-	}
-
-	for name, wasmFile := range wasmFiles {
-		b.Run(name, func(b *testing.B) {
-
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				b.StopTimer()
-				ep, runtime := getWasmEp(wasmFile)
-				defer runtime.Close(context.Background())
-				testAppBytes(b, []byte{}, ep)
-				b.StopTimer()
-
-				// Reset the counter after each run
-				tv, exists, err := ep.Ledger.GetGlobal(basics.AppIndex(888), "counter")
-
-				require.NoError(b, err, "getting counter global should not error")
-				require.True(b, exists, "counter global should exist")
-				require.Equal(b, uint64(10), tv.Uint, "counter global should be 10")
-
-				err = ep.Ledger.SetGlobal(basics.AppIndex(888), "counter", basics.TealValue{Type: basics.TealUintType, Uint: 0})
-				require.NoError(b, err, "resetting counter global should not error")
-			}
-		})
-	}
-
-	b.Run("teal", func(b *testing.B) {
-		ep, _, _ := makeSampleEnv()
-		ep.TxnGroup[0].Txn.ApplicationID = 0
-
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
-			b.StopTimer()
-			testApp(b, globalCounterLoopTeal, ep)
-			b.StopTimer()
-
-			// Reset the counter after each run
-			tv, exists, err := ep.Ledger.GetGlobal(basics.AppIndex(888), "counter")
-
-			require.NoError(b, err, "getting counter global should not error")
-			require.True(b, exists, "counter global should exist")
-			require.Equal(b, uint64(10), tv.Uint, "counter global should be 10")
-
-			err = ep.Ledger.SetGlobal(basics.AppIndex(888), "counter", basics.TealValue{Type: basics.TealUintType, Uint: 0})
-			require.NoError(b, err, "resetting counter global should not error")
-			err = ep.Ledger.SetGlobal(basics.AppIndex(888), "counter", basics.TealValue{Type: basics.TealUintType, Uint: 0})
-			require.NoError(b, err, "resetting counter global should not error")
-		}
-
-	})
-}
-
-func TestWasmLoop(t *testing.T) {
-	partitiontest.PartitionTest(t)
-	t.Parallel()
-
-	wasmFiles := map[string]string{
-		"assembly_script": "/Users/joe/git/algorand/go-algorand/test/wasm/assembly_script/build/release.wasm",
-		"tinygo":          "/Users/joe/git/algorand/go-algorand/test/wasm/tinygo/program.wasm",
-		"rust":            "/Users/joe/git/algorand/go-algorand/test/wasm/rust/target/wasm32-unknown-unknown/release/program.wasm",
-		"zig":             "/Users/joe/git/algorand/go-algorand/test/wasm/zig/program.wasm",
-	}
-
-	for name, wasmFile := range wasmFiles {
-		t.Run(name, func(t *testing.T) {
-			ep, runtime := getWasmEp(wasmFile)
-			defer runtime.Close(context.Background())
-
-			testAppBytes(t, []byte{}, ep)
-
-			tv, exists, err := ep.Ledger.GetGlobal(basics.AppIndex(888), "counter")
-
-			require.NoError(t, err, "getting counter global should not error")
-			require.True(t, exists, "counter global should exist")
-			require.Equal(t, uint64(10), tv.Uint, "counter global should be 10")
-		})
-	}
-
-	t.Run("teal", func(t *testing.T) {
-		partitiontest.PartitionTest(t)
-		t.Parallel()
-
-		ep, _, _ := makeSampleEnv()
-		ep.TxnGroup[0].Txn.ApplicationID = 0
-
-		testApp(t, globalCounterLoopTeal, ep)
-
-		tv, exists, err := ep.Ledger.GetGlobal(basics.AppIndex(888), "counter")
-		require.NoError(t, err, "getting counter global should not error")
-		require.True(t, exists, "counter global should exist")
-		require.Equal(t, uint64(10), tv.Uint, "counter global should be 10")
-	})
-
-}
-
-func BenchmarkWasmSetup(b *testing.B) {
-	b.ReportAllocs()
-
-	wasmFiles := map[string]string{
-		"assembly_script": "/Users/joe/git/algorand/go-algorand/test/wasm/assembly_script/build/release.wasm",
-		"tinygo":          "/Users/joe/git/algorand/go-algorand/test/wasm/tinygo/program.wasm",
-		"rust":            "/Users/joe/git/algorand/go-algorand/test/wasm/rust/target/wasm32-unknown-unknown/release/program.wasm",
-	}
-
-	for name, wasmFile := range wasmFiles {
-		b.Run(name, func(b *testing.B) {
-			for i := 0; i < b.N; i++ {
-				getWasmEp(wasmFile)
-			}
-		})
-	}
-}
-
-func getWasmEp(wasmFile string) (*EvalParams, wazero.Runtime) {
-	ep, _, _ := makeSampleEnv()
-	ep.TxnGroup[0].Txn.ApplicationID = 0
-	ep.WasmPrograms = map[int]chan wazeroapi.Function{}
-	ep.WasmPrograms[0] = make(chan wazeroapi.Function, 1)
-
-	// TODO(wasm): Have wasm binaries/source in this repo
-	file, err := os.Open(wasmFile)
-	if err != nil {
-		panic(err)
-	}
-	defer file.Close()
-
-	// Read the file into a byte slice
-	data, err := io.ReadAll(file)
-	if err != nil {
-		panic(err)
-	}
-
-	ctx := context.Background()
-
-	// Current AVM allows stack depth of 1k with 4k for each value, so 4MB total
-	// Each page is 64k, so 62 pages is a little under 4MB
-	// WithMemoryCapacityFromMax(true) means that the memory is pre-allocated
-	runCfg := wazero.NewRuntimeConfigInterpreter().WithMemoryLimitPages(62).WithMemoryCapacityFromMax(true)
-	runtime := wazero.NewRuntimeWithConfig(ctx, runCfg)
-
-	getCurrentApplicationId := func(ctx context.Context, m wazeroapi.Module) uint64 {
-		return uint64(ep.CurrentContext.appID)
-	}
-
-	getGlobalUint := func(ctx context.Context, m wazeroapi.Module, appId uint64, key_pointer int32, key_length int32) uint64 {
-		mem := m.Memory()
-		// TODO(wasm): Figure out best way to handle out of range memory access
-		key, _ := mem.Read(uint32(key_pointer), uint32(key_length))
-
-		tv, _, err := ep.Ledger.GetGlobal(basics.AppIndex(appId), string(key))
-		if err != nil {
-			fmt.Printf("Error getting global value: %v\n", err)
-			// TODO(wasm): Figure out best way to handle errors in general
-			return 1337
-		}
-
-		return tv.Uint
-
-	}
-
-	setGlobalUint := func(ctx context.Context, m wazeroapi.Module, appId uint64, key_pointer int32, key_length int32, value uint64) {
-		mem := m.Memory()
-
-		// TODO(wasm): Figure out best way to handle out of range memory access
-		key, _ := mem.Read(uint32(key_pointer), uint32(key_length))
-
-		tv := basics.TealValue{Type: basics.TealUintType, Uint: value}
-		err := ep.Ledger.SetGlobal(basics.AppIndex(appId), string(key), tv)
-		if err != nil {
-			fmt.Printf("Error setting global value: %v\n", err)
-			// TODO(wasm): Figure out best way to handle errors in general
-			return
-		}
-	}
-
-	abort := func(ctx context.Context, m wazeroapi.Module, a int32, b int32, c int32, d int32) {
-		fmt.Printf("WASM program aborted!\n")
-
-		// TODO(wasm): Figure out best way to handle aborts
-		runtime.Close(ctx)
-	}
-
-	_, err = runtime.NewHostModuleBuilder("algorand").
-		NewFunctionBuilder().WithFunc(getGlobalUint).Export("host_get_global_uint").
-		NewFunctionBuilder().WithFunc(setGlobalUint).Export("host_set_global_uint").
-		NewFunctionBuilder().WithFunc(getCurrentApplicationId).Export("host_get_current_application_id").
-		Instantiate(ctx)
-
-	// Needed for AssemblyScript to work, which uses the abort function
-	_, err = runtime.NewHostModuleBuilder("env").
-		NewFunctionBuilder().WithFunc(abort).Export("abort").
-		Instantiate(ctx)
-
-	instance, err := runtime.InstantiateWithConfig(ctx, data, wazero.NewModuleConfig().WithStartFunctions())
-
-	if err != nil {
-		panic(err)
-	}
-
-	fn := instance.ExportedFunction("program")
-
-	if fn == nil {
-		panic("WASM program does not have a 'program' function exported")
-	}
-
-	ep.WasmPrograms[0] <- fn
-	return ep, runtime
 }
 
 func TestPooledAppCallsVerifyOp(t *testing.T) {

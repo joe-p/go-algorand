@@ -901,7 +901,11 @@ func StartEvaluator(l LedgerForEvaluator, hdr bookkeeping.BlockHeader, evalOpts 
 	// Current AVM allows stack depth of 1k with 4k for each value, so 4MB total
 	// Each page is 64k, so 62 pages is a little under 4MB
 	// WithMemoryCapacityFromMax(true) means that the memory will be pre-allocated
-	runCfg := wazero.NewRuntimeConfigCompiler().WithMemoryLimitPages(62).WithMemoryCapacityFromMax(true).WithCompilationCache(cache)
+	runCfg := wazero.NewRuntimeConfigCompiler().
+		WithMemoryLimitPages(62).
+		WithMemoryCapacityFromMax(true).
+		WithCompilationCache(cache).
+		WithCloseOnContextDone(true)
 	runtime := wazero.NewRuntimeWithConfig(runtimeCtx, runCfg)
 
 	// $ echo '(module (memory (export "memory") 62))' > tmp.wat && wat2wasm tmp.wat && xxd -p -c 1000 tmp.wasm

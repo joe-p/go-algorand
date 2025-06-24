@@ -32,6 +32,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/algorand/go-algorand/config"
 	"github.com/algorand/go-algorand/config/bounds"
@@ -1216,13 +1217,26 @@ func EvalContract(program []byte, gi int, aid basics.AppIndex, params *EvalParam
 	var pass bool
 	var err error
 
-	freeList := []uint32{65536 + 4096} // free list for wasm program evaluation
-	ctx := context.WithValue(context.Background(), "evalContext", &cx)
-	ctx = context.WithValue(ctx, "freeList", &freeList)
-
-	// TODO(wasm): pre-allocate this earlier
-	stack := []uint64{0}
 	if cx.EvalParams.WasmProgramFunctions[gi] != nil {
+		freeList := []uint32{65536 + 4096} // free list for wasm program evaluation
+		ctx := context.WithValue(context.Background(), "evalContext", &cx)
+		ctx = context.WithValue(ctx, "freeList", &freeList)
+
+		// FIXME: For some reason the first app takes significantly longer to run
+		// https://github.com/tetratelabs/wazero/issues/2405
+		// As per the issue, this seems to be a wazero-specfic bug that doesn't exist with WAMR
+		if aid != 1001 {
+			// Current AVM program have 700 opcode budget, with each unit ~15 nanoseconds.
+			// Should eventually put this in the consensus params.
+			maxRuntime := time.Duration(700*15) * time.Nanosecond
+			ctxTimeout, cancel := context.WithTimeout(ctx, maxRuntime)
+			ctx = ctxTimeout
+			defer cancel()
+		}
+
+		// TODO(wasm): pre-allocate this earlier
+		stack := []uint64{0}
+
 		fnPtr := <-cx.EvalParams.WasmProgramFunctions[gi]
 
 		fn := *fnPtr

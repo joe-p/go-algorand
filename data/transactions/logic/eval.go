@@ -1226,7 +1226,47 @@ func EvalContract(program []byte, gi int, aid basics.AppIndex, params *EvalParam
 		fnPtr := <-cx.EvalParams.WasmProgramFunctions[gi]
 
 		fn := *fnPtr
+
+		// startMemStats := runtime.MemStats{}
+		// runtime.ReadMemStats(&startMemStats)
+		// start := time.Now()
+
 		wasmErr := fn.CallWithStack(ctx, stack)
+
+		// end := time.Now()
+		// endMemStats := runtime.MemStats{}
+		// runtime.ReadMemStats(&endMemStats)
+
+		// elapsed := end.Sub(start)
+		// fmt.Printf("WASM program %d execution took %s\n", aid, elapsed)
+		//
+		// // Basic allocation info
+		// fmt.Printf("  TotalAlloc: %d bytes (diff: %d)\n",
+		// 	endMemStats.TotalAlloc, endMemStats.TotalAlloc-startMemStats.TotalAlloc)
+		//
+		// // GC-related stats (most important for performance diagnosis)
+		// fmt.Printf("  GC cycles: %d -> %d (diff: %d)\n",
+		// 	startMemStats.NumGC, endMemStats.NumGC, endMemStats.NumGC-startMemStats.NumGC)
+		// fmt.Printf("  GC pause time: %d -> %d ns (diff: %d ns)\n",
+		// 	startMemStats.PauseTotalNs, endMemStats.PauseTotalNs, endMemStats.PauseTotalNs-startMemStats.PauseTotalNs)
+		//
+		// // Allocation tracking (catches temporary allocations)
+		// fmt.Printf("  Heap objects: malloc %d -> %d (diff: %d), free %d -> %d (diff: %d)\n",
+		// 	startMemStats.Mallocs, endMemStats.Mallocs, endMemStats.Mallocs-startMemStats.Mallocs,
+		// 	startMemStats.Frees, endMemStats.Frees, endMemStats.Frees-startMemStats.Frees)
+		//
+		// // Memory pressure indicators
+		// fmt.Printf("  Memory: HeapSys %d, HeapIdle %d, Sys %d\n",
+		// 	endMemStats.HeapSys, endMemStats.HeapIdle, endMemStats.Sys)
+		//
+		// // GC timing correlation
+		// if endMemStats.LastGC > startMemStats.LastGC {
+		// 	fmt.Printf("  ⚠️  GC occurred during execution (LastGC: %d -> %d)\n",
+		// 		startMemStats.LastGC, endMemStats.LastGC)
+		// }
+		//
+		// // Next GC threshold
+		// fmt.Printf("  NextGC threshold: %d bytes\n", endMemStats.NextGC)
 
 		if wasmErr != nil {
 			err = wasmErr

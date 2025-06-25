@@ -8,18 +8,26 @@ pub fn build(b: *std.Build) void {
 
     const optimize = std.builtin.OptimizeMode.ReleaseSmall;
 
-    const lib = b.addExecutable(.{
-        .name = "program",
+    const lib_mod = b.addModule("program", .{
         .root_source_file = b.path("src/lib.zig"),
         .target = target,
         .optimize = optimize,
     });
 
+    const lib = b.addExecutable(.{
+        .name = "program",
+        .root_module = lib_mod,
+    });
     lib.import_memory = true;
-
-
     lib.entry = .disabled;
     lib.rdynamic = true;
-    b.installArtifact(lib);
-}
 
+    b.installArtifact(lib);
+    const lib_check = b.addExecutable(.{
+        .name = "program",
+        .root_module = lib_mod,
+    });
+
+    const check = b.step("check", "Check if program compiles");
+    check.dependOn(&lib_check.step);
+}

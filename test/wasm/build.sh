@@ -29,7 +29,7 @@ cd ..
 echo "Building Zig..."
 cd zig
 zig build
-wasm-opt -Oz zig-out/bin/program.wasm -o zig-out/bin/program.wasm
+wasm-opt --enable-bulk-memory-opt -Oz zig-out/bin/program.wasm -o zig-out/bin/program.wasm
 echo "*** Zig WASM Size: `ls -lh zig-out/bin/program.wasm | awk '{print $5}'` bytes ***"
 echo ""
 cd ..

@@ -1,19 +1,32 @@
 const algokit = @import("algokit.zig");
+const std = @import("std");
 
-fn increment_counter() void {
-    const key = "counter";
-    const app_id = algokit.get_current_application_id();
-    algokit.set_global_uint(app_id, key, algokit.get_global_uint(app_id, key) + 1);
+const TOTAL_SUPPLY = algokit.GlobalStateKey(u256).init("ts");
+
+fn get_total_supply() !u256 {
+    return try TOTAL_SUPPLY.get();
 }
 
-fn get_counter() u64 {
-    return algokit.get_global_uint(algokit.get_current_application_id(), "counter");
+fn set_total_supply(value: u256) void {
+    TOTAL_SUPPLY.set(value);
 }
 
 export fn program() u64 {
-    while (get_counter() < 10) {
-        increment_counter();
+    const amt: u256 = 100;
+
+    set_total_supply(amt);
+
+    const current_supply = get_total_supply() catch return 0;
+
+    const new_supply = current_supply + amt;
+
+    set_total_supply(new_supply);
+
+    const final_supply = get_total_supply() catch return 0;
+
+    if (final_supply == new_supply) {
+        return 1; // Success
     }
-    
-    return get_counter();
+
+    return 0; // Failure
 }

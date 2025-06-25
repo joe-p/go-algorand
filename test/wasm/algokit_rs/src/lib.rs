@@ -70,6 +70,21 @@ unsafe impl GlobalAlloc for HostAllocator {
             }
         }
     }
+
+    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        if layout.size() != 0 {
+            // Deallocate the old pointer
+            unsafe {
+                host_dealloc(ptr);
+            }
+        }
+
+        if new_size == 0 {
+            return ptr::null_mut();
+        }
+
+        unsafe { host_alloc(new_size as u32) }
+    }
 }
 
 #[global_allocator]

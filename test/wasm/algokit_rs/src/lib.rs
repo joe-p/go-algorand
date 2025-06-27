@@ -14,8 +14,6 @@ fn panic(_info: &PanicInfo) -> ! {
     core::arch::wasm32::unreachable()
 }
 
-const DEFAULT_BUFFER_LEN: i32 = 4000;
-
 #[link(wasm_import_module = "algorand")]
 unsafe extern "C" {
     fn host_get_global_uint(app: u64, key: *const u8, len: i32) -> u64;
@@ -104,21 +102,14 @@ pub fn set_global_uint(app: u64, key: &[u8], value: u64) {
     }
 }
 
-pub fn get_global_bytes(app: u64, key: &[u8], buffer_len: i32) -> Vec<u8> {
+pub fn get_global_bytes(app: u64, key: &[u8]) -> Vec<u8> {
     unsafe {
-        let mut buffer = Vec::<u8>::with_capacity(buffer_len as usize);
+        let mut buffer = Vec::<u8>::with_capacity(128 as usize);
         let buffer_ptr = buffer.as_mut_ptr();
 
-        let len =
-            host_get_global_bytes(app, key.as_ptr(), key.len() as i32, buffer_ptr, buffer_len);
+        host_get_global_bytes(app, key.as_ptr(), key.len() as i32, buffer_ptr, 128 as i32);
 
-        if len >= 0 {
-            buffer.set_len(len as usize);
-            buffer.shrink_to_fit();
-            buffer
-        } else {
-            Vec::new() // Return an empty vector if the length is negative
-        }
+        buffer
     }
 }
 
@@ -178,7 +169,7 @@ impl GlobalStateKey<u64> {
 
 impl GlobalStateKey<&[u8]> {
     pub fn get(&self) -> Vec<u8> {
-        get_global_bytes(self.app_id(), self.key, DEFAULT_BUFFER_LEN)
+        get_global_bytes(self.app_id(), self.key)
     }
 
     pub fn set(&self, value: &[u8]) {
@@ -193,7 +184,7 @@ pub trait AvmBytes {
 
 impl<T: AvmBytes> GlobalStateKey<T> {
     pub fn get(&self) -> T {
-        let bytes = get_global_bytes(self.app_id(), self.key, DEFAULT_BUFFER_LEN);
+        let bytes = get_global_bytes(self.app_id(), self.key);
         T::from_bytes(bytes.as_slice())
     }
 

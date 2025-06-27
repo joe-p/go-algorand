@@ -2,5 +2,6 @@
   "linkedProjects": [
     "test/wasm/rust/Cargo.toml",
     "test/wasm/algokit_rs/Cargo.toml"
+    "test/wasm/arc200/Cargo.toml",
   ]
 }

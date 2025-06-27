@@ -3,11 +3,12 @@
 extern crate alloc;
 
 use core::alloc::{GlobalAlloc, Layout};
-use core::panic::PanicInfo;
 use core::ptr;
 
 use alloc::vec;
 use alloc::vec::Vec;
+
+use core::panic::PanicInfo;
 
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
@@ -173,52 +174,64 @@ where
     }
 }
 
-#[derive(PartialEq, Eq)]
-pub struct BigInt {
-    pub bytes: Vec<u8>,
+macro_rules! uint_type {
+    ($name:ident, $bits:expr) => {
+        #[derive(PartialEq, Eq, Debug, Clone, Copy)]
+        pub struct $name {
+            pub bytes: [u8; ($bits + 7) / 8],
+        }
+
+        impl $name {
+            pub const BITS: usize = $bits;
+            pub const BYTES: usize = ($bits + 7) / 8;
+
+            pub fn new() -> Self {
+                Self {
+                    bytes: [0; ($bits + 7) / 8],
+                }
+            }
+        }
+
+        impl core::ops::Add for $name {
+            type Output = $name;
+
+            fn add(self, other: $name) -> $name {
+                let mut result = vec![0; $name::BYTES];
+                let len = unsafe {
+                    host_bigint_add(
+                        self.bytes.as_ptr(),
+                        $name::BYTES as u32,
+                        other.bytes.as_ptr(),
+                        $name::BYTES as u32,
+                        result.as_mut_ptr(),
+                    )
+                };
+
+                if len as usize > $name::BYTES {
+                    panic!("Result length exceeds buffer size");
+                }
+
+                result.truncate(len as usize);
+                let mut val = $name::new();
+                val.bytes.copy_from_slice(&result[..$name::BYTES]);
+                val
+            }
+        }
+
+        impl From<&[u8]> for $name {
+            fn from(bytes: &[u8]) -> Self {
+                let mut val = $name::new();
+                val.bytes.copy_from_slice(bytes);
+                val
+            }
+        }
+
+        impl AsRef<[u8]> for $name {
+            fn as_ref(&self) -> &[u8] {
+                &self.bytes
+            }
+        }
+    };
 }
 
-impl BigInt {
-    pub fn new(bytes: Vec<u8>) -> Self {
-        BigInt { bytes }
-    }
-}
-
-impl core::ops::Add for BigInt {
-    type Output = BigInt;
-
-    fn add(self, other: BigInt) -> BigInt {
-        let mut result = vec![0; 4096];
-        let len = unsafe {
-            host_bigint_add(
-                self.bytes.as_ptr(),
-                self.bytes.len() as u32,
-                other.bytes.as_ptr(),
-                other.bytes.len() as u32,
-                result.as_mut_ptr(),
-            )
-        };
-        result.truncate(len as usize);
-        BigInt::new(result)
-    }
-}
-
-impl From<u64> for BigInt {
-    fn from(value: u64) -> Self {
-        let mut bytes = vec![0; 8];
-        bytes.copy_from_slice(&value.to_le_bytes());
-        BigInt::new(bytes)
-    }
-}
-
-impl From<&[u8]> for BigInt {
-    fn from(bytes: &[u8]) -> Self {
-        BigInt::new(bytes.to_vec())
-    }
-}
-
-impl AsRef<[u8]> for BigInt {
-    fn as_ref(&self) -> &[u8] {
-        &self.bytes
-    }
-}
+uint_type!(Uint256, 256);

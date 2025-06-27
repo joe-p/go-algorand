@@ -1,21 +1,21 @@
 #![no_std]
 
-use algokit::BigInt;
 use algokit::GlobalStateKey;
+use algokit::Uint256;
 
-const TOTAL_SUPPLY: GlobalStateKey<BigInt> = GlobalStateKey::new(b"ts");
+const TOTAL_SUPPLY: GlobalStateKey<Uint256> = GlobalStateKey::new(b"ts");
 
-fn get_total_supply() -> BigInt {
+fn get_total_supply() -> Uint256 {
     TOTAL_SUPPLY.get()
 }
 
-fn set_total_supply(value: &BigInt) {
+fn set_total_supply(value: &Uint256) {
     TOTAL_SUPPLY.set(value);
 }
 
 #[unsafe(no_mangle)]
 pub fn program() -> u64 {
-    let amt = BigInt::from(100 as u64);
+    let amt = Uint256::from(100u64.to_be_bytes().as_slice());
     set_total_supply(&amt);
     let current_supply = get_total_supply();
 
@@ -24,7 +24,7 @@ pub fn program() -> u64 {
 
     // Return the new total supply as an example
 
-    if get_total_supply() == BigInt::from(200 as u64) {
+    if get_total_supply() == Uint256::from(100u64.to_be_bytes().as_slice()) {
         1 // Indicating success
     } else {
         0 // Indicating failure

@@ -158,38 +158,18 @@ impl<ValueType> GlobalStateKey<ValueType> {
     }
 }
 
-impl GlobalStateKey<u64> {
-    pub fn get(&self) -> u64 {
-        get_global_uint(self.app_id(), self.key)
-    }
-    pub fn set(&self, value: u64) {
-        set_global_uint(self.app_id(), self.key, value);
-    }
-}
-
-impl GlobalStateKey<&[u8]> {
-    pub fn get(&self) -> Vec<u8> {
-        get_global_bytes(self.app_id(), self.key)
-    }
-
-    pub fn set(&self, value: &[u8]) {
-        set_global_bytes(self.app_id(), self.key, value);
-    }
-}
-
-pub trait AvmBytes {
-    fn as_bytes(&self) -> &[u8];
-    fn from_bytes(bytes: &[u8]) -> Self;
-}
-
-impl<T: AvmBytes> GlobalStateKey<T> {
+impl<T> GlobalStateKey<T>
+where
+    T: for<'a> From<&'a [u8]>,
+    T: AsRef<[u8]>,
+{
     pub fn get(&self) -> T {
         let bytes = get_global_bytes(self.app_id(), self.key);
-        T::from_bytes(bytes.as_slice())
+        T::from(bytes.as_slice())
     }
 
     pub fn set(&self, value: &T) {
-        set_global_bytes(self.app_id(), self.key, value.as_bytes());
+        set_global_bytes(self.app_id(), self.key, value.as_ref());
     }
 }
 
@@ -202,8 +182,12 @@ impl BigInt {
     pub fn new(bytes: Vec<u8>) -> Self {
         BigInt { bytes }
     }
+}
 
-    pub fn add(&self, other: &BigInt) -> BigInt {
+impl core::ops::Add for BigInt {
+    type Output = BigInt;
+
+    fn add(self, other: BigInt) -> BigInt {
         let mut result = vec![0; 4096];
         let len = unsafe {
             host_bigint_add(
@@ -219,14 +203,6 @@ impl BigInt {
     }
 }
 
-impl core::ops::Add for BigInt {
-    type Output = BigInt;
-
-    fn add(self, other: BigInt) -> BigInt {
-        (&self).add(&other)
-    }
-}
-
 impl From<u64> for BigInt {
     fn from(value: u64) -> Self {
         let mut bytes = vec![0; 8];
@@ -235,12 +211,14 @@ impl From<u64> for BigInt {
     }
 }
 
-impl AvmBytes for BigInt {
-    fn as_bytes(&self) -> &[u8] {
-        &self.bytes
-    }
-
-    fn from_bytes(bytes: &[u8]) -> Self {
+impl From<&[u8]> for BigInt {
+    fn from(bytes: &[u8]) -> Self {
         BigInt::new(bytes.to_vec())
+    }
+}
+
+impl AsRef<[u8]> for BigInt {
+    fn as_ref(&self) -> &[u8] {
+        &self.bytes
     }
 }

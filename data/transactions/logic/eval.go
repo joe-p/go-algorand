@@ -1772,21 +1772,27 @@ func opSliceAlloc(cx *EvalContext) error {
 	return nil
 }
 
-func encodeSlice(slice []stackValue, encoding []byte, encodingOffset int) ([]byte, error) {
+func encodeSlice(cx *EvalContext, slice []stackValue, encoding []byte, encodingOffset *int) ([]byte, error) {
 	head := make([]byte, 0)
 	tail := make([]byte, 0)
 
 	for i := range slice {
 		elem := slice[i]
-		enc := encoding[i+encodingOffset]
+		enc := encoding[*encodingOffset]
 
 		avmType := slice[i].avmType()
 
-		if enc == 'b' && avmType == avmBytes {
+		tailOffset := func() {
 			ibytes := make([]byte, 2)
 			binary.BigEndian.PutUint16(ibytes, uint16(len(head)+len(tail)+2))
 			head = append(head, ibytes...)
+		}
+
+		if enc == 'b' && avmType == avmBytes {
+			tailOffset()
 			tail = append(tail, elem.Bytes...)
+
+			*encodingOffset += 1
 			continue
 		}
 
@@ -1794,14 +1800,36 @@ func encodeSlice(slice []stackValue, encoding []byte, encodingOffset int) ([]byt
 			ibytes := make([]byte, 8)
 			binary.BigEndian.PutUint64(ibytes, elem.Uint)
 			head = append(head, ibytes...)
+
+			*encodingOffset += 1
 			continue
 		}
 
 		if enc == '(' && avmType == avmUint64 {
-			return nil, fmt.Errorf("nested slice encoding not yet supported. Got one at index %d", i)
+			tailOffset()
+
+			handle := elem.Uint
+
+			if err := checkSlicehandle(cx, int(handle)); err != nil {
+				return nil, err
+			}
+
+			slice := cx.slices[handle]
+
+			*encodingOffset += 1
+			encoded, err := encodeSlice(cx, slice, encoding, encodingOffset)
+
+			if err != nil {
+				return nil, fmt.Errorf("error encoding slice %d: %w", handle, err)
+			}
+
+			tail = append(tail, encoded...)
+
+			*encodingOffset += 1
+			continue
 		}
 
-		return nil, fmt.Errorf("slice element %d has type %s, but expected %v", i, avmType, enc)
+		return nil, fmt.Errorf("slice element %d has type %s, but expected %c", i, avmType, enc)
 	}
 
 	return append(head, tail...), nil
@@ -1821,7 +1849,8 @@ func opSliceEncode(cx *EvalContext) error {
 
 	slice := cx.slices[handle]
 
-	bytes, err := encodeSlice(slice, encoding, 0)
+	offset := 0
+	bytes, err := encodeSlice(cx, slice, encoding, &offset)
 
 	if err != nil {
 		return fmt.Errorf("%w in opSliceEncode", err)

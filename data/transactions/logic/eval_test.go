@@ -4289,13 +4289,30 @@ func BenchmarkEncodeSlice(b *testing.B) {
 			encoding: []byte("xxib"),
 			offset:   2,
 		},
+		{
+			name: "nested_slice",
+			slice: []stackValue{
+				{Uint: 1},
+				{Uint: 13},
+				{Uint: 2},
+				{Uint: 37},
+			},
+			encoding: []byte("(b)i((b))i"),
+			offset:   0,
+		},
 	}
+
+	cx := &EvalContext{}
+	cx.slices = [numberOfSlices][]stackValue{}
+	cx.slices[1] = []stackValue{{Bytes: []byte("test")}}
+	cx.slices[2] = []stackValue{{Uint: 1}}
 
 	for _, bench := range benches {
 		b.Run(bench.name, func(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
-				_, err := encodeSlice(bench.slice, bench.encoding, bench.offset)
+				offset := bench.offset
+				_, err := encodeSlice(cx, bench.slice, bench.encoding, &offset)
 				if err != nil {
 					b.Fatal(err)
 				}

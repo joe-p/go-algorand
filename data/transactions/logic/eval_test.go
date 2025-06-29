@@ -4207,6 +4207,103 @@ func makeNestedKeys(depth int) string {
 	return fmt.Sprintf(`{\"key0\":%s}`, makeNestedKeys(depth-1))
 }
 
+func BenchmarkEncodeSlice(b *testing.B) {
+	benches := []struct {
+		name     string
+		slice    []stackValue
+		encoding []byte
+		offset   int
+	}{
+		{
+			name: "small_bytes",
+			slice: []stackValue{
+				{Bytes: []byte("hello")},
+				{Bytes: []byte("world")},
+			},
+			encoding: []byte("bb"),
+			offset:   0,
+		},
+		{
+			name: "small_ints",
+			slice: []stackValue{
+				{Uint: 42},
+				{Uint: 1337},
+			},
+			encoding: []byte("ii"),
+			offset:   0,
+		},
+		{
+			name: "mixed_small",
+			slice: []stackValue{
+				{Uint: 123},
+				{Bytes: []byte("test")},
+				{Uint: 456},
+			},
+			encoding: []byte("ibi"),
+			offset:   0,
+		},
+		{
+			name: "large_bytes",
+			slice: []stackValue{
+				{Bytes: make([]byte, 1024)},
+				{Bytes: make([]byte, 2048)},
+				{Bytes: make([]byte, 512)},
+			},
+			encoding: []byte("bbb"),
+			offset:   0,
+		},
+		{
+			name: "many_ints",
+			slice: func() []stackValue {
+				slice := make([]stackValue, 100)
+				for i := range slice {
+					slice[i] = stackValue{Uint: uint64(i)}
+				}
+				return slice
+			}(),
+			encoding: func() []byte {
+				return []byte(strings.Repeat("i", 100))
+			}(),
+			offset: 0,
+		},
+		{
+			name: "many_bytes",
+			slice: func() []stackValue {
+				slice := make([]stackValue, 50)
+				for i := range slice {
+					slice[i] = stackValue{Bytes: []byte(fmt.Sprintf("item_%d", i))}
+				}
+				return slice
+			}(),
+			encoding: func() []byte {
+				return []byte(strings.Repeat("b", 50))
+			}(),
+			offset: 0,
+		},
+		{
+			name: "with_offset",
+			slice: []stackValue{
+				{Uint: 100},
+				{Bytes: []byte("offset_test")},
+			},
+			encoding: []byte("xxib"),
+			offset:   2,
+		},
+	}
+
+	for _, bench := range benches {
+		b.Run(bench.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				_, err := encodeSlice(bench.slice, bench.encoding, bench.offset)
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
 func BenchmarkJsonRef(b *testing.B) {
 	// base case
 	oneKey := `{\"key0\":\"value0\"}`

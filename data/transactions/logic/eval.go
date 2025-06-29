@@ -1772,6 +1772,68 @@ func opSliceAlloc(cx *EvalContext) error {
 	return nil
 }
 
+func encodeSlice(slice []stackValue, encoding []byte, encodingOffset int) ([]byte, error) {
+	head := make([]byte, 0)
+	tail := make([]byte, 0)
+
+	for i := range slice {
+		elem := slice[i]
+		enc := encoding[i+encodingOffset]
+
+		avmType := slice[i].avmType()
+
+		if enc == 'b' && avmType == avmBytes {
+			ibytes := make([]byte, 2)
+			binary.BigEndian.PutUint16(ibytes, uint16(len(head)+len(tail)+2))
+			head = append(head, ibytes...)
+			tail = append(tail, elem.Bytes...)
+			continue
+		}
+
+		if enc == 'i' && avmType == avmUint64 {
+			ibytes := make([]byte, 8)
+			binary.BigEndian.PutUint64(ibytes, elem.Uint)
+			head = append(head, ibytes...)
+			continue
+		}
+
+		if enc == '(' && avmType == avmUint64 {
+			return nil, fmt.Errorf("nested slice encoding not yet supported. Got one at index %d", i)
+		}
+
+		return nil, fmt.Errorf("slice element %d has type %s, but expected %v", i, avmType, enc)
+	}
+
+	return append(head, tail...), nil
+}
+
+// opSliceEncode encodes the slice at the top of the stack to bytes, It is encoded as an ARC4 tuple.
+func opSliceEncode(cx *EvalContext) error {
+	last := len(cx.Stack) - 1
+	prev := last - 1
+
+	handle := cx.Stack[last].Uint
+	encoding := cx.Stack[prev].Bytes
+
+	if err := checkSlicehandle(cx, int(handle)); err != nil {
+		return fmt.Errorf("%w in opSliceEncode", err)
+	}
+
+	slice := cx.slices[handle]
+
+	bytes, err := encodeSlice(slice, encoding, 0)
+
+	if err != nil {
+		return fmt.Errorf("%w in opSliceEncode", err)
+	}
+
+	cx.Stack[prev] = stackValue{Bytes: bytes}
+	cx.Stack = cx.Stack[:last]
+
+	return nil
+
+}
+
 func opSliceFree(cx *EvalContext) error {
 	last := len(cx.Stack) - 1 // handle
 	handle := cx.Stack[last].Uint

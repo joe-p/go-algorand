@@ -4321,6 +4321,265 @@ func BenchmarkEncodeSlice(b *testing.B) {
 	}
 }
 
+func TestDecodeSlice(t *testing.T) {
+	partitiontest.PartitionTest(t)
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		slice    []stackValue
+		encoding string
+	}{
+		{
+			name:     "empty_slice",
+			slice:    []stackValue{},
+			encoding: "",
+		},
+		{
+			name:     "single_uint",
+			slice:    []stackValue{{Uint: 42}},
+			encoding: "i",
+		},
+		{
+			name:     "single_bytes",
+			slice:    []stackValue{{Bytes: []byte("hello")}},
+			encoding: "b",
+		},
+		{
+			name:     "multiple_uints",
+			slice:    []stackValue{{Uint: 42}, {Uint: 1337}, {Uint: 999}},
+			encoding: "iii",
+		},
+		{
+			name:     "multiple_bytes",
+			slice:    []stackValue{{Bytes: []byte("hello")}, {Bytes: []byte("world")}},
+			encoding: "bb",
+		},
+		{
+			name:     "mixed_types",
+			slice:    []stackValue{{Uint: 123}, {Bytes: []byte("test")}, {Uint: 456}},
+			encoding: "ibi",
+		},
+		{
+			name:     "large_uint",
+			slice:    []stackValue{{Uint: 18446744073709551615}}, // max uint64
+			encoding: "i",
+		},
+		{
+			name:     "empty_bytes",
+			slice:    []stackValue{{Bytes: []byte{}}},
+			encoding: "b",
+		},
+		{
+			name: "complex_mixed",
+			slice: []stackValue{
+				{Bytes: []byte("start")},
+				{Uint: 100},
+				{Bytes: []byte("middle")},
+				{Uint: 200},
+				{Bytes: []byte("end")},
+			},
+			encoding: "bibib",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create a mock EvalContext for encoding
+			cx := &EvalContext{}
+			cx.slices = [numberOfSlices][]stackValue{}
+
+			// Encode the slice
+			offset := 0
+			encoded, err := encodeSlice(cx, tt.slice, []byte(tt.encoding), &offset)
+			require.NoError(t, err)
+
+			// Debug: print the encoded data
+			if tt.name == "multiple_bytes" {
+				t.Logf("Encoded data for %s: %x", tt.name, encoded)
+				t.Logf("Encoding: %s", tt.encoding)
+				t.Logf("First offset: %d", binary.BigEndian.Uint16(encoded[0:2]))
+				t.Logf("Second offset: %d", binary.BigEndian.Uint16(encoded[2:4]))
+				t.Logf("Data from offset 4: %x (%s)", encoded[4:9], string(encoded[4:9]))
+				t.Logf("Data from offset 9: %x (%s)", encoded[9:], string(encoded[9:]))
+			}
+
+			// Decode the slice
+			decodeOffset := 0
+			decoded, err := decodeSlice(encoded, []byte(tt.encoding), &decodeOffset)
+			require.NoError(t, err)
+
+			// Compare the results
+			require.Equal(t, len(tt.slice), len(decoded), "slice length mismatch")
+			for i, expected := range tt.slice {
+				actual := decoded[i]
+				if expected.Bytes != nil {
+					require.NotNil(t, actual.Bytes, "expected bytes but got uint at index %d", i)
+					require.Equal(t, expected.Bytes, actual.Bytes, "bytes mismatch at index %d", i)
+				} else {
+					require.Nil(t, actual.Bytes, "expected uint but got bytes at index %d", i)
+					require.Equal(t, expected.Uint, actual.Uint, "uint mismatch at index %d", i)
+				}
+			}
+		})
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create a mock EvalContext for encoding
+			cx := &EvalContext{}
+			cx.slices = [numberOfSlices][]stackValue{}
+
+			// Encode the slice
+			offset := 0
+			encoded, err := encodeSlice(cx, tt.slice, []byte(tt.encoding), &offset)
+			require.NoError(t, err)
+
+			// Decode the slice
+			decodeOffset := 0
+			decoded, err := decodeSlice(encoded, []byte(tt.encoding), &decodeOffset)
+			require.NoError(t, err)
+
+			// Compare the results
+			require.Equal(t, len(tt.slice), len(decoded), "slice length mismatch")
+			for i, expected := range tt.slice {
+				actual := decoded[i]
+				if expected.Bytes != nil {
+					require.NotNil(t, actual.Bytes, "expected bytes but got uint at index %d", i)
+					require.Equal(t, expected.Bytes, actual.Bytes, "bytes mismatch at index %d", i)
+				} else {
+					require.Nil(t, actual.Bytes, "expected uint but got bytes at index %d", i)
+					require.Equal(t, expected.Uint, actual.Uint, "uint mismatch at index %d", i)
+				}
+			}
+		})
+	}
+}
+
+func TestDecodeSliceErrors(t *testing.T) {
+	partitiontest.PartitionTest(t)
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		encoded  []byte
+		encoding string
+		wantErr  string
+	}{
+		{
+			name:     "insufficient_data_uint",
+			encoded:  []byte{0x00, 0x00, 0x00}, // only 3 bytes, need 8 for uint64
+			encoding: "i",
+			wantErr:  "insufficient data for uint64",
+		},
+		{
+			name:     "insufficient_data_bytes_offset",
+			encoded:  []byte{0x00}, // only 1 byte, need 2 for offset
+			encoding: "b",
+			wantErr:  "insufficient data for byte array offset",
+		},
+		{
+			name:     "invalid_bytes_offset",
+			encoded:  []byte{0xFF, 0xFF}, // offset 65535, but data is only 2 bytes
+			encoding: "b",
+			wantErr:  "invalid byte array bounds",
+		},
+		{
+			name:     "unknown_encoding",
+			encoded:  []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x2A},
+			encoding: "x", // unknown encoding character
+			wantErr:  "unknown encoding character: x",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			offset := 0
+			_, err := decodeSlice(tt.encoded, []byte(tt.encoding), &offset)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
+func TestSliceEncodeDecodeOpcodes(t *testing.T) {
+	partitiontest.PartitionTest(t)
+	t.Parallel()
+
+	// Test basic encode/decode round trip
+	source := `
+		slice_alloc
+		store 0
+		load 0
+		int 42
+		slice_append
+		load 0
+		byte "hello"
+		slice_append
+		load 0
+		byte "ib"
+		slice_encode
+		byte "ib"
+		slice_decode
+		store 1
+		load 1
+		int 0
+		slice_get
+		int 42
+		==
+	`
+	ep := defaultAppParams()
+	testApp(t, source, ep)
+}
+
+func BenchmarkDecodeSlice(b *testing.B) {
+	// Create test data similar to BenchmarkEncodeSlice
+	cx := &EvalContext{}
+	cx.slices = [numberOfSlices][]stackValue{}
+
+	testCases := []struct {
+		name     string
+		slice    []stackValue
+		encoding string
+	}{
+		{
+			name:     "small_bytes",
+			slice:    []stackValue{{Bytes: []byte("hello")}, {Bytes: []byte("world")}},
+			encoding: "bb",
+		},
+		{
+			name:     "small_ints",
+			slice:    []stackValue{{Uint: 42}, {Uint: 1337}},
+			encoding: "ii",
+		},
+		{
+			name:     "mixed_small",
+			slice:    []stackValue{{Uint: 123}, {Bytes: []byte("test")}, {Uint: 456}},
+			encoding: "ibi",
+		},
+	}
+
+	for _, tc := range testCases {
+		// Pre-encode the data
+		offset := 0
+		encoded, err := encodeSlice(cx, tc.slice, []byte(tc.encoding), &offset)
+		if err != nil {
+			b.Fatal(err)
+		}
+
+		b.Run(tc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				offset := 0
+				_, err := decodeSlice(encoded, []byte(tc.encoding), &offset)
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
 func BenchmarkJsonRef(b *testing.B) {
 	// base case
 	oneKey := `{\"key0\":\"value0\"}`

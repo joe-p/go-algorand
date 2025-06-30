@@ -1776,6 +1776,38 @@ func encodeSlice(cx *EvalContext, slice []stackValue, encoding []byte, encodingO
 	head := make([]byte, 0)
 	tail := make([]byte, 0)
 
+	// First pass: calculate the total head size
+	totalHeadSize := 0
+	tempOffset := *encodingOffset
+	for range slice {
+		if tempOffset >= len(encoding) {
+			break
+		}
+		enc := encoding[tempOffset]
+		switch enc {
+		case 'i':
+			totalHeadSize += 8
+		case 'b', '(':
+			totalHeadSize += 2
+		case ')':
+			break
+		}
+		tempOffset++
+		if enc == '(' {
+			// Skip to matching ')'
+			level := 1
+			for tempOffset < len(encoding) && level > 0 {
+				if encoding[tempOffset] == '(' {
+					level++
+				} else if encoding[tempOffset] == ')' {
+					level--
+				}
+				tempOffset++
+			}
+		}
+	}
+
+	// Second pass: encode with correct offsets
 	for i := range slice {
 		elem := slice[i]
 		enc := encoding[*encodingOffset]
@@ -1784,7 +1816,7 @@ func encodeSlice(cx *EvalContext, slice []stackValue, encoding []byte, encodingO
 
 		tailOffset := func() {
 			ibytes := make([]byte, 2)
-			binary.BigEndian.PutUint16(ibytes, uint16(len(head)+len(tail)+2))
+			binary.BigEndian.PutUint16(ibytes, uint16(totalHeadSize+len(tail)))
 			head = append(head, ibytes...)
 		}
 
@@ -1835,6 +1867,155 @@ func encodeSlice(cx *EvalContext, slice []stackValue, encoding []byte, encodingO
 	return append(head, tail...), nil
 }
 
+func decodeSlice(encoded []byte, encoding []byte, encodingOffset *int) ([]stackValue, error) {
+	if len(encoded) == 0 {
+		return []stackValue{}, nil
+	}
+
+	var result []stackValue
+	headOffset := 0
+
+	// Collect all offsets to determine byte array boundaries
+	offsets := make([]int, 0)
+	tempOffset := 0
+	tempHeadOffset := 0
+
+	for tempOffset < len(encoding) {
+		enc := encoding[tempOffset]
+		switch enc {
+		case 'i':
+			tempHeadOffset += 8
+		case 'b', '(':
+			if tempHeadOffset+2 > len(encoded) {
+				break
+			}
+			offset := binary.BigEndian.Uint16(encoded[tempHeadOffset : tempHeadOffset+2])
+			offsets = append(offsets, int(offset))
+			tempHeadOffset += 2
+		case ')':
+			break
+		}
+		tempOffset++
+	}
+
+	offsetIndex := 0
+
+	for *encodingOffset < len(encoding) {
+		enc := encoding[*encodingOffset]
+
+		switch enc {
+		case 'i':
+			// uint64 value (8 bytes in head)
+			if headOffset+8 > len(encoded) {
+				return nil, fmt.Errorf("insufficient data for uint64 at offset %d", headOffset)
+			}
+			value := binary.BigEndian.Uint64(encoded[headOffset : headOffset+8])
+			result = append(result, stackValue{Uint: value})
+			headOffset += 8
+			*encodingOffset++
+
+		case 'b':
+			// byte array (2-byte offset in head, data in tail)
+			if headOffset+2 > len(encoded) {
+				return nil, fmt.Errorf("insufficient data for byte array offset at offset %d", headOffset)
+			}
+			headOffset += 2
+
+			// Get the absolute offset for this byte array
+			if offsetIndex >= len(offsets) {
+				return nil, fmt.Errorf("missing offset for byte array at index %d", offsetIndex)
+			}
+			dataOffset := offsets[offsetIndex]
+
+			// Find the end of this byte array
+			var dataEnd int
+			if offsetIndex+1 < len(offsets) {
+				dataEnd = offsets[offsetIndex+1]
+			} else {
+				dataEnd = len(encoded)
+			}
+			offsetIndex++
+
+			if dataOffset > len(encoded) || dataEnd > len(encoded) || dataOffset > dataEnd {
+				return nil, fmt.Errorf("invalid byte array bounds: offset=%d, end=%d, len=%d", dataOffset, dataEnd, len(encoded))
+			}
+
+			data := make([]byte, dataEnd-dataOffset)
+			copy(data, encoded[dataOffset:dataEnd])
+			result = append(result, stackValue{Bytes: data})
+			*encodingOffset++
+
+		case '(':
+			// nested slice (2-byte offset in head, nested data in tail)
+			if headOffset+2 > len(encoded) {
+				return nil, fmt.Errorf("insufficient data for nested slice offset at offset %d", headOffset)
+			}
+			headOffset += 2
+			*encodingOffset++ // skip '('
+
+			// Find the matching ')' to determine the end of nested data
+			nestedLevel := 1
+			nestedEncodingEnd := *encodingOffset
+			for nestedEncodingEnd < len(encoding) && nestedLevel > 0 {
+				if encoding[nestedEncodingEnd] == '(' {
+					nestedLevel++
+				} else if encoding[nestedEncodingEnd] == ')' {
+					nestedLevel--
+				}
+				nestedEncodingEnd++
+			}
+
+			if nestedLevel > 0 {
+				return nil, fmt.Errorf("unmatched '(' in encoding")
+			}
+
+			// Extract the nested encoding (without the closing ')')
+			nestedEncoding := encoding[*encodingOffset : nestedEncodingEnd-1]
+
+			// Get the absolute offset for this nested slice
+			if offsetIndex >= len(offsets) {
+				return nil, fmt.Errorf("missing offset for nested slice at index %d", offsetIndex)
+			}
+			dataOffset := offsets[offsetIndex]
+
+			// Find the end of nested data
+			var nestedDataEnd int
+			if offsetIndex+1 < len(offsets) {
+				nestedDataEnd = offsets[offsetIndex+1]
+			} else {
+				nestedDataEnd = len(encoded)
+			}
+			offsetIndex++
+
+			if dataOffset > len(encoded) || nestedDataEnd > len(encoded) || dataOffset > nestedDataEnd {
+				return nil, fmt.Errorf("invalid nested slice bounds: offset=%d, end=%d, len=%d", dataOffset, nestedDataEnd, len(encoded))
+			}
+
+			nestedData := encoded[dataOffset:nestedDataEnd]
+			nestedOffset := 0
+			nestedSlice, err := decodeSlice(nestedData, nestedEncoding, &nestedOffset)
+			if err != nil {
+				return nil, fmt.Errorf("error decoding nested slice: %w", err)
+			}
+
+			// For now, we'll return the nested slice as individual elements
+			// In a real implementation, you might want to create a new slice handle
+			result = append(result, nestedSlice...)
+
+			*encodingOffset = nestedEncodingEnd // skip past ')'
+
+		case ')':
+			// End of nested slice
+			return result, nil
+
+		default:
+			return nil, fmt.Errorf("unknown encoding character: %c", enc)
+		}
+	}
+
+	return result, nil
+}
+
 // opSliceEncode encodes the slice at the top of the stack to bytes, It is encoded as an ARC4 tuple.
 func opSliceEncode(cx *EvalContext) error {
 	last := len(cx.Stack) - 1
@@ -1861,6 +2042,35 @@ func opSliceEncode(cx *EvalContext) error {
 
 	return nil
 
+}
+
+// opSliceDecode decodes bytes from the stack into a slice handle, using the specified encoding.
+func opSliceDecode(cx *EvalContext) error {
+	last := len(cx.Stack) - 1
+	prev := last - 1
+
+	data := cx.Stack[last].Bytes
+	encoding := cx.Stack[prev].Bytes
+
+	encodingOffset := 0
+	slice, err := decodeSlice(data, encoding, &encodingOffset)
+	if err != nil {
+		return fmt.Errorf("%w in opSliceDecode", err)
+	}
+
+	if len(cx.freeSlices) == 0 {
+		return fmt.Errorf("no free slices available in opSliceDecode")
+	}
+
+	sliceHandle := cx.freeSlices[len(cx.freeSlices)-1]
+	cx.freeSlices = cx.freeSlices[:len(cx.freeSlices)-1]
+
+	cx.slices[sliceHandle] = slice
+
+	cx.Stack[prev] = stackValue{Uint: uint64(sliceHandle)}
+	cx.Stack = cx.Stack[:last]
+
+	return nil
 }
 
 func opSliceFree(cx *EvalContext) error {

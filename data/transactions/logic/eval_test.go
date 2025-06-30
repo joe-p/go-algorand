@@ -4207,112 +4207,157 @@ func makeNestedKeys(depth int) string {
 	return fmt.Sprintf(`{\"key0\":%s}`, makeNestedKeys(depth-1))
 }
 
-func BenchmarkEncodeSlice(b *testing.B) {
-	benches := []struct {
-		name     string
-		slice    []stackValue
-		encoding []byte
-		offset   int
-	}{
-		{
-			name: "small_bytes",
-			slice: []stackValue{
-				{Bytes: []byte("hello")},
-				{Bytes: []byte("world")},
-			},
-			encoding: []byte("bb"),
-			offset:   0,
-		},
-		{
-			name: "small_ints",
-			slice: []stackValue{
-				{Uint: 42},
-				{Uint: 1337},
-			},
-			encoding: []byte("ii"),
-			offset:   0,
-		},
-		{
-			name: "mixed_small",
-			slice: []stackValue{
-				{Uint: 123},
-				{Bytes: []byte("test")},
-				{Uint: 456},
-			},
-			encoding: []byte("ibi"),
-			offset:   0,
-		},
-		{
-			name: "large_bytes",
-			slice: []stackValue{
-				{Bytes: make([]byte, 1024)},
-				{Bytes: make([]byte, 2048)},
-				{Bytes: make([]byte, 512)},
-			},
-			encoding: []byte("bbb"),
-			offset:   0,
-		},
-		{
-			name: "many_ints",
-			slice: func() []stackValue {
-				slice := make([]stackValue, 100)
-				for i := range slice {
-					slice[i] = stackValue{Uint: uint64(i)}
-				}
-				return slice
-			}(),
-			encoding: func() []byte {
-				return []byte(strings.Repeat("i", 100))
-			}(),
-			offset: 0,
-		},
-		{
-			name: "many_bytes",
-			slice: func() []stackValue {
-				slice := make([]stackValue, 50)
-				for i := range slice {
-					slice[i] = stackValue{Bytes: []byte(fmt.Sprintf("item_%d", i))}
-				}
-				return slice
-			}(),
-			encoding: func() []byte {
-				return []byte(strings.Repeat("b", 50))
-			}(),
-			offset: 0,
-		},
-		{
-			name: "with_offset",
-			slice: []stackValue{
-				{Uint: 100},
-				{Bytes: []byte("offset_test")},
-			},
-			encoding: []byte("xxib"),
-			offset:   2,
-		},
-		{
-			name: "nested_slice",
-			slice: []stackValue{
-				{Uint: 1},
-				{Uint: 13},
-				{Uint: 2},
-				{Uint: 37},
-			},
-			encoding: []byte("(b)i((b))i"),
-			offset:   0,
-		},
-	}
+type sliceTestCase struct {
+	name     string
+	slice    []stackValue
+	encoding string
+	offset   int
+}
 
+var sharedSliceTestCases = []sliceTestCase{
+	{
+		name:     "empty_slice",
+		slice:    []stackValue{},
+		encoding: "",
+		offset:   0,
+	},
+	{
+		name:     "single_uint",
+		slice:    []stackValue{{Uint: 42}},
+		encoding: "i",
+		offset:   0,
+	},
+	{
+		name:     "single_bytes",
+		slice:    []stackValue{{Bytes: []byte("hello")}},
+		encoding: "b",
+		offset:   0,
+	},
+	{
+		name: "small_bytes",
+		slice: []stackValue{
+			{Bytes: []byte("hello")},
+			{Bytes: []byte("world")},
+		},
+		encoding: "bb",
+		offset:   0,
+	},
+	{
+		name: "small_ints",
+		slice: []stackValue{
+			{Uint: 42},
+			{Uint: 1337},
+		},
+		encoding: "ii",
+		offset:   0,
+	},
+	{
+		name:     "multiple_uints",
+		slice:    []stackValue{{Uint: 42}, {Uint: 1337}, {Uint: 999}},
+		encoding: "iii",
+		offset:   0,
+	},
+	{
+		name:     "multiple_bytes",
+		slice:    []stackValue{{Bytes: []byte("hello")}, {Bytes: []byte("world")}},
+		encoding: "bb",
+		offset:   0,
+	},
+	{
+		name: "mixed_small",
+		slice: []stackValue{
+			{Uint: 123},
+			{Bytes: []byte("test")},
+			{Uint: 456},
+		},
+		encoding: "ibi",
+		offset:   0,
+	},
+	{
+		name:     "large_uint",
+		slice:    []stackValue{{Uint: 18446744073709551615}}, // max uint64
+		encoding: "i",
+		offset:   0,
+	},
+	{
+		name:     "empty_bytes",
+		slice:    []stackValue{{Bytes: []byte{}}},
+		encoding: "b",
+		offset:   0,
+	},
+	{
+		name: "complex_mixed",
+		slice: []stackValue{
+			{Bytes: []byte("start")},
+			{Uint: 100},
+			{Bytes: []byte("middle")},
+			{Uint: 200},
+			{Bytes: []byte("end")},
+		},
+		encoding: "bibib",
+		offset:   0,
+	},
+	{
+		name: "large_bytes",
+		slice: []stackValue{
+			{Bytes: make([]byte, 1024)},
+			{Bytes: make([]byte, 2048)},
+			{Bytes: make([]byte, 512)},
+		},
+		encoding: "bbb",
+		offset:   0,
+	},
+	{
+		name: "many_ints",
+		slice: func() []stackValue {
+			slice := make([]stackValue, 100)
+			for i := range slice {
+				slice[i] = stackValue{Uint: uint64(i)}
+			}
+			return slice
+		}(),
+		encoding: func() string {
+			return strings.Repeat("i", 100)
+		}(),
+		offset: 0,
+	},
+	{
+		name: "many_bytes",
+		slice: func() []stackValue {
+			slice := make([]stackValue, 50)
+			for i := range slice {
+				slice[i] = stackValue{Bytes: []byte(fmt.Sprintf("item_%d", i))}
+			}
+			return slice
+		}(),
+		encoding: func() string {
+			return strings.Repeat("b", 50)
+		}(),
+		offset: 0,
+	},
+	{
+		name: "with_offset",
+		slice: []stackValue{
+			{Uint: 100},
+			{Bytes: []byte("offset_test")},
+		},
+		encoding: "xxib",
+		offset:   2,
+	},
+}
+
+func BenchmarkEncodeSlice(b *testing.B) {
 	cx := &EvalContext{}
 	cx.slices = [numberOfSlices][]stackValue{}
 	cx.slices[1] = []stackValue{{Bytes: []byte("test")}}
 	cx.slices[2] = []stackValue{{Uint: 1}}
 
-	for _, bench := range benches {
+	for _, bench := range sharedSliceTestCases {
 		b.Run(bench.name, func(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
 				offset := bench.offset
-				_, err := encodeSlice(cx, bench.slice, bench.encoding, &offset)
+				_, err := encodeSlice(cx, bench.slice, []byte(bench.encoding), &offset)
 				if err != nil {
 					b.Fatal(err)
 				}
@@ -4325,108 +4370,19 @@ func TestDecodeSlice(t *testing.T) {
 	partitiontest.PartitionTest(t)
 	t.Parallel()
 
-	tests := []struct {
-		name     string
-		slice    []stackValue
-		encoding string
-	}{
-		{
-			name:     "empty_slice",
-			slice:    []stackValue{},
-			encoding: "",
-		},
-		{
-			name:     "single_uint",
-			slice:    []stackValue{{Uint: 42}},
-			encoding: "i",
-		},
-		{
-			name:     "single_bytes",
-			slice:    []stackValue{{Bytes: []byte("hello")}},
-			encoding: "b",
-		},
-		{
-			name:     "multiple_uints",
-			slice:    []stackValue{{Uint: 42}, {Uint: 1337}, {Uint: 999}},
-			encoding: "iii",
-		},
-		{
-			name:     "multiple_bytes",
-			slice:    []stackValue{{Bytes: []byte("hello")}, {Bytes: []byte("world")}},
-			encoding: "bb",
-		},
-		{
-			name:     "mixed_types",
-			slice:    []stackValue{{Uint: 123}, {Bytes: []byte("test")}, {Uint: 456}},
-			encoding: "ibi",
-		},
-		{
-			name:     "large_uint",
-			slice:    []stackValue{{Uint: 18446744073709551615}}, // max uint64
-			encoding: "i",
-		},
-		{
-			name:     "empty_bytes",
-			slice:    []stackValue{{Bytes: []byte{}}},
-			encoding: "b",
-		},
-		{
-			name: "complex_mixed",
-			slice: []stackValue{
-				{Bytes: []byte("start")},
-				{Uint: 100},
-				{Bytes: []byte("middle")},
-				{Uint: 200},
-				{Bytes: []byte("end")},
-			},
-			encoding: "bibib",
-		},
-	}
-
-	for _, tt := range tests {
+	for _, tt := range sharedSliceTestCases {
 		t.Run(tt.name, func(t *testing.T) {
 			// Create a mock EvalContext for encoding
 			cx := &EvalContext{}
 			cx.slices = [numberOfSlices][]stackValue{}
 
 			// Encode the slice
-			offset := 0
+			offset := tt.offset
 			encoded, err := encodeSlice(cx, tt.slice, []byte(tt.encoding), &offset)
 			require.NoError(t, err)
 
 			// Decode the slice
-			decodeOffset := 0
-			decoded, err := decodeSlice(encoded, []byte(tt.encoding), &decodeOffset)
-			require.NoError(t, err)
-
-			// Compare the results
-			require.Equal(t, len(tt.slice), len(decoded), "slice length mismatch")
-			for i, expected := range tt.slice {
-				actual := decoded[i]
-				if expected.Bytes != nil {
-					require.NotNil(t, actual.Bytes, "expected bytes but got uint at index %d", i)
-					require.Equal(t, expected.Bytes, actual.Bytes, "bytes mismatch at index %d", i)
-				} else {
-					require.Nil(t, actual.Bytes, "expected uint but got bytes at index %d", i)
-					require.Equal(t, expected.Uint, actual.Uint, "uint mismatch at index %d", i)
-				}
-			}
-		})
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Create a mock EvalContext for encoding
-			cx := &EvalContext{}
-			cx.slices = [numberOfSlices][]stackValue{}
-
-			// Encode the slice
-			offset := 0
-			encoded, err := encodeSlice(cx, tt.slice, []byte(tt.encoding), &offset)
-			require.NoError(t, err)
-
-			// Decode the slice
-			decodeOffset := 0
+			decodeOffset := tt.offset
 			decoded, err := decodeSlice(encoded, []byte(tt.encoding), &decodeOffset)
 			require.NoError(t, err)
 
@@ -4523,35 +4479,12 @@ func TestSliceEncodeDecodeOpcodes(t *testing.T) {
 }
 
 func BenchmarkDecodeSlice(b *testing.B) {
-	// Create test data similar to BenchmarkEncodeSlice
 	cx := &EvalContext{}
 	cx.slices = [numberOfSlices][]stackValue{}
 
-	testCases := []struct {
-		name     string
-		slice    []stackValue
-		encoding string
-	}{
-		{
-			name:     "small_bytes",
-			slice:    []stackValue{{Bytes: []byte("hello")}, {Bytes: []byte("world")}},
-			encoding: "bb",
-		},
-		{
-			name:     "small_ints",
-			slice:    []stackValue{{Uint: 42}, {Uint: 1337}},
-			encoding: "ii",
-		},
-		{
-			name:     "mixed_small",
-			slice:    []stackValue{{Uint: 123}, {Bytes: []byte("test")}, {Uint: 456}},
-			encoding: "ibi",
-		},
-	}
-
-	for _, tc := range testCases {
+	for _, tc := range sharedSliceTestCases {
 		// Pre-encode the data
-		offset := 0
+		offset := tc.offset
 		encoded, err := encodeSlice(cx, tc.slice, []byte(tc.encoding), &offset)
 		if err != nil {
 			b.Fatal(err)
@@ -4560,7 +4493,7 @@ func BenchmarkDecodeSlice(b *testing.B) {
 		b.Run(tc.name, func(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
-				offset := 0
+				offset := tc.offset
 				_, err := decodeSlice(encoded, []byte(tc.encoding), &offset)
 				if err != nil {
 					b.Fatal(err)

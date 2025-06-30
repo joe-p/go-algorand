@@ -2021,8 +2021,8 @@ func opSliceEncode(cx *EvalContext) error {
 	last := len(cx.Stack) - 1
 	prev := last - 1
 
-	handle := cx.Stack[last].Uint
-	encoding := cx.Stack[prev].Bytes
+	encoding := cx.Stack[last].Bytes
+	handle := cx.Stack[prev].Uint
 
 	if err := checkSlicehandle(cx, int(handle)); err != nil {
 		return fmt.Errorf("%w in opSliceEncode", err)
@@ -2049,8 +2049,8 @@ func opSliceDecode(cx *EvalContext) error {
 	last := len(cx.Stack) - 1
 	prev := last - 1
 
-	data := cx.Stack[last].Bytes
-	encoding := cx.Stack[prev].Bytes
+	encoding := cx.Stack[last].Bytes
+	data := cx.Stack[prev].Bytes
 
 	encodingOffset := 0
 	slice, err := decodeSlice(data, encoding, &encodingOffset)

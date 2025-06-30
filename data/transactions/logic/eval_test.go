@@ -4394,16 +4394,6 @@ func TestDecodeSlice(t *testing.T) {
 			encoded, err := encodeSlice(cx, tt.slice, []byte(tt.encoding), &offset)
 			require.NoError(t, err)
 
-			// Debug: print the encoded data
-			if tt.name == "multiple_bytes" {
-				t.Logf("Encoded data for %s: %x", tt.name, encoded)
-				t.Logf("Encoding: %s", tt.encoding)
-				t.Logf("First offset: %d", binary.BigEndian.Uint16(encoded[0:2]))
-				t.Logf("Second offset: %d", binary.BigEndian.Uint16(encoded[2:4]))
-				t.Logf("Data from offset 4: %x (%s)", encoded[4:9], string(encoded[4:9]))
-				t.Logf("Data from offset 9: %x (%s)", encoded[9:], string(encoded[9:]))
-			}
-
 			// Decode the slice
 			decodeOffset := 0
 			decoded, err := decodeSlice(encoded, []byte(tt.encoding), &decodeOffset)

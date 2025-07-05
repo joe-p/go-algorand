@@ -1867,7 +1867,7 @@ func encodeSlice(cx *EvalContext, slice []stackValue, encoding []byte, encodingO
 	return append(head, tail...), nil
 }
 
-func decodeSlice(encoded []byte, encoding []byte, encodingOffset *int) ([]stackValue, error) {
+func decodeSlice(cx *EvalContext, encoded []byte, encoding []byte, encodingOffset *int) ([]stackValue, error) {
 	if len(encoded) == 0 {
 		return []stackValue{}, nil
 	}
@@ -1993,14 +1993,22 @@ func decodeSlice(encoded []byte, encoding []byte, encodingOffset *int) ([]stackV
 
 			nestedData := encoded[dataOffset:nestedDataEnd]
 			nestedOffset := 0
-			nestedSlice, err := decodeSlice(nestedData, nestedEncoding, &nestedOffset)
+			nestedSlice, err := decodeSlice(cx, nestedData, nestedEncoding, &nestedOffset)
 			if err != nil {
 				return nil, fmt.Errorf("error decoding nested slice: %w", err)
 			}
 
-			// For now, we'll return the nested slice as individual elements
-			// In a real implementation, you might want to create a new slice handle
-			result = append(result, nestedSlice...)
+			// Create a new slice handle for the nested slice
+			if len(cx.freeSlices) == 0 {
+				return nil, fmt.Errorf("no free slices available for nested slice")
+			}
+
+			nestedSliceHandle := cx.freeSlices[len(cx.freeSlices)-1]
+			cx.freeSlices = cx.freeSlices[:len(cx.freeSlices)-1]
+
+			cx.slices[nestedSliceHandle] = nestedSlice
+
+			result = append(result, stackValue{Uint: uint64(nestedSliceHandle)})
 
 			*encodingOffset = nestedEncodingEnd // skip past ')'
 
@@ -2053,7 +2061,7 @@ func opSliceDecode(cx *EvalContext) error {
 	data := cx.Stack[prev].Bytes
 
 	encodingOffset := 0
-	slice, err := decodeSlice(data, encoding, &encodingOffset)
+	slice, err := decodeSlice(cx, data, encoding, &encodingOffset)
 	if err != nil {
 		return fmt.Errorf("%w in opSliceDecode", err)
 	}

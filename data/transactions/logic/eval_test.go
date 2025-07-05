@@ -4383,7 +4383,14 @@ func TestDecodeSlice(t *testing.T) {
 
 			// Decode the slice
 			decodeOffset := tt.offset
-			decoded, err := decodeSlice(encoded, []byte(tt.encoding), &decodeOffset)
+			// Create a fresh context for decoding to test slice handle creation
+			decodeCx := &EvalContext{}
+			decodeCx.slices = [numberOfSlices][]stackValue{}
+			decodeCx.freeSlices = make([]int, numberOfSlices-1)
+			for i := range len(decodeCx.freeSlices) {
+				decodeCx.freeSlices[i] = i + 1
+			}
+			decoded, err := decodeSlice(decodeCx, encoded, []byte(tt.encoding), &decodeOffset)
 			require.NoError(t, err)
 
 			// Compare the results
@@ -4441,7 +4448,14 @@ func TestDecodeSliceErrors(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			offset := 0
-			_, err := decodeSlice(tt.encoded, []byte(tt.encoding), &offset)
+			// Create a mock context for error testing
+			cx := &EvalContext{}
+			cx.slices = [numberOfSlices][]stackValue{}
+			cx.freeSlices = make([]int, numberOfSlices-1)
+			for i := range len(cx.freeSlices) {
+				cx.freeSlices[i] = i + 1
+			}
+			_, err := decodeSlice(cx, tt.encoded, []byte(tt.encoding), &offset)
 			require.Error(t, err)
 			require.Contains(t, err.Error(), tt.wantErr)
 		})
@@ -4493,14 +4507,73 @@ func BenchmarkDecodeSlice(b *testing.B) {
 		b.Run(tc.name, func(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
+				b.StopTimer()
 				offset := tc.offset
-				_, err := decodeSlice(encoded, []byte(tc.encoding), &offset)
+				// Create a fresh context for each iteration
+				benchCx := &EvalContext{}
+				benchCx.slices = [numberOfSlices][]stackValue{}
+				benchCx.freeSlices = make([]int, numberOfSlices-1)
+				for j := range len(benchCx.freeSlices) {
+					benchCx.freeSlices[j] = j + 1
+				}
+				b.StartTimer()
+				_, err := decodeSlice(benchCx, encoded, []byte(tc.encoding), &offset)
 				if err != nil {
 					b.Fatal(err)
 				}
 			}
 		})
 	}
+}
+
+func TestDecodeSliceNestedHandles(t *testing.T) {
+	partitiontest.PartitionTest(t)
+	t.Parallel()
+
+	// Test that the modification works by verifying that nested slices create new handles
+	// For now, let's test with a manually crafted simple case
+
+	// Create a context for decoding
+	cx := &EvalContext{}
+	cx.slices = [numberOfSlices][]stackValue{}
+	cx.freeSlices = make([]int, numberOfSlices-1)
+	for i := range len(cx.freeSlices) {
+		cx.freeSlices[i] = i + 1
+	}
+
+	// Test with a simple nested structure: just one uint64 in the nested slice
+	// Manually create encoded data for encoding "(i)" - a nested slice with one uint64
+
+	// Nested data: just 8 bytes for uint64(42)
+	nestedData := make([]byte, 8)
+	binary.BigEndian.PutUint64(nestedData, 42)
+
+	// Outer data: 2-byte offset to nested data + nested data
+	encoded := make([]byte, 0)
+	offset := make([]byte, 2)
+	binary.BigEndian.PutUint16(offset, uint16(2)) // offset to nested data
+	encoded = append(encoded, offset...)
+	encoded = append(encoded, nestedData...)
+
+	// Decode with nested encoding for a single uint64
+	encoding := []byte("(i)")
+	decodeOffset := 0
+	decoded, err := decodeSlice(cx, encoded, encoding, &decodeOffset)
+	require.NoError(t, err)
+
+	// Verify that we got a slice handle back (this is the key change)
+	require.Len(t, decoded, 1)
+	require.Nil(t, decoded[0].Bytes, "expected uint64 slice handle, got bytes")
+
+	// Verify that the slice handle points to a valid slice
+	handle := decoded[0].Uint
+	require.Greater(t, handle, uint64(0), "slice handle should be non-zero")
+	require.Less(t, handle, uint64(len(cx.slices)), "slice handle should be within bounds")
+
+	// Verify the contents of the nested slice
+	nestedSlice := cx.slices[handle]
+	require.Len(t, nestedSlice, 1)
+	require.Equal(t, uint64(42), nestedSlice[0].Uint)
 }
 
 func BenchmarkJsonRef(b *testing.B) {

@@ -3786,7 +3786,7 @@ func TestWasmProgram(t *testing.T) {
 		"arc200": "/Users/joe/git/algorand/go-algorand/test/wasm/arc200/target/wasm32-unknown-unknown/release/arc200.wasm",
 	}
 
-	file, err := os.Open(wasmFiles["arc200"])
+	file, err := os.Open(wasmFiles["rust"])
 	if err != nil {
 		panic(err)
 	}
@@ -3830,7 +3830,7 @@ func TestWasmProgramWithPrefetcher(t *testing.T) {
 		"arc200": "/Users/joe/git/algorand/go-algorand/test/wasm/arc200/target/wasm32-unknown-unknown/release/arc200.wasm",
 	}
 
-	file, err := os.Open(wasmFiles["arc200"])
+	file, err := os.Open(wasmFiles["rust"])
 	if err != nil {
 		panic(err)
 	}
@@ -3869,9 +3869,10 @@ func TestWasmProgramWithPrefetcherMultiple(t *testing.T) {
 
 	wasmFiles := map[string]string{
 		"arc200": "/Users/joe/git/algorand/go-algorand/test/wasm/arc200/target/wasm32-unknown-unknown/release/arc200.wasm",
+		"rust":   "/Users/joe/git/algorand/go-algorand/test/wasm/rust/target/wasm32-unknown-unknown/release/program.wasm",
 	}
 
-	file, err := os.Open(wasmFiles["arc200"])
+	file, err := os.Open(wasmFiles["rust"])
 	if err != nil {
 		panic(err)
 	}

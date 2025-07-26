@@ -1,0 +1,18 @@
+[package]
+name = "int_1"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib"]
+
+[profile.release]
+opt-level = "z"       # Optimize for size
+lto = true            # Link-time optimization
+codegen-units = 1     # Better optimization
+panic = "abort"       # Remove panic handling code
+strip = true          # Strip symbols
+
+[dependencies]
+algokit = { version = "0.1.0", path = "../algokit_rs" }
+talc = { version = "4.4.3", default-features = false, features = ["lock_api"] }

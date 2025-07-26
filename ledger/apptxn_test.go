@@ -4078,6 +4078,18 @@ func BenchmarkWasmStateLoop(b *testing.B) {
 	benchWasm(b, wasmFiles, groupSizes)
 }
 
+func BenchmarkWasmInt1(b *testing.B) {
+	partitiontest.PartitionTest(b)
+
+	wasmFiles := map[string]string{
+		"rust": "/Users/joe/git/algorand/go-algorand/test/wasm/int_1/target/wasm32-unknown-unknown/release/int_1.wasm",
+		"teal": "#pragma version 11\nint 1\nreturn",
+	}
+
+	groupSizes := []int{1, 2, 16}
+	benchWasm(b, wasmFiles, groupSizes)
+}
+
 func BenchmarkWasmRustVsTealFibo(b *testing.B) {
 	partitiontest.PartitionTest(b)
 

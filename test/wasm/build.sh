@@ -46,4 +46,11 @@ cargo build --release --target wasm32-unknown-unknown
 echo ""
 cd ..
 
+echo "Building Rust (int_1)"
+cd int_1
+cargo build --release --target wasm32-unknown-unknown
+../minify.sh target/wasm32-unknown-unknown/release/int_1.wasm
+echo ""
+cd ..
+
 echo "Done!"

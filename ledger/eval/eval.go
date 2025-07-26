@@ -1126,6 +1126,12 @@ func StartEvaluator(l LedgerForEvaluator, hdr bookkeeping.BlockHeader, evalOpts 
 
 	// setGlobalUint := func(ctx context.Context, m wazeroapi.Module, appId uint64, key_pointer int32, key_length int32, value uint64) {
 
+	gasCheck := func(ctx context.Context, stack []uint64) {
+		// opGas := stack[0]
+		// fmt.Printf("WASM gas check: %d\n", opGas)
+		return
+	}
+
 	_, err = runtime.NewHostModuleBuilder("algorand").
 		NewFunctionBuilder().WithGoFunction(wazeroapi.GoFunc(getGlobalUint), []wazeroapi.ValueType{w64, w32, w32}, []wazeroapi.ValueType{w64}).Export("host_get_global_uint").
 		NewFunctionBuilder().WithGoFunction(wazeroapi.GoFunc(setGlobalUint), []wazeroapi.ValueType{w64, w32, w32, w64}, []wazeroapi.ValueType{}).Export("host_set_global_uint").
@@ -1135,6 +1141,7 @@ func StartEvaluator(l LedgerForEvaluator, hdr bookkeeping.BlockHeader, evalOpts 
 		NewFunctionBuilder().WithFunc(alloc).Export("host_alloc").
 		NewFunctionBuilder().WithFunc(dealloc).Export("host_dealloc").
 		NewFunctionBuilder().WithFunc(bigintAdd).Export("host_bigint_add").
+		NewFunctionBuilder().WithGoFunction(wazeroapi.GoFunc(gasCheck), []wazeroapi.ValueType{w64}, []wazeroapi.ValueType{}).Export("host_gas_check").
 		Instantiate(runtimeCtx)
 
 	// TODO: Figure out if we can have both the env for memory and env for abort

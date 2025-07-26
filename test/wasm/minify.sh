@@ -14,6 +14,6 @@ for p in "$@"; do
   wasm-strip temp-$w
   wasm-opt --enable-bulk-memory-opt -Oz temp-$w --output $out_path
   rm temp-$w
-  echo $w `stat -c "%s" $p` "bytes ->" `stat -c "%s" $out_path` "bytes"
+  echo Minified: `stat -c "%s" $p` "bytes ->" `stat -c "%s" $out_path` "bytes"
   mv $out_path $p
 done

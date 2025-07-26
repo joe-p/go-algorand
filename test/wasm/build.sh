@@ -8,7 +8,7 @@ build_tinygo() {
     echo "Building tinygo..."
     cd "$dir"
     tinygo build -o "$output" -target wasm-unknown -no-debug -gc leaking -panic=trap -scheduler=none -ldflags="-extldflags '--import-memory'" program.go
-    minify_wasm "$output"
+    post_process "$output"
     cd ..
 }
 
@@ -18,7 +18,7 @@ build_assemblyscript() {
     echo "Building AssemblyScript..."
     cd "$dir"
     npm run asbuild:release
-    minify_wasm "build/release.wasm"
+    post_process "build/release.wasm"
     cd ..
 }
 
@@ -29,7 +29,7 @@ build_rust() {
     echo "Building Rust ($dir)..."
     cd "$dir"
     cargo build --release --target wasm32-unknown-unknown
-    minify_wasm "target/wasm32-unknown-unknown/release/$wasm_file"
+    post_process "target/wasm32-unknown-unknown/release/$wasm_file"
     cd ..
 }
 
@@ -39,14 +39,16 @@ build_zig() {
     echo "Building Zig..."
     cd "$dir"
     zig build
-    minify_wasm "zig-out/bin/program.wasm"
+    post_process "zig-out/bin/program.wasm"
     cd ..
 }
 
-minify_wasm() {
+post_process() {
     local input="$1"
     echo "Minifying $input..."
     ../minify.sh "$input"
+    echo "Instrumenting gas metering for $input..."
+    cargo run --manifest-path ../instrument/Cargo.toml --release -- "$input" 
     echo ""
 }
 
@@ -54,7 +56,7 @@ minify_wasm() {
 build_tinygo "tinygo" "program.wasm"
 
 # Build AssemblyScript
-build_assemblyscript "assembly_script" "build/release.wasm"
+# build_assemblyscript "assembly_script" "build/release.wasm"
 
 # Build Rust
 build_rust "rust" "program.wasm"

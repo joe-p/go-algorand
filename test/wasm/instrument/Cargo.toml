@@ -1,0 +1,7 @@
+[package]
+name = "instrument"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+radix-wasm-instrument = { git = "https://github.com/radixdlt/wasm-instrument" }

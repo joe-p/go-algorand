@@ -1,5 +1,6 @@
 use radix_wasm_instrument::{
     gas_metering::{ConstantCostRules, host_function, inject},
+    inject_stack_limiter,
     utils::module_info::ModuleInfo,
 };
 
@@ -15,14 +16,28 @@ fn main() {
     let mut module =
         ModuleInfo::new(&module_bytes).expect("Failed to create ModuleInfo from bytes");
 
-    let injected_module =
+    let gas_metered_module_bytes =
         inject(&mut module, backend, &ConstantCostRules::new(1, 10_000, 1)).unwrap();
 
     println!(
-        "Instrumented: {} bytes -> {} bytes",
+        "Gas Metering: {} bytes -> {} bytes",
         module_bytes.len(),
-        injected_module.len()
+        gas_metered_module_bytes.len()
     );
 
-    std::fs::write(module_path, injected_module).expect("Failed to write injected module to file");
+    let mut gas_metered_module = ModuleInfo::new(&gas_metered_module_bytes)
+        .expect("Failed to create ModuleInfo from gas-metered bytes");
+
+    let stack_limited_and_gas_metered_module_bytes =
+        inject_stack_limiter(&mut gas_metered_module, 1000)
+            .expect("Failed to inject stack limiter");
+
+    println!(
+        "Stack Limited: {} bytes -> {} bytes",
+        module_bytes.len(),
+        stack_limited_and_gas_metered_module_bytes.len()
+    );
+
+    std::fs::write(module_path, stack_limited_and_gas_metered_module_bytes)
+        .expect("Failed to write injected module to file");
 }

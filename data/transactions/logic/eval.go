@@ -1789,17 +1789,16 @@ func encodeSlice(cx *EvalContext, slice []stackValue, encoding []byte, encodingO
 			totalHeadSize += 8
 		case 'b', '(':
 			totalHeadSize += 2
-		case ')':
-			break
 		}
 		tempOffset++
 		if enc == '(' {
 			// Skip to matching ')'
 			level := 1
 			for tempOffset < len(encoding) && level > 0 {
-				if encoding[tempOffset] == '(' {
+				switch encoding[tempOffset] {
+				case '(':
 					level++
-				} else if encoding[tempOffset] == ')' {
+				case ')':
 					level--
 				}
 				tempOffset++
@@ -1892,8 +1891,6 @@ func decodeSlice(cx *EvalContext, encoded []byte, encoding []byte, encodingOffse
 			offset := binary.BigEndian.Uint16(encoded[tempHeadOffset : tempHeadOffset+2])
 			offsets = append(offsets, int(offset))
 			tempHeadOffset += 2
-		case ')':
-			break
 		}
 		tempOffset++
 	}
@@ -1957,9 +1954,10 @@ func decodeSlice(cx *EvalContext, encoded []byte, encoding []byte, encodingOffse
 			nestedLevel := 1
 			nestedEncodingEnd := *encodingOffset
 			for nestedEncodingEnd < len(encoding) && nestedLevel > 0 {
-				if encoding[nestedEncodingEnd] == '(' {
+				switch encoding[nestedEncodingEnd] {
+				case '(':
 					nestedLevel++
-				} else if encoding[nestedEncodingEnd] == ')' {
+				case ')':
 					nestedLevel--
 				}
 				nestedEncodingEnd++

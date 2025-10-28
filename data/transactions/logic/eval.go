@@ -23,6 +23,9 @@ package logic
 
 // The function exposed by the Rust library to run the test.
 void test_run();
+void avm_init_eval();
+void test_avm_prep_round();
+void test_avm_run_program();
 
 // WAMR_BINDGEN SECTION_START
 typedef uint64_t (*AvmGetGlobalUintFn)(void* exec_env, void* ctx, uint64_t app, const uint8_t* key_ptr, uint32_t key_len);
@@ -1361,8 +1364,18 @@ func eval(program []byte, cx *EvalContext) (pass bool, err error) {
 
 	handle := cgo.NewHandle(cx)
 	defer handle.Delete()
+
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
 	C.avm_init(unsafe.Pointer(&handle), C.getGoAvmGetGlobalUint(), C.getGoAvmSetGlobalUint())
-	C.test_run()
+	C.avm_init_eval()
+	C.test_avm_prep_round()
+
+	wamr_start := time.Now()
+	C.test_avm_run_program()
+	wamr_duration := time.Since(wamr_start)
+	fmt.Println("WASM eval duration:", wamr_duration)
 
 	stepLoopStart := time.Now()
 	for (err == nil) && (cx.pc < len(cx.program)) {
@@ -1377,7 +1390,7 @@ func eval(program []byte, cx *EvalContext) (pass bool, err error) {
 		}
 	}
 	stepLoopDuration := time.Since(stepLoopStart)
-	fmt.Println("AVM step loop duration:", stepLoopDuration)
+	fmt.Println(" AVM eval duration:", stepLoopDuration)
 	if err != nil {
 		if cx.Trace != nil {
 			fmt.Fprintf(cx.Trace, "%3d %s\n", cx.pc, err)

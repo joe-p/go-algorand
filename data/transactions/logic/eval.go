@@ -1362,6 +1362,21 @@ func eval(program []byte, cx *EvalContext) (pass bool, err error) {
 		return false, verr
 	}
 
+	stepLoopStart := time.Now()
+	for (err == nil) && (cx.pc < len(cx.program)) {
+		if cx.Tracer != nil {
+			cx.Tracer.BeforeOpcode(cx)
+		}
+
+		err = cx.step()
+
+		if cx.Tracer != nil {
+			cx.Tracer.AfterOpcode(cx, err)
+		}
+	}
+	stepLoopDuration := time.Since(stepLoopStart)
+	fmt.Println(" AVM eval duration:", stepLoopDuration)
+
 	handle := cgo.NewHandle(cx)
 	defer handle.Delete()
 
@@ -1377,20 +1392,6 @@ func eval(program []byte, cx *EvalContext) (pass bool, err error) {
 	wamr_duration := time.Since(wamr_start)
 	fmt.Println("WASM eval duration:", wamr_duration)
 
-	stepLoopStart := time.Now()
-	for (err == nil) && (cx.pc < len(cx.program)) {
-		if cx.Tracer != nil {
-			cx.Tracer.BeforeOpcode(cx)
-		}
-
-		err = cx.step()
-
-		if cx.Tracer != nil {
-			cx.Tracer.AfterOpcode(cx, err)
-		}
-	}
-	stepLoopDuration := time.Since(stepLoopStart)
-	fmt.Println(" AVM eval duration:", stepLoopDuration)
 	if err != nil {
 		if cx.Trace != nil {
 			fmt.Fprintf(cx.Trace, "%3d %s\n", cx.pc, err)

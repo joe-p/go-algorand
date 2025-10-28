@@ -17,7 +17,7 @@
 package logic
 
 /*
-#cgo LDFLAGS: /Users/joe/git/joe-p/wamrtime/target/debug/libwamrtime_avm.a -L/opt/homebrew/opt/zstd/lib -lc++ -lz -lzstd -ldl -lpthread -lm
+#cgo LDFLAGS: ${SRCDIR}/../../../wamrtime/target/debug/libwamrtime_avm.a -L/opt/homebrew/opt/zstd/lib -lc++ -lz -lzstd -ldl -lpthread -lm
 #include <stdint.h>
 #include <stdlib.h>
 

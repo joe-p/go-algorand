@@ -1,0 +1,3 @@
+[submodule "wamrtime"]
+	path = wamrtime
+	url = https://github.com/joe-p/wamrtime

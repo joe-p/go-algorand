@@ -16,6 +16,37 @@
 
 package logic
 
+/*
+#cgo LDFLAGS: /Users/joe/git/joe-p/wamrtime/target/debug/libwamrtime_avm.a -L/opt/homebrew/opt/zstd/lib -lc++ -lz -lzstd -ldl -lpthread -lm
+#include <stdint.h>
+#include <stdlib.h>
+
+// The function exposed by the Rust library to run the test.
+void test_run();
+
+// WAMR_BINDGEN SECTION_START
+typedef uint64_t (*AvmGetGlobalUintFn)(void* exec_env, void* ctx, uint64_t app, const uint8_t* key_ptr, uint32_t key_len);
+
+extern uint64_t goAvmGetGlobalUint(void* exec_env, void* ctx, uint64_t app, uint8_t* key_ptr, uint32_t key_len);
+
+static inline AvmGetGlobalUintFn getGoAvmGetGlobalUint() {
+	return (AvmGetGlobalUintFn)goAvmGetGlobalUint;
+}
+
+typedef void (*AvmSetGlobalUintFn)(void* exec_env, void* ctx, uint64_t app, const uint8_t* key_ptr, uint32_t key_len, uint64_t value);
+
+extern void goAvmSetGlobalUint(void* exec_env, void* ctx, uint64_t app, uint8_t* key_ptr, uint32_t key_len, uint64_t value);
+
+static inline AvmSetGlobalUintFn getGoAvmSetGlobalUint() {
+	return (AvmSetGlobalUintFn)goAvmSetGlobalUint;
+}
+
+void avm_init(void* ctx, AvmGetGlobalUintFn avm_get_global_uint_impl, AvmSetGlobalUintFn avm_set_global_uint_impl);
+// WAMR_BINDGEN SECTION_END
+
+*/
+import "C"
+
 import (
 	"bytes"
 	"encoding/base64"
@@ -28,9 +59,12 @@ import (
 	"math/big"
 	"math/bits"
 	"runtime"
+	"runtime/cgo"
 	"slices"
 	"strconv"
 	"strings"
+	"time"
+	"unsafe"
 
 	"github.com/algorand/go-algorand/config"
 	"github.com/algorand/go-algorand/config/bounds"
@@ -1325,6 +1359,12 @@ func eval(program []byte, cx *EvalContext) (pass bool, err error) {
 		return false, verr
 	}
 
+	handle := cgo.NewHandle(cx)
+	defer handle.Delete()
+	C.avm_init(unsafe.Pointer(&handle), C.getGoAvmGetGlobalUint(), C.getGoAvmSetGlobalUint())
+	C.test_run()
+
+	stepLoopStart := time.Now()
 	for (err == nil) && (cx.pc < len(cx.program)) {
 		if cx.Tracer != nil {
 			cx.Tracer.BeforeOpcode(cx)
@@ -1336,6 +1376,8 @@ func eval(program []byte, cx *EvalContext) (pass bool, err error) {
 			cx.Tracer.AfterOpcode(cx, err)
 		}
 	}
+	stepLoopDuration := time.Since(stepLoopStart)
+	fmt.Println("AVM step loop duration:", stepLoopDuration)
 	if err != nil {
 		if cx.Trace != nil {
 			fmt.Fprintf(cx.Trace, "%3d %s\n", cx.pc, err)
@@ -1357,6 +1399,42 @@ func eval(program []byte, cx *EvalContext) (pass bool, err error) {
 	}
 
 	return cx.Stack[0].Uint != 0, nil
+}
+
+//export goAvmGetGlobalUint
+func goAvmGetGlobalUint(exec_env unsafe.Pointer, ctx unsafe.Pointer, app uint64, keyPtr *C.uint8_t, keyLen C.uint32_t) uint64 {
+	handle := *(*cgo.Handle)(ctx)
+	cx := handle.Value().(*EvalContext)
+
+	key := string(C.GoBytes(unsafe.Pointer(keyPtr), C.int(keyLen)))
+
+	val, exists, err := cx.Ledger.GetGlobal(basics.AppIndex(cx.appID), key)
+
+	if err != nil {
+		panic(err)
+	}
+
+	if !exists {
+		return 0
+	}
+
+	return val.Uint
+}
+
+//export goAvmSetGlobalUint
+func goAvmSetGlobalUint(exec_env unsafe.Pointer, ctx unsafe.Pointer, app uint64, keyPtr *C.uint8_t, keyLen C.uint32_t, value uint64) {
+	handle := *(*cgo.Handle)(ctx)
+	cx := handle.Value().(*EvalContext)
+
+	key := string(C.GoBytes(unsafe.Pointer(keyPtr), C.int(keyLen)))
+
+	tv := basics.TealValue{Uint: value, Type: basics.TealUintType}
+	err := cx.Ledger.SetGlobal(basics.AppIndex(cx.appID), key, tv)
+
+	if err != nil {
+		panic(err)
+	}
+
 }
 
 // CheckContract should be faster than EvalContract.  It can perform

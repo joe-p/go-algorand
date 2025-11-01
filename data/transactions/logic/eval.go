@@ -23,9 +23,10 @@ package logic
 
 // The function exposed by the Rust library to run the test.
 void test_run();
-void avm_init_eval();
 void test_avm_prep_round();
 void test_avm_run_program();
+
+void avm_set_ctx(void *ctx);
 
 // WAMR_BINDGEN SECTION_START
 typedef uint64_t (*AvmGetGlobalUintFn)(void* exec_env, void* ctx, uint64_t app, const uint8_t* key_ptr, uint32_t key_len);
@@ -44,7 +45,7 @@ static inline AvmSetGlobalUintFn getGoAvmSetGlobalUint() {
 	return (AvmSetGlobalUintFn)goAvmSetGlobalUint;
 }
 
-void avm_init(void* ctx, AvmGetGlobalUintFn avm_get_global_uint_impl, AvmSetGlobalUintFn avm_set_global_uint_impl);
+void avm_init(AvmGetGlobalUintFn avm_get_global_uint_impl, AvmSetGlobalUintFn avm_set_global_uint_impl);
 // WAMR_BINDGEN SECTION_END
 
 */
@@ -1383,11 +1384,17 @@ func eval(program []byte, cx *EvalContext) (pass bool, err error) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	C.avm_init(unsafe.Pointer(&handle), C.getGoAvmGetGlobalUint(), C.getGoAvmSetGlobalUint())
-	C.avm_init_eval()
+	// NOTE: Neither of these functions are being measured because avm_init
+	// will only be called once per BlockEvaluator and test_avm_prep_round is
+	// just for testing purposes. It essentially does what will be happening
+	// in a background thread when evaluating the previous group and then
+	// waits for that thread to finish before proceeding so we can measure
+	// only the avm execution time.
+	C.avm_init(C.getGoAvmGetGlobalUint(), C.getGoAvmSetGlobalUint())
 	C.test_avm_prep_round()
 
 	wamr_start := time.Now()
+	C.avm_set_ctx(unsafe.Pointer(&handle)) // pass context to our WAMR host
 	C.test_avm_run_program()
 	wamr_duration := time.Since(wamr_start)
 	fmt.Println("WASM eval duration:", wamr_duration)

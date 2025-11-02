@@ -45,7 +45,23 @@ static inline AvmSetGlobalUintFn getGoAvmSetGlobalUint() {
 	return (AvmSetGlobalUintFn)goAvmSetGlobalUint;
 }
 
-void avm_init(AvmGetGlobalUintFn avm_get_global_uint_impl, AvmSetGlobalUintFn avm_set_global_uint_impl);
+typedef int32_t (*AvmGetGlobalBytesFn)(void* exec_env, void* ctx, uint64_t app, const uint8_t* key_ptr, uint32_t key_len, uint8_t* dest_ptr, uint32_t dest_len);
+
+extern int32_t goAvmGetGlobalBytes(void* exec_env, void* ctx, uint64_t app, uint8_t* key_ptr, uint32_t key_len, uint8_t* dest_ptr, uint32_t dest_len);
+
+static inline AvmGetGlobalBytesFn getGoAvmGetGlobalBytes() {
+	return (AvmGetGlobalBytesFn)goAvmGetGlobalBytes;
+}
+
+typedef void (*AvmSetGlobalBytesFn)(void* exec_env, void* ctx, uint64_t app, const uint8_t* key_ptr, uint32_t key_len, const uint8_t* src_ptr, uint32_t src_len);
+
+extern void goAvmSetGlobalBytes(void* exec_env, void* ctx, uint64_t app, uint8_t* key_ptr, uint32_t key_len, uint8_t* src_ptr, uint32_t src_len);
+
+static inline AvmSetGlobalBytesFn getGoAvmSetGlobalBytes() {
+	return (AvmSetGlobalBytesFn)goAvmSetGlobalBytes;
+}
+
+void avm_init(AvmGetGlobalUintFn avm_get_global_uint_impl, AvmSetGlobalUintFn avm_set_global_uint_impl, AvmGetGlobalBytesFn avm_get_global_bytes_impl, AvmSetGlobalBytesFn avm_set_global_bytes_impl);
 // WAMR_BINDGEN SECTION_END
 
 */
@@ -1390,7 +1406,7 @@ func eval(program []byte, cx *EvalContext) (pass bool, err error) {
 	// in a background thread when evaluating the previous group and then
 	// waits for that thread to finish before proceeding so we can measure
 	// only the avm execution time.
-	C.avm_init(C.getGoAvmGetGlobalUint(), C.getGoAvmSetGlobalUint())
+	C.avm_init(C.getGoAvmGetGlobalUint(), C.getGoAvmSetGlobalUint(), C.getGoAvmGetGlobalBytes(), C.getGoAvmSetGlobalBytes())
 	C.test_avm_prep_round()
 
 	wamr_start := time.Now()
@@ -1450,6 +1466,58 @@ func goAvmSetGlobalUint(exec_env unsafe.Pointer, ctx unsafe.Pointer, app uint64,
 	key := string(C.GoBytes(unsafe.Pointer(keyPtr), C.int(keyLen)))
 
 	tv := basics.TealValue{Uint: value, Type: basics.TealUintType}
+	err := cx.Ledger.SetGlobal(basics.AppIndex(cx.appID), key, tv)
+
+	if err != nil {
+		panic(err)
+	}
+
+}
+
+// extern int32_t goAvmGetGlobalBytes(void* exec_env, void* ctx, uint64_t app, uint8_t* key_ptr, uint32_t key_len, uint8_t* dest_ptr, uint32_t dest_len);
+
+//export goAvmGetGlobalBytes
+func goAvmGetGlobalBytes(exec_env unsafe.Pointer, ctx unsafe.Pointer, app uint64, keyPtr *C.uint8_t, keyLen C.uint32_t, dstPtr *C.uint8_t, dstLen C.uint32_t) C.int32_t {
+	handle := *(*cgo.Handle)(ctx)
+	cx := handle.Value().(*EvalContext)
+
+	key := string(C.GoBytes(unsafe.Pointer(keyPtr), C.int(keyLen)))
+
+	val, exists, err := cx.Ledger.GetGlobal(basics.AppIndex(cx.appID), key)
+
+	if err != nil {
+		panic(err)
+	}
+
+	if !exists || len(val.Bytes) == 0 {
+		return 0
+	}
+
+	bytes := []byte(val.Bytes)
+	if len(bytes) > int(dstLen) {
+		panic("buffer too small for global bytes")
+	}
+
+	if dstPtr == nil {
+		panic("nil destination for global bytes")
+	}
+
+	dstSlice := unsafe.Slice((*byte)(unsafe.Pointer(dstPtr)), len(bytes))
+	copy(dstSlice, bytes)
+
+	return C.int32_t(len(bytes))
+
+}
+
+//export goAvmSetGlobalBytes
+func goAvmSetGlobalBytes(exec_env unsafe.Pointer, ctx unsafe.Pointer, app uint64, keyPtr *C.uint8_t, keyLen C.uint32_t, valuePtr *C.uint8_t, valueLen C.uint32_t) {
+	handle := *(*cgo.Handle)(ctx)
+	cx := handle.Value().(*EvalContext)
+
+	key := string(C.GoBytes(unsafe.Pointer(keyPtr), C.int(keyLen)))
+	value := C.GoBytes(unsafe.Pointer(valuePtr), C.int(valueLen))
+
+	tv := basics.TealValue{Bytes: string(value), Type: basics.TealBytesType}
 	err := cx.Ledger.SetGlobal(basics.AppIndex(cx.appID), key, tv)
 
 	if err != nil {

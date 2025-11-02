@@ -24,7 +24,8 @@ package logic
 // The function exposed by the Rust library to run the test.
 void test_run();
 void test_avm_prep_round();
-void test_avm_run_program();
+uint64_t test_avm_run_program(uint8_t* err_buf, uint64_t err_buf_len);
+void avm_set_exception(void* exec_env, const char* msg);
 
 void avm_set_ctx(void *ctx);
 
@@ -1411,9 +1412,20 @@ func eval(program []byte, cx *EvalContext) (pass bool, err error) {
 
 	wamr_start := time.Now()
 	C.avm_set_ctx(unsafe.Pointer(&handle)) // pass context to our WAMR host
-	C.test_avm_run_program()
+
+	err_buf := make([]byte, 256)
+	err_ptr := (*C.uint8_t)(unsafe.Pointer(&err_buf[0]))
+
+	err_len := C.test_avm_run_program(err_ptr, C.uint64_t(len(err_buf)))
+
 	wamr_duration := time.Since(wamr_start)
 	fmt.Println("WASM eval duration:", wamr_duration)
+
+	if err_len > 0 {
+		err_slice := err_buf[:err_len]
+		err = errors.New(string(err_slice))
+		return false, err
+	}
 
 	if err != nil {
 		if cx.Trace != nil {
@@ -1438,10 +1450,26 @@ func eval(program []byte, cx *EvalContext) (pass bool, err error) {
 	return cx.Stack[0].Uint != 0, nil
 }
 
+func wamrtimeException(exec_env unsafe.Pointer, err interface{}) {
+	cString := C.CString(fmt.Sprintf("go-algorand panic: %v", err))
+	defer C.free(unsafe.Pointer(cString))
+	C.avm_set_exception(exec_env, cString)
+}
+
 //export goAvmGetGlobalUint
 func goAvmGetGlobalUint(exec_env unsafe.Pointer, ctx unsafe.Pointer, app uint64, keyPtr *C.uint8_t, keyLen C.uint32_t) uint64 {
+	defer func() {
+		if err := recover(); err != nil {
+			wamrtimeException(exec_env, err)
+		}
+	}()
+
 	handle := *(*cgo.Handle)(ctx)
 	cx := handle.Value().(*EvalContext)
+
+	if !cx.availableApp(basics.AppIndex(app)) {
+		panic(fmt.Sprintf("unavailable app %d", app))
+	}
 
 	key := string(C.GoBytes(unsafe.Pointer(keyPtr), C.int(keyLen)))
 
@@ -1460,8 +1488,18 @@ func goAvmGetGlobalUint(exec_env unsafe.Pointer, ctx unsafe.Pointer, app uint64,
 
 //export goAvmSetGlobalUint
 func goAvmSetGlobalUint(exec_env unsafe.Pointer, ctx unsafe.Pointer, app uint64, keyPtr *C.uint8_t, keyLen C.uint32_t, value uint64) {
+	defer func() {
+		if err := recover(); err != nil {
+			wamrtimeException(exec_env, err)
+		}
+	}()
+
 	handle := *(*cgo.Handle)(ctx)
 	cx := handle.Value().(*EvalContext)
+
+	if !cx.availableApp(basics.AppIndex(app)) {
+		panic(fmt.Sprintf("unavailable app %d", app))
+	}
 
 	key := string(C.GoBytes(unsafe.Pointer(keyPtr), C.int(keyLen)))
 
@@ -1478,8 +1516,18 @@ func goAvmSetGlobalUint(exec_env unsafe.Pointer, ctx unsafe.Pointer, app uint64,
 
 //export goAvmGetGlobalBytes
 func goAvmGetGlobalBytes(exec_env unsafe.Pointer, ctx unsafe.Pointer, app uint64, keyPtr *C.uint8_t, keyLen C.uint32_t, dstPtr *C.uint8_t, dstLen C.uint32_t) C.int32_t {
+	defer func() {
+		if err := recover(); err != nil {
+			wamrtimeException(exec_env, err)
+		}
+	}()
+
 	handle := *(*cgo.Handle)(ctx)
 	cx := handle.Value().(*EvalContext)
+
+	if !cx.availableApp(basics.AppIndex(app)) {
+		panic(fmt.Sprintf("unavailable app %d", app))
+	}
 
 	key := string(C.GoBytes(unsafe.Pointer(keyPtr), C.int(keyLen)))
 
@@ -1511,8 +1559,18 @@ func goAvmGetGlobalBytes(exec_env unsafe.Pointer, ctx unsafe.Pointer, app uint64
 
 //export goAvmSetGlobalBytes
 func goAvmSetGlobalBytes(exec_env unsafe.Pointer, ctx unsafe.Pointer, app uint64, keyPtr *C.uint8_t, keyLen C.uint32_t, valuePtr *C.uint8_t, valueLen C.uint32_t) {
+	defer func() {
+		if err := recover(); err != nil {
+			wamrtimeException(exec_env, err)
+		}
+	}()
+
 	handle := *(*cgo.Handle)(ctx)
 	cx := handle.Value().(*EvalContext)
+
+	if !cx.availableApp(basics.AppIndex(app)) {
+		panic(fmt.Sprintf("unavailable app %d", app))
+	}
 
 	key := string(C.GoBytes(unsafe.Pointer(keyPtr), C.int(keyLen)))
 	value := C.GoBytes(unsafe.Pointer(valuePtr), C.int(valueLen))

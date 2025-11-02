@@ -62,7 +62,15 @@ static inline AvmSetGlobalBytesFn getGoAvmSetGlobalBytes() {
 	return (AvmSetGlobalBytesFn)goAvmSetGlobalBytes;
 }
 
-void avm_init(AvmGetGlobalUintFn avm_get_global_uint_impl, AvmSetGlobalUintFn avm_set_global_uint_impl, AvmGetGlobalBytesFn avm_get_global_bytes_impl, AvmSetGlobalBytesFn avm_set_global_bytes_impl);
+typedef uint64_t (*AmvGetGlobalVarUintFn)(void* exec_env, void* ctx, uint64_t field_index);
+
+extern uint64_t goAmvGetGlobalVarUint(void* exec_env, void* ctx, uint64_t field_index);
+
+static inline AmvGetGlobalVarUintFn getGoAmvGetGlobalVarUint() {
+	return (AmvGetGlobalVarUintFn)goAmvGetGlobalVarUint;
+}
+
+void avm_init(AvmGetGlobalUintFn avm_get_global_uint_impl, AvmSetGlobalUintFn avm_set_global_uint_impl, AvmGetGlobalBytesFn avm_get_global_bytes_impl, AvmSetGlobalBytesFn avm_set_global_bytes_impl, AmvGetGlobalVarUintFn amv_get_global_var_uint_impl);
 // WAMR_BINDGEN SECTION_END
 
 */
@@ -1407,7 +1415,7 @@ func eval(program []byte, cx *EvalContext) (pass bool, err error) {
 	// in a background thread when evaluating the previous group and then
 	// waits for that thread to finish before proceeding so we can measure
 	// only the avm execution time.
-	C.avm_init(C.getGoAvmGetGlobalUint(), C.getGoAvmSetGlobalUint(), C.getGoAvmGetGlobalBytes(), C.getGoAvmSetGlobalBytes())
+	C.avm_init(C.getGoAvmGetGlobalUint(), C.getGoAvmSetGlobalUint(), C.getGoAvmGetGlobalBytes(), C.getGoAvmSetGlobalBytes(), C.getGoAmvGetGlobalVarUint())
 	C.test_avm_prep_round()
 
 	wamr_start := time.Now()
@@ -1582,6 +1590,26 @@ func goAvmSetGlobalBytes(exec_env unsafe.Pointer, ctx unsafe.Pointer, app uint64
 		panic(err)
 	}
 
+}
+
+//export goAmvGetGlobalVarUint
+func goAmvGetGlobalVarUint(exec_env unsafe.Pointer, ctx unsafe.Pointer, field_index uint64) uint64 {
+	defer func() {
+		if err := recover(); err != nil {
+			wamrtimeException(exec_env, err)
+		}
+	}()
+
+	handle := *(*cgo.Handle)(ctx)
+	cx := handle.Value().(*EvalContext)
+
+	value, err := cx.globalFieldToValue(globalFieldSpecs[field_index])
+
+	if err != nil {
+		panic(err)
+	}
+
+	return value.Uint
 }
 
 // CheckContract should be faster than EvalContract.  It can perform

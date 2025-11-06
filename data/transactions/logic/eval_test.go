@@ -187,7 +187,7 @@ func defaultAppParamsWithVersion(version uint64, txns ...transactions.SignedTxn)
 	}
 	ep := NewAppEvalParams(transactions.WrapSignedTxnsWithAD(txns), makeTestProtoV(version), &transactions.SpecialAddresses{})
 	if ep != nil { // If supplied no apps, ep is nil.
-		ep.Trace = &strings.Builder{}
+		// ep.Trace = &strings.Builder{}
 		ledger := NewLedger(nil)
 		ep.Ledger = ledger
 		ep.SigLedger = ledger

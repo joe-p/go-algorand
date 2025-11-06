@@ -1415,25 +1415,25 @@ func eval(program []byte, cx *EvalContext) (pass bool, err error) {
 	// in a background thread when evaluating the previous group and then
 	// waits for that thread to finish before proceeding so we can measure
 	// only the avm execution time.
-	C.avm_init(C.getGoAvmGetGlobalUint(), C.getGoAvmSetGlobalUint(), C.getGoAvmGetGlobalBytes(), C.getGoAvmSetGlobalBytes(), C.getGoAmvGetGlobalVarUint())
-	C.test_avm_prep_round()
+	// C.avm_init(C.getGoAvmGetGlobalUint(), C.getGoAvmSetGlobalUint(), C.getGoAvmGetGlobalBytes(), C.getGoAvmSetGlobalBytes(), C.getGoAmvGetGlobalVarUint())
+	// C.test_avm_prep_round()
+	//
+	// wamr_start := time.Now()
+	// C.avm_set_ctx(unsafe.Pointer(&handle)) // pass context to our WAMR host
+	//
+	// err_buf := make([]byte, 256)
+	// err_ptr := (*C.uint8_t)(unsafe.Pointer(&err_buf[0]))
+	//
+	// err_len := C.test_avm_run_program(err_ptr, C.uint64_t(len(err_buf)))
+	//
+	// wamr_duration := time.Since(wamr_start)
+	// fmt.Println("WASM eval duration:", wamr_duration)
 
-	wamr_start := time.Now()
-	C.avm_set_ctx(unsafe.Pointer(&handle)) // pass context to our WAMR host
-
-	err_buf := make([]byte, 256)
-	err_ptr := (*C.uint8_t)(unsafe.Pointer(&err_buf[0]))
-
-	err_len := C.test_avm_run_program(err_ptr, C.uint64_t(len(err_buf)))
-
-	wamr_duration := time.Since(wamr_start)
-	fmt.Println("WASM eval duration:", wamr_duration)
-
-	if err_len > 0 {
-		err_slice := err_buf[:err_len]
-		err = errors.New(string(err_slice))
-		return false, err
-	}
+	// if err_len > 0 {
+	// 	err_slice := err_buf[:err_len]
+	// 	err = errors.New(string(err_slice))
+	// 	return false, err
+	// }
 
 	if err != nil {
 		if cx.Trace != nil {

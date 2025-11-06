@@ -2456,6 +2456,108 @@ int 7
 	})
 }
 
+const fiboTeal = `
+b program
+
+// fibonacci(n: uint64): uint64
+fibonacci:
+	proto 1 1
+
+	// *if1_condition
+	// examples/calculator/calculator.algo.ts:49
+	// n <= 1
+	frame_dig -1 // n: uint64
+	int 1
+	<=
+	bz *if1_end
+
+	// *if1_consequent
+	// examples/calculator/calculator.algo.ts:50
+	// return n;
+	frame_dig -1 // n: uint64
+	retsub
+
+*if1_end:
+	// examples/calculator/calculator.algo.ts:52
+	// return this.fibonacci(n - 1) + this.fibonacci(n - 2);
+	frame_dig -1 // n: uint64
+	int 1
+	-
+	callsub fibonacci
+	frame_dig -1 // n: uint64
+	pushint 2
+	-
+	callsub fibonacci
+	+
+	retsub
+
+
+program:
+	int 15
+	callsub fibonacci
+	return
+`
+
+func TestFibo(t *testing.T) {
+	partitiontest.PartitionTest(t)
+
+	t.Parallel()
+	for i := 0; i <= 1000; i++ {
+		// ep := defaultAppParams()
+		// testApp(t, fiboTeal, ep)
+
+		ep := defaultSigParams()
+		testLogic(t, fiboTeal, 12, ep)
+	}
+}
+
+func TestRet1(t *testing.T) {
+	partitiontest.PartitionTest(t)
+
+	t.Parallel()
+	for i := 0; i <= 1000; i++ {
+		// ep := defaultAppParams()
+		// testApp(t, fiboTeal, ep)
+
+		ep := defaultSigParams()
+		testLogic(t, "int 1", 12, ep)
+	}
+}
+
+const tealStateLoop = `
+b program
+get_counter:
+	byte "counter"
+	app_global_get
+	retsub
+increment_counter:
+	byte "counter"
+	dup
+	app_global_get
+	int 1
+	+
+	app_global_put
+	retsub
+program:
+	callsub increment_counter
+	callsub get_counter
+	int 46
+	<
+	bnz program
+int 1
+return`
+
+func TestStateLoop(t *testing.T) {
+	partitiontest.PartitionTest(t)
+	t.Parallel()
+
+	for i := 0; i <= 1000; i++ {
+		ep := defaultAppParams()
+		testApp(t, tealStateLoop, ep)
+	}
+
+}
+
 func TestAppGlobalDelete(t *testing.T) {
 	partitiontest.PartitionTest(t)
 	t.Parallel()

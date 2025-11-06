@@ -2511,6 +2511,25 @@ func TestFibo(t *testing.T) {
 	}
 }
 
+func TestPushPop(t *testing.T) {
+	partitiontest.PartitionTest(t)
+
+	t.Parallel()
+	for i := 0; i <= 1000; i++ {
+		// ep := defaultAppParams()
+		// testApp(t, fiboTeal, ep)
+
+		prog := ""
+		for range 45 {
+			prog += "int 1; pop\n"
+		}
+
+		prog += "int 1"
+		ep := defaultSigParams()
+		testLogic(t, prog, 12, ep)
+	}
+}
+
 func TestRet1(t *testing.T) {
 	partitiontest.PartitionTest(t)
 

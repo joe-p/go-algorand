@@ -23,7 +23,7 @@ package logic
 
 // The function exposed by the Rust library to run the test.
 void test_run();
-void test_avm_prep_round();
+void test_avm_instrument_wasm();
 uint64_t test_avm_run_program(uint8_t* err_buf, uint64_t err_buf_len);
 void avm_set_exception(void* exec_env, const char* msg);
 
@@ -62,15 +62,15 @@ static inline AvmSetGlobalBytesFn getGoAvmSetGlobalBytes() {
 	return (AvmSetGlobalBytesFn)goAvmSetGlobalBytes;
 }
 
-typedef uint64_t (*AmvGetGlobalVarUintFn)(void* exec_env, void* ctx, uint64_t field_index);
+typedef uint64_t (*AvmGetGlobalVarUintFn)(void* exec_env, void* ctx, uint64_t field_index);
 
-extern uint64_t goAmvGetGlobalVarUint(void* exec_env, void* ctx, uint64_t field_index);
+extern uint64_t goAvmGetGlobalVarUint(void* exec_env, void* ctx, uint64_t field_index);
 
-static inline AmvGetGlobalVarUintFn getGoAmvGetGlobalVarUint() {
-	return (AmvGetGlobalVarUintFn)goAmvGetGlobalVarUint;
+static inline AvmGetGlobalVarUintFn getGoAvmGetGlobalVarUint() {
+	return (AvmGetGlobalVarUintFn)goAvmGetGlobalVarUint;
 }
 
-void avm_init(AvmGetGlobalUintFn avm_get_global_uint_impl, AvmSetGlobalUintFn avm_set_global_uint_impl, AvmGetGlobalBytesFn avm_get_global_bytes_impl, AvmSetGlobalBytesFn avm_set_global_bytes_impl, AmvGetGlobalVarUintFn amv_get_global_var_uint_impl);
+void avm_init(AvmGetGlobalUintFn avm_get_global_uint_impl, AvmSetGlobalUintFn avm_set_global_uint_impl, AvmGetGlobalBytesFn avm_get_global_bytes_impl, AvmSetGlobalBytesFn avm_set_global_bytes_impl, AvmGetGlobalVarUintFn avm_get_global_var_uint_impl);
 // WAMR_BINDGEN SECTION_END
 
 */
@@ -1415,25 +1415,25 @@ func eval(program []byte, cx *EvalContext) (pass bool, err error) {
 	// in a background thread when evaluating the previous group and then
 	// waits for that thread to finish before proceeding so we can measure
 	// only the avm execution time.
-	// C.avm_init(C.getGoAvmGetGlobalUint(), C.getGoAvmSetGlobalUint(), C.getGoAvmGetGlobalBytes(), C.getGoAvmSetGlobalBytes(), C.getGoAmvGetGlobalVarUint())
-	// C.test_avm_prep_round()
-	//
-	// wamr_start := time.Now()
-	// C.avm_set_ctx(unsafe.Pointer(&handle)) // pass context to our WAMR host
-	//
-	// err_buf := make([]byte, 256)
-	// err_ptr := (*C.uint8_t)(unsafe.Pointer(&err_buf[0]))
-	//
-	// err_len := C.test_avm_run_program(err_ptr, C.uint64_t(len(err_buf)))
-	//
-	// wamr_duration := time.Since(wamr_start)
-	// fmt.Println("WASM eval duration:", wamr_duration)
+	C.avm_init(C.getGoAvmGetGlobalUint(), C.getGoAvmSetGlobalUint(), C.getGoAvmGetGlobalBytes(), C.getGoAvmSetGlobalBytes(), C.getGoAvmGetGlobalVarUint())
+	C.test_avm_instrument_wasm()
 
-	// if err_len > 0 {
-	// 	err_slice := err_buf[:err_len]
-	// 	err = errors.New(string(err_slice))
-	// 	return false, err
-	// }
+	wamr_start := time.Now()
+	C.avm_set_ctx(unsafe.Pointer(&handle)) // pass context to our WAMR host
+
+	err_buf := make([]byte, 256)
+	err_ptr := (*C.uint8_t)(unsafe.Pointer(&err_buf[0]))
+
+	err_len := C.test_avm_run_program(err_ptr, C.uint64_t(len(err_buf)))
+
+	wamr_duration := time.Since(wamr_start)
+	fmt.Println("WASM eval duration:", wamr_duration)
+
+	if err_len > 0 {
+		err_slice := err_buf[:err_len]
+		err = errors.New(string(err_slice))
+		return false, err
+	}
 
 	if err != nil {
 		if cx.Trace != nil {
@@ -1592,8 +1592,8 @@ func goAvmSetGlobalBytes(exec_env unsafe.Pointer, ctx unsafe.Pointer, app uint64
 
 }
 
-//export goAmvGetGlobalVarUint
-func goAmvGetGlobalVarUint(exec_env unsafe.Pointer, ctx unsafe.Pointer, field_index uint64) uint64 {
+//export goAvmGetGlobalVarUint
+func goAvmGetGlobalVarUint(exec_env unsafe.Pointer, ctx unsafe.Pointer, field_index uint64) uint64 {
 	defer func() {
 		if err := recover(); err != nil {
 			wamrtimeException(exec_env, err)

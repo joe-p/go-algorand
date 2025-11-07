@@ -2520,7 +2520,7 @@ func TestPushPop(t *testing.T) {
 		// testApp(t, fiboTeal, ep)
 
 		prog := ""
-		for range 45 {
+		for range 75 {
 			prog += "int 1; pop\n"
 		}
 

@@ -1410,11 +1410,8 @@ func eval(program []byte, cx *EvalContext) (pass bool, err error) {
 	defer runtime.UnlockOSThread()
 
 	// NOTE: Neither of these functions are being measured because avm_init
-	// will only be called once per BlockEvaluator and test_avm_prep_round is
-	// just for testing purposes. It essentially does what will be happening
-	// in a background thread when evaluating the previous group and then
-	// waits for that thread to finish before proceeding so we can measure
-	// only the avm execution time.
+	// will only be called once per Ledger instance and the WASM instrumentation
+	// will be happening in the prefetcher.
 	C.avm_init(C.getGoAvmGetGlobalUint(), C.getGoAvmSetGlobalUint(), C.getGoAvmGetGlobalBytes(), C.getGoAvmSetGlobalBytes(), C.getGoAvmGetGlobalVarUint())
 	C.test_avm_instrument_wasm()
 

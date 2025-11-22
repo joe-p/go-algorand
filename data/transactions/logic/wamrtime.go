@@ -7,7 +7,6 @@ package logic
 
 // The function exposed by the Rust library to run the test.
 void test_run();
-void test_avm_instrument_wasm();
 uint64_t test_avm_run_program(uint8_t* err_buf, uint64_t err_buf_len);
 void avm_set_exception(void* exec_env, const char* msg);
 
@@ -68,10 +67,6 @@ import (
 
 	"github.com/algorand/go-algorand/data/basics"
 )
-
-func wamrtimeTestInstrumentWasm() {
-	C.test_avm_instrument_wasm()
-}
 
 func wamrtimeCallProgram(evalCtx *EvalContext) (uint64, error) {
 	runtime.LockOSThread()

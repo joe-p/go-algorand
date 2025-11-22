@@ -1345,7 +1345,6 @@ func eval(program []byte, cx *EvalContext) (pass bool, err error) {
 	// will only be called once per Ledger instance and the WASM instrumentation
 	// will be happening in the prefetcher.
 	wamrtimeInit()
-	wamrtimeTestInstrumentWasm()
 
 	wamr_start := time.Now()
 	_, err = wamrtimeCallProgram(cx)

@@ -184,6 +184,8 @@ type ApplicationCallTxnFields struct {
 	// transaction should immediately fail. 0 indicates that no version check should be performed.
 	RejectVersion uint64 `codec:"aprv"`
 
+	WasmProgram []byte `codec:"apw,allocbound=bounds.MaxAvailableAppProgramLen"`
+
 	// If you add any fields here, remember you MUST modify the Empty
 	// method below!
 }
@@ -408,6 +410,9 @@ func (ac *ApplicationCallTxnFields) Empty() bool {
 		return false
 	}
 	if ac.RejectVersion != 0 {
+		return false
+	}
+	if ac.WasmProgram != nil {
 		return false
 	}
 	return true

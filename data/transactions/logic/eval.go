@@ -1260,6 +1260,8 @@ func EvalSignature(gi int, params *EvalParams) (bool, error) {
 	return pass, err
 }
 
+var wamrtimeInitialized = false
+
 // eval implementation
 // A program passes successfully if it finishes with one int element on the stack that is non-zero.
 func eval(program []byte, cx *EvalContext) (pass bool, err error) {
@@ -1276,6 +1278,26 @@ func eval(program []byte, cx *EvalContext) (pass bool, err error) {
 			cx.EvalParams.log().Errorf("recovered panic in Eval: %v", err)
 		}
 	}()
+
+	if cx.txn.Txn.WasmProgram != nil {
+		if !wamrtimeInitialized {
+			wamrtimeInit()
+			wamrtimeInitialized = true
+		}
+
+		wamr_start := time.Now()
+		ret_val, err := wamrtimeCallProgram(cx)
+		if err == nil {
+			cx.Stack = make([]stackValue, 1)
+			cx.Stack[0] = stackValue{Uint: uint64(ret_val)}
+		}
+		wamr_duration := time.Since(wamr_start)
+		fmt.Println("WASM eval duration:", wamr_duration)
+
+		return ret_val != 0, err
+	}
+
+	avmStart := time.Now()
 
 	// 16 is chosen to avoid growth for small programs, and so that repeated
 	// doublings lead to a number just a bit above 1000, the max stack height.
@@ -1326,7 +1348,6 @@ func eval(program []byte, cx *EvalContext) (pass bool, err error) {
 		return false, verr
 	}
 
-	stepLoopStart := time.Now()
 	for (err == nil) && (cx.pc < len(cx.program)) {
 		if cx.Tracer != nil {
 			cx.Tracer.BeforeOpcode(cx)
@@ -1338,19 +1359,8 @@ func eval(program []byte, cx *EvalContext) (pass bool, err error) {
 			cx.Tracer.AfterOpcode(cx, err)
 		}
 	}
-	stepLoopDuration := time.Since(stepLoopStart)
-	fmt.Println(" AVM eval duration:", stepLoopDuration)
-
-	// NOTE: Neither of these functions are being measured because avm_init
-	// will only be called once per Ledger instance and the WASM instrumentation
-	// will be happening in the prefetcher.
-	wamrtimeInit()
-
-	wamr_start := time.Now()
-	_, err = wamrtimeCallProgram(cx)
-
-	wamr_duration := time.Since(wamr_start)
-	fmt.Println("WASM eval duration:", wamr_duration)
+	avmDuration := time.Since(avmStart)
+	fmt.Println(" AVM eval duration:", avmDuration)
 
 	if err != nil {
 		if cx.Trace != nil {
@@ -1373,6 +1383,7 @@ func eval(program []byte, cx *EvalContext) (pass bool, err error) {
 	}
 
 	return cx.Stack[0].Uint != 0, nil
+
 }
 
 // CheckContract should be faster than EvalContract.  It can perform

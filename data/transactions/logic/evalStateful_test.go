@@ -19,6 +19,7 @@ package logic
 import (
 	"encoding/hex"
 	"fmt"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -599,6 +600,38 @@ func testAppBytes(t *testing.T, program []byte, ep *EvalParams, problems ...stri
 		ep.Ledger.(*Ledger).NewApp(addr, 888, basics.AppParams{})
 	}
 	return testAppFull(t, program, 0, aid, ep, problems...)
+}
+
+func testWasmBytes(t *testing.T, program []byte, ep *EvalParams) (transactions.EvalDelta, error) {
+	t.Helper()
+	if ep == nil {
+		ep = defaultAppParamsWithVersion(LogicVersion)
+	} else {
+		ep.reset()
+	}
+	aid := ep.TxnGroup[0].Txn.ApplicationID
+	if aid == 0 {
+		aid = basics.AppIndex(888)
+		// we're testing an app call without the caller specifying details about
+		// the app, so conjure up boring app params to make the `global
+		// AppCreator` work.
+		addr, err := basics.UnmarshalChecksumAddress(testAppCreator)
+		require.NoError(t, err)
+		ep.Ledger.(*Ledger).NewApp(addr, 888, basics.AppParams{})
+	}
+
+	ep.TxnGroup[0].Txn.WasmProgram = program
+	if ep.Ledger == nil {
+		ep.Ledger = NewLedger(nil)
+	}
+
+	_, err := EvalApp(program, 0, aid, ep)
+	delta := ep.TxnGroup[0].EvalDelta
+
+	if err != nil {
+		t.Fatalf("EvalWasm failed: %v\nTrace:\n%s", err, ep.Trace)
+	}
+	return delta, err
 }
 
 // testAppFull gives a lot of control to caller - in particular, notice that
@@ -2540,6 +2573,21 @@ func TestRet1(t *testing.T) {
 
 		ep := defaultSigParams()
 		testLogic(t, "int 1", 12, ep)
+	}
+}
+
+func TestWasmRet1(t *testing.T) {
+	partitiontest.PartitionTest(t)
+	// Read wasm bytes from ./../../../wamrtime/target/wasm32-unknown-unknown/wasm_small/ret_1.wasm
+	wasmBytes, err := os.ReadFile("./../../../wamrtime/target/wasm32-unknown-unknown/wasm_small/ret_1.wasm")
+	if err != nil {
+		t.Fatalf("failed to read wasm file: %v", err)
+	}
+
+	t.Parallel()
+	for i := 0; i <= 1000; i++ {
+		ep := defaultAppParamsWithVersion(12)
+		testWasmBytes(t, wasmBytes, ep)
 	}
 }
 

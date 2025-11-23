@@ -377,6 +377,8 @@ func BenchmarkAppASA(b *testing.B) { benchmarkFullBlocks(testCases["asa"], b) }
 
 func BenchmarkPay(b *testing.B) { benchmarkFullBlocks(testCases["pay"], b) }
 
+func BenchmarkAppFibo(b *testing.B) { benchmarkFullBlocks(testCases["fibo"], b) }
+
 func init() {
 	testCases = make(map[string]testParams)
 
@@ -461,6 +463,60 @@ func init() {
 		testType: "app",
 		name:     "big-hashes",
 		program:  genBigHashes(10, 344),
+	}
+	testCases[params.name] = params
+
+	const fiboTeal = `
+b program
+
+// fibonacci(n: uint64): uint64
+fibonacci:
+	proto 1 1
+
+	// *if1_condition
+	// examples/calculator/calculator.algo.ts:49
+	// n <= 1
+	frame_dig -1 // n: uint64
+	int 1
+	<=
+	bz *if1_end
+
+	// *if1_consequent
+	// examples/calculator/calculator.algo.ts:50
+	// return n;
+	frame_dig -1 // n: uint64
+	retsub
+
+*if1_end:
+	// examples/calculator/calculator.algo.ts:52
+	// return this.fibonacci(n - 1) + this.fibonacci(n - 2);
+	frame_dig -1 // n: uint64
+	int 1
+	-
+	callsub fibonacci
+	frame_dig -1 // n: uint64
+	pushint 2
+	-
+	callsub fibonacci
+	+
+	retsub
+
+
+program:
+	int 7
+	callsub fibonacci
+	return
+`
+
+	ops, err = logic.AssembleStringWithVersion(fiboTeal, 12)
+	if err != nil {
+		panic(err)
+	}
+
+	params = testParams{
+		testType: "app",
+		name:     "fibo",
+		program:  ops.Program,
 	}
 	testCases[params.name] = params
 }

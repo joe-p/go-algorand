@@ -31,7 +31,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/algorand/go-algorand/config"
 	"github.com/algorand/go-algorand/config/bounds"
@@ -1285,15 +1284,9 @@ func eval(program []byte, cx *EvalContext) (pass bool, err error) {
 			wamrtimeInitialized = true
 		}
 
-		wamr_start := time.Now()
 		ret_val := wamrtimeCallProgram(cx, cx.txn.Txn.WasmProgram)
-		wamr_duration := time.Since(wamr_start)
-		fmt.Println("WASM eval duration:", wamr_duration)
-
 		return ret_val != 0, nil
 	}
-
-	avmStart := time.Now()
 
 	// 16 is chosen to avoid growth for small programs, and so that repeated
 	// doublings lead to a number just a bit above 1000, the max stack height.
@@ -1355,8 +1348,6 @@ func eval(program []byte, cx *EvalContext) (pass bool, err error) {
 			cx.Tracer.AfterOpcode(cx, err)
 		}
 	}
-	avmDuration := time.Since(avmStart)
-	fmt.Println(" AVM eval duration:", avmDuration)
 
 	if err != nil {
 		if cx.Trace != nil {

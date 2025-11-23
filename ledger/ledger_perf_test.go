@@ -20,6 +20,7 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -44,12 +45,13 @@ import (
 )
 
 type testParams struct {
-	testType   string
-	name       string
-	program    []byte
-	schemaSize uint64
-	numApps    uint64
-	asaAccts   uint64
+	testType    string
+	name        string
+	program     []byte
+	schemaSize  uint64
+	numApps     uint64
+	asaAccts    uint64
+	wasmProgram []byte
 }
 
 var testCases map[string]testParams
@@ -67,7 +69,7 @@ func makeUnsignedApplicationCallTxPerf(appIdx basics.AppIndex, params testParams
 	tx.Header.Fee = basics.MicroAlgos{Raw: 1000}
 
 	// If creating, set programs
-	if appIdx == 0 {
+	if appIdx == 0 && params.wasmProgram == nil {
 		tx.ApprovalProgram = params.program
 		tx.ClearStateProgram = params.program
 		tx.GlobalStateSchema = basics.StateSchema{
@@ -76,6 +78,8 @@ func makeUnsignedApplicationCallTxPerf(appIdx basics.AppIndex, params testParams
 		tx.LocalStateSchema = basics.StateSchema{
 			NumByteSlice: params.schemaSize,
 		}
+	} else if params.wasmProgram != nil {
+		tx.WasmProgram = params.wasmProgram
 	}
 
 	return tx
@@ -377,7 +381,8 @@ func BenchmarkAppASA(b *testing.B) { benchmarkFullBlocks(testCases["asa"], b) }
 
 func BenchmarkPay(b *testing.B) { benchmarkFullBlocks(testCases["pay"], b) }
 
-func BenchmarkAppFibo(b *testing.B) { benchmarkFullBlocks(testCases["fibo"], b) }
+func BenchmarkAppFibo(b *testing.B)     { benchmarkFullBlocks(testCases["fibo"], b) }
+func BenchmarkAppWasmFibo(b *testing.B) { benchmarkFullBlocks(testCases["wasm-fibo"], b) }
 
 func init() {
 	testCases = make(map[string]testParams)
@@ -517,6 +522,19 @@ program:
 		testType: "app",
 		name:     "fibo",
 		program:  ops.Program,
+	}
+	testCases[params.name] = params
+
+	wasmFiboBytes, err := os.ReadFile("../wamrtime/target/wasm32-unknown-unknown/wasm_small/fibo_7.wasm")
+
+	if err != nil {
+		panic(fmt.Sprintf("failed to read wasm file: %v", err))
+	}
+
+	params = testParams{
+		testType:    "app",
+		name:        "wasm-fibo",
+		wasmProgram: wasmFiboBytes,
 	}
 	testCases[params.name] = params
 }

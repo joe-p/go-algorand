@@ -439,13 +439,18 @@ func (ac ApplicationCallTxnFields) wellFormed(proto config.ConsensusParams) erro
 
 	// Programs may only be set for creation or update
 	if ac.ApplicationID != 0 && ac.OnCompletion != UpdateApplicationOC {
+		// TODO: Also check WASM program. Not done yet since we don't yet support calling created WASM programs, thus a WasmProgram
+		// must be in every call tx
 		if len(ac.ApprovalProgram) != 0 || len(ac.ClearStateProgram) != 0 {
 			return fmt.Errorf("programs may only be specified during application creation or update")
 		}
-	} else {
+	} else if ac.WasmProgram == nil {
+		// TODO: Versioning WASM programs?
+
 		// This will check version matching, but not downgrading. That
 		// depends on chain state (so we pass an empty AppParams)
 		err := CheckContractVersions(ac.ApprovalProgram, ac.ClearStateProgram, basics.AppParams{}, &proto)
+
 		if err != nil {
 			return err
 		}

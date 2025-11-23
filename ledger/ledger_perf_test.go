@@ -42,6 +42,7 @@ import (
 	"github.com/algorand/go-algorand/ledger/ledgercore"
 	"github.com/algorand/go-algorand/logging"
 	"github.com/algorand/go-algorand/protocol"
+	"github.com/algorand/go-algorand/util/execpool"
 )
 
 type testParams struct {
@@ -222,6 +223,10 @@ func benchmarkFullBlocks(params testParams, b *testing.B) {
 			switch params.testType {
 			case "pay":
 				tx = makeUnsignedPaymentTx(creator, i)
+			case "wasmSig":
+				tx = makeUnsignedPaymentTx(creator, i)
+			case "sig":
+				tx = makeUnsignedPaymentTx(creator, i)
 			case "app":
 				tx = makeUnsignedApplicationCallTxPerf(createdAppIdx, params, onCompletion, i)
 			case "asa":
@@ -259,7 +264,14 @@ func benchmarkFullBlocks(params testParams, b *testing.B) {
 				// add tx to block
 				var stxn transactions.SignedTxn
 				stxn.Txn = tx
-				stxn.Sig = crypto.Signature{1}
+				switch params.testType {
+				case "wasmSig":
+					stxn.WasmSig = params.wasmProgram
+				case "sig":
+					stxn.Lsig.Logic = params.program
+				default:
+					stxn.Sig = crypto.Signature{1}
+				}
 				err = eval.Transaction(stxn, transactions.ApplyData{})
 
 			}
@@ -324,9 +336,20 @@ func benchmarkFullBlocks(params testParams, b *testing.B) {
 
 	// eval + add all the (valid) blocks to the second ledger, measuring it this time
 	vc := verify.GetMockedCache(true)
+
+	// Create an execution pool for signature verification if needed
+	var executionPool execpool.BacklogPool
+	if params.testType == "sig" || params.testType == "wasmSig" {
+		executionPool = execpool.MakeBacklog(nil, 0, execpool.LowPriority, nil)
+		defer executionPool.Shutdown()
+	}
+
 	b.ResetTimer()
 	for _, blk := range blocks {
-		_, err = eval.Eval(context.Background(), l1, blk, true, vc, nil, l1.tracer)
+		if params.testType == "sig" || params.testType == "wasmSig" {
+			vc = verify.MakeVerifiedTransactionCache(50_000)
+		}
+		_, err = eval.Eval(context.Background(), l1, blk, true, vc, executionPool, l1.tracer)
 		require.NoError(b, err)
 		err = l1.AddBlock(blk, cert)
 		require.NoError(b, err)
@@ -381,8 +404,57 @@ func BenchmarkAppASA(b *testing.B) { benchmarkFullBlocks(testCases["asa"], b) }
 
 func BenchmarkPay(b *testing.B) { benchmarkFullBlocks(testCases["pay"], b) }
 
-func BenchmarkAppFibo(b *testing.B)     { benchmarkFullBlocks(testCases["fibo"], b) }
-func BenchmarkAppWasmFibo(b *testing.B) { benchmarkFullBlocks(testCases["wasm-fibo"], b) }
+func BenchmarkAppFibo(b *testing.B) { benchmarkFullBlocks(testCases["fibo"], b) }
+
+// func BenchmarkAppWasmFibo(b *testing.B) { benchmarkFullBlocks(testCases["wasm-app-fibo"], b) }
+
+func BenchmarkSigWasmFibo(b *testing.B) { benchmarkFullBlocks(testCases["wasm-sig-fibo"], b) }
+func BenchmarkSigFibo(b *testing.B)     { benchmarkFullBlocks(testCases["sig-fibo"], b) }
+
+func fiboTeal(n int) string {
+	return fmt.Sprintf(`#pragma version 12
+b program
+
+// fibonacci(n: uint64): uint64
+fibonacci:
+	proto 1 1
+
+	// *if1_condition
+	// examples/calculator/calculator.algo.ts:49
+	// n <= 1
+	frame_dig -1 // n: uint64
+	int 1
+	<=
+	bz *if1_end
+
+	// *if1_consequent
+	// examples/calculator/calculator.algo.ts:50
+	// return n;
+	frame_dig -1 // n: uint64
+	retsub
+
+*if1_end:
+	// examples/calculator/calculator.algo.ts:52
+	// return this.fibonacci(n - 1) + this.fibonacci(n - 2);
+	frame_dig -1 // n: uint64
+	int 1
+	-
+	callsub fibonacci
+	frame_dig -1 // n: uint64
+	pushint 2
+	-
+	callsub fibonacci
+	+
+	retsub
+
+
+program:
+	int %d
+	callsub fibonacci
+	return
+`, n)
+
+}
 
 func init() {
 	testCases = make(map[string]testParams)
@@ -471,49 +543,7 @@ func init() {
 	}
 	testCases[params.name] = params
 
-	const fiboTeal = `
-b program
-
-// fibonacci(n: uint64): uint64
-fibonacci:
-	proto 1 1
-
-	// *if1_condition
-	// examples/calculator/calculator.algo.ts:49
-	// n <= 1
-	frame_dig -1 // n: uint64
-	int 1
-	<=
-	bz *if1_end
-
-	// *if1_consequent
-	// examples/calculator/calculator.algo.ts:50
-	// return n;
-	frame_dig -1 // n: uint64
-	retsub
-
-*if1_end:
-	// examples/calculator/calculator.algo.ts:52
-	// return this.fibonacci(n - 1) + this.fibonacci(n - 2);
-	frame_dig -1 // n: uint64
-	int 1
-	-
-	callsub fibonacci
-	frame_dig -1 // n: uint64
-	pushint 2
-	-
-	callsub fibonacci
-	+
-	retsub
-
-
-program:
-	int 7
-	callsub fibonacci
-	return
-`
-
-	ops, err = logic.AssembleStringWithVersion(fiboTeal, 12)
+	ops, err = logic.AssembleStringWithVersion(fiboTeal(7), 12)
 	if err != nil {
 		panic(err)
 	}
@@ -525,7 +555,7 @@ program:
 	}
 	testCases[params.name] = params
 
-	wasmFiboBytes, err := os.ReadFile("../wamrtime/target/wasm32-unknown-unknown/wasm_small/fibo_7.wasm")
+	wasmFibo7Bytes, err := os.ReadFile("../wamrtime/target/wasm32-unknown-unknown/wasm_small/fibo_7.wasm")
 
 	if err != nil {
 		panic(fmt.Sprintf("failed to read wasm file: %v", err))
@@ -533,8 +563,34 @@ program:
 
 	params = testParams{
 		testType:    "app",
-		name:        "wasm-fibo",
-		wasmProgram: wasmFiboBytes,
+		name:        "wasm-app-fibo",
+		wasmProgram: wasmFibo7Bytes,
+	}
+	testCases[params.name] = params
+
+	wasmFibo15Bytes, err := os.ReadFile("../wamrtime/target/wasm32-unknown-unknown/wasm_small/fibo.wasm")
+
+	if err != nil {
+		panic(fmt.Sprintf("failed to read wasm file: %v", err))
+	}
+
+	params = testParams{
+		testType:    "wasmSig",
+		name:        "wasm-sig-fibo",
+		wasmProgram: wasmFibo15Bytes,
+	}
+	testCases[params.name] = params
+
+	ops, err = logic.AssembleStringWithVersion(fiboTeal(14), 12)
+
+	if err != nil {
+		panic(err)
+	}
+
+	params = testParams{
+		testType: "sig",
+		name:     "sig-fibo",
+		program:  ops.Program,
 	}
 	testCases[params.name] = params
 }

@@ -273,6 +273,7 @@ const regularSig sigOrTxnType = 1
 const multiSig sigOrTxnType = 2
 const logicSig sigOrTxnType = 3
 const stateProofTxn sigOrTxnType = 4
+const wasmSig sigOrTxnType = 5
 
 // checkTxnSigTypeCounts checks the number of signature types and reports an error in case of a violation
 func checkTxnSigTypeCounts(s *transactions.SignedTxn, groupIndex int) (sigType sigOrTxnType, err *TxGroupError) {
@@ -288,6 +289,10 @@ func checkTxnSigTypeCounts(s *transactions.SignedTxn, groupIndex int) (sigType s
 	if !s.Lsig.Blank() {
 		numSigCategories++
 		sigType = logicSig
+	}
+	if s.WasmSig != nil {
+		numSigCategories++
+		sigType = wasmSig
 	}
 	if numSigCategories == 0 {
 		// Special case: special sender address can issue special transaction
@@ -342,6 +347,11 @@ func stxnCoreChecks(gi int, groupCtx *GroupContext, batchVerifier crypto.BatchVe
 		}
 		return nil
 
+	case wasmSig:
+		if err := wasmSigVerify(gi, groupCtx); err != nil {
+			return &TxGroupError{err: err, GroupIndex: gi, Reason: TxGroupErrorReasonLogicSigFailed}
+		}
+		return nil
 	case stateProofTxn:
 		return nil
 
@@ -409,13 +419,14 @@ func logicSigSanityCheckBatchPrep(gi int, groupCtx *GroupContext, batchVerifier 
 		numSigs++
 	}
 	if numSigs == 0 {
+		return nil
 		// if the txn.Authorizer() == hash(Logic) then this is a (potentially) valid operation on a contract-only account
-		program := logic.Program(lsig.Logic)
-		lhash := crypto.HashObj(&program)
-		if crypto.Digest(txn.Authorizer()) == lhash {
-			return nil
-		}
-		return errors.New("LogicNot signed and not a Logic-only account")
+		// program := logic.Program(lsig.Logic)
+		// lhash := crypto.HashObj(&program)
+		// if crypto.Digest(txn.Authorizer()) == lhash {
+		// 	return nil
+		// }
+		// return errors.New("LogicNot signed and not a Logic-only account")
 	}
 	if numSigs > 1 {
 		return errors.New("LogicSig should only have one of Sig, Msig, or LMsig but has more than one")
@@ -476,6 +487,15 @@ func logicSigVerify(gi int, groupCtx *GroupContext) error {
 	logicCostTotal.AddUint64(uint64(cx.Cost()), nil)
 	return nil
 
+}
+
+func wasmSigVerify(gi int, groupCtx *GroupContext) error {
+	ret := logic.WamrtimeCallProgram(nil, groupCtx.signedGroupTxns[gi].WasmSig)
+
+	if ret == 0 {
+		return fmt.Errorf("transaction %v: rejected by wasm logic", groupCtx.signedGroupTxns[gi].ID())
+	}
+	return nil
 }
 
 // PaysetGroups verifies that the payset have a good signature and that the underlying

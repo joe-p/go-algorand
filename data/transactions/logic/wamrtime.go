@@ -63,14 +63,19 @@ import (
 	"fmt"
 	"runtime"
 	"runtime/cgo"
+	"sync"
 	"unsafe"
 
 	"github.com/algorand/go-algorand/data/basics"
 )
 
-func wamrtimeCallProgram(evalCtx *EvalContext, program []byte) uint64 {
+var wamrtimeOnce sync.Once
+
+func WamrtimeCallProgram(evalCtx *EvalContext, program []byte) uint64 {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
+
+	wamrtimeEnsureInit()
 
 	handle := cgo.NewHandle(evalCtx)
 	defer handle.Delete()
@@ -83,8 +88,11 @@ func wamrtimeCallProgram(evalCtx *EvalContext, program []byte) uint64 {
 
 }
 
-func wamrtimeInit() {
-	C.avm_init(C.getGoAvmGetGlobalUint(), C.getGoAvmSetGlobalUint(), C.getGoAvmGetGlobalBytes(), C.getGoAvmSetGlobalBytes(), C.getGoAvmGetGlobalVarUint())
+func wamrtimeEnsureInit() {
+	wamrtimeOnce.Do(func() {
+		println("WAMR time initializing...")
+		C.avm_init(C.getGoAvmGetGlobalUint(), C.getGoAvmSetGlobalUint(), C.getGoAvmGetGlobalBytes(), C.getGoAvmSetGlobalBytes(), C.getGoAvmGetGlobalVarUint())
+	})
 }
 
 func wamrtimeException(exec_env unsafe.Pointer, err interface{}) {

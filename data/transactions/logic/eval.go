@@ -1259,8 +1259,6 @@ func EvalSignature(gi int, params *EvalParams) (bool, error) {
 	return pass, err
 }
 
-var wamrtimeInitialized = false
-
 // eval implementation
 // A program passes successfully if it finishes with one int element on the stack that is non-zero.
 func eval(program []byte, cx *EvalContext) (pass bool, err error) {
@@ -1279,12 +1277,9 @@ func eval(program []byte, cx *EvalContext) (pass bool, err error) {
 	}()
 
 	if cx.txn.Txn.WasmProgram != nil {
-		if !wamrtimeInitialized {
-			wamrtimeInit()
-			wamrtimeInitialized = true
-		}
+		wamrtimeEnsureInit()
 
-		ret_val := wamrtimeCallProgram(cx, cx.txn.Txn.WasmProgram)
+		ret_val := WamrtimeCallProgram(cx, cx.txn.Txn.WasmProgram)
 		return ret_val != 0, nil
 	}
 

@@ -1286,15 +1286,11 @@ func eval(program []byte, cx *EvalContext) (pass bool, err error) {
 		}
 
 		wamr_start := time.Now()
-		ret_val, err := wamrtimeCallProgram(cx)
-		if err == nil {
-			cx.Stack = make([]stackValue, 1)
-			cx.Stack[0] = stackValue{Uint: uint64(ret_val)}
-		}
+		ret_val := wamrtimeCallProgram(cx, cx.txn.Txn.WasmProgram)
 		wamr_duration := time.Since(wamr_start)
 		fmt.Println("WASM eval duration:", wamr_duration)
 
-		return ret_val != 0, err
+		return ret_val != 0, nil
 	}
 
 	avmStart := time.Now()

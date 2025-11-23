@@ -7,7 +7,7 @@ package logic
 
 // The function exposed by the Rust library to run the test.
 void test_run();
-uint64_t test_avm_run_program(uint8_t* err_buf, uint64_t err_buf_len);
+uint64_t avm_call_program(uint8_t* program_bytes_ptr , uint64_t program_bytes_len);
 void avm_set_exception(void* exec_env, const char* msg);
 
 void avm_set_ctx(void *ctx);
@@ -68,7 +68,7 @@ import (
 	"github.com/algorand/go-algorand/data/basics"
 )
 
-func wamrtimeCallProgram(evalCtx *EvalContext) (uint64, error) {
+func wamrtimeCallProgram(evalCtx *EvalContext, program []byte) uint64 {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
@@ -77,15 +77,9 @@ func wamrtimeCallProgram(evalCtx *EvalContext) (uint64, error) {
 
 	C.avm_set_ctx(unsafe.Pointer(&handle))
 
-	const errBufLen = 128
-	errBuf := make([]byte, errBufLen)
-	ret := C.test_avm_run_program((*C.uint8_t)(unsafe.Pointer(&errBuf[0])), C.uint64_t(errBufLen))
+	ret := C.avm_call_program((*C.uint8_t)(unsafe.Pointer(&program[0])), C.uint64_t(len(program)))
 
-	if errBuf[0] != 0 {
-		return 0, fmt.Errorf("WAMR AVM error: %s", C.GoString((*C.char)(unsafe.Pointer(&errBuf[0]))))
-	}
-
-	return uint64(ret), nil
+	return uint64(ret)
 
 }
 

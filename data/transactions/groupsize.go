@@ -95,3 +95,37 @@ func TxGroupHashesFromSignedWithAD(txgroup []SignedTxnWithAD) []crypto.Digest {
 func GroupID(txgroup []Transaction) crypto.Digest {
 	return crypto.HashObj(TxGroup{TxGroupHashes: TxGroupHashes(txgroup)})
 }
+
+// IsValidFeePaymentCompanionPair reports whether a 2-transaction group follows
+// the companion format: a non-FeePayment txn with zero Group followed by a
+// FeePayment txn with non-zero Group where the fee-payment Group matches the
+// non-fee transaction's GroupID.
+func IsValidFeePaymentCompanionPair(a, b Transaction) bool {
+	if a.Type == protocol.FeePaymentTx || b.Type != protocol.FeePaymentTx {
+		return false
+	}
+
+	feePay := b
+	other := a
+
+	if feePay.Group.IsZero() {
+		return false
+	}
+	if !other.Group.IsZero() {
+		return false
+	}
+
+	return feePay.Group == GroupID([]Transaction{other})
+}
+
+// IsValidFeePaymentCompanionGroupSigned checks the companion format for a
+// signed two-transaction group.
+func IsValidFeePaymentCompanionGroupSigned(txgroup []SignedTxn) bool {
+	return len(txgroup) == 2 && IsValidFeePaymentCompanionPair(txgroup[0].Txn, txgroup[1].Txn)
+}
+
+// IsValidFeePaymentCompanionGroupSignedWithAD checks the companion format for a
+// signed-with-apply-data two-transaction group.
+func IsValidFeePaymentCompanionGroupSignedWithAD(txgroup []SignedTxnWithAD) bool {
+	return len(txgroup) == 2 && IsValidFeePaymentCompanionPair(txgroup[0].Txn, txgroup[1].Txn)
+}

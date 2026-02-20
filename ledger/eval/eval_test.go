@@ -277,19 +277,31 @@ func TestFeePaymentGroupIDRules(t *testing.T) {
 	withoutFeePay := transactions.GroupID([]transactions.Transaction{pay})
 	withFeePay := transactions.GroupID([]transactions.Transaction{pay, fpay})
 	require.Equal(t, withoutFeePay, withFeePay)
+	companionGroup := transactions.GroupID([]transactions.Transaction{pay})
+
+	companionPay := pay
+	companionFeePay := fpay
+	companionPay.Group = crypto.Digest{}
+	companionFeePay.Group = companionGroup
+	err = eval.TestTransactionGroup([]transactions.SignedTxn{companionPay.Sign(keys[0]), companionFeePay.Sign(keys[0])})
+	require.NoError(t, err)
+
+	err = eval.TestTransactionGroup([]transactions.SignedTxn{companionFeePay.Sign(keys[0]), companionPay.Sign(keys[0])})
+	require.ErrorContains(t, err, "FeePayment transaction must be last in group")
+
+	badCompanionFeePay := companionFeePay
+	badCompanionFeePay.Group = crypto.Digest{7}
+	err = eval.TestTransactionGroup([]transactions.SignedTxn{companionPay.Sign(keys[0]), badCompanionFeePay.Sign(keys[0])})
+	require.Error(t, err)
 
 	pay.Group = withFeePay
 	fpay.Group = withFeePay
 	err = eval.TestTransactionGroup([]transactions.SignedTxn{pay.Sign(keys[0]), fpay.Sign(keys[0])})
 	require.NoError(t, err)
 
-	fpayOnlyA := fpay
-	fpayOnlyB := fpay
-	fpayOnlyB.Sender = addrs[1]
-	fpayOnlyGroup := transactions.GroupID([]transactions.Transaction{fpayOnlyA, fpayOnlyB})
-	fpayOnlyA.Group = fpayOnlyGroup
-	fpayOnlyB.Group = fpayOnlyGroup
-	err = eval.TestTransactionGroup([]transactions.SignedTxn{fpayOnlyA.Sign(keys[0]), fpayOnlyB.Sign(keys[1])})
+	fpayOnly := fpay
+	fpayOnly.Group = transactions.GroupID([]transactions.Transaction{pay})
+	err = eval.TestTransactionGroup([]transactions.SignedTxn{fpayOnly.Sign(keys[0])})
 	require.ErrorContains(t, err, "FeePayment must be grouped with non-FeePayment transaction")
 }
 

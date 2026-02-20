@@ -220,6 +220,9 @@ func txnGroupBatchPrep(stxs []transactions.SignedTxn, contextHdr *bookkeeping.Bl
 	feesPaid := uint64(0)
 	lSigPooledSize := 0
 	for i, stxn := range stxs {
+		if stxn.Txn.Type == protocol.FeePaymentTx && i != len(stxs)-1 {
+			return nil, &TxGroupError{err: fmt.Errorf("FeePayment transaction must be last in group"), GroupIndex: i, Reason: TxGroupErrorReasonNotWellFormed}
+		}
 		prepErr := txnBatchPrep(i, groupCtx, verifier)
 		if prepErr != nil {
 			// re-wrap the error with more details

@@ -934,36 +934,47 @@ func (eval *BlockEvaluator) TestTransactionGroup(txgroup []transactions.SignedTx
 		}
 	}
 
+	feePaymentCompanionGroup := transactions.IsValidFeePaymentCompanionGroupSigned(txgroup)
+
 	hasNonFeePay := false
 	for gi, txn := range txgroup {
+		if txn.Txn.Type == protocol.FeePaymentTx && gi != len(txgroup)-1 {
+			return &ledgercore.TxGroupMalformedError{
+				Msg:    "transactionGroup: FeePayment transaction must be last in group",
+				Reason: ledgercore.TxGroupMalformedErrorReasonGeneric,
+			}
+		}
+
 		err := eval.testTransaction(txn)
 		if err != nil {
 			return err
 		}
 
-		// Make sure all transactions in group have the same group value
-		if txn.Txn.Group != txgroup[0].Txn.Group {
-			return &ledgercore.TxGroupMalformedError{
-				Msg: fmt.Sprintf("transactionGroup: inconsistent group values: %v != %v",
-					txn.Txn.Group, txgroup[0].Txn.Group),
-				Reason: ledgercore.TxGroupMalformedErrorReasonInconsistentGroupID,
+		if !feePaymentCompanionGroup {
+			// Make sure all transactions in group have the same group value
+			if txn.Txn.Group != txgroup[0].Txn.Group {
+				return &ledgercore.TxGroupMalformedError{
+					Msg: fmt.Sprintf("transactionGroup: inconsistent group values: %v != %v",
+						txn.Txn.Group, txgroup[0].Txn.Group),
+					Reason: ledgercore.TxGroupMalformedErrorReasonInconsistentGroupID,
+				}
 			}
-		}
 
-		if !txn.Txn.Group.IsZero() {
-			if txn.Txn.Type != protocol.FeePaymentTx {
-				hasNonFeePay = true
-			}
-		} else if len(txgroup) > 1 {
-			return &ledgercore.TxGroupMalformedError{
-				Msg:    fmt.Sprintf("transactionGroup: [%d] had zero Group but was submitted in a group of %d", gi, len(txgroup)),
-				Reason: ledgercore.TxGroupMalformedErrorReasonEmptyGroupID,
+			if !txn.Txn.Group.IsZero() {
+				if txn.Txn.Type != protocol.FeePaymentTx {
+					hasNonFeePay = true
+				}
+			} else if len(txgroup) > 1 {
+				return &ledgercore.TxGroupMalformedError{
+					Msg:    fmt.Sprintf("transactionGroup: [%d] had zero Group but was submitted in a group of %d", gi, len(txgroup)),
+					Reason: ledgercore.TxGroupMalformedErrorReasonEmptyGroupID,
+				}
 			}
 		}
 	}
 
 	// If we had a non-zero Group value, check that all group members are present.
-	if !txgroup[0].Txn.Group.IsZero() {
+	if !feePaymentCompanionGroup && !txgroup[0].Txn.Group.IsZero() {
 		hashes := transactions.TxGroupHashesFromSigned(txgroup)
 		if len(hashes) == 0 || !hasNonFeePay {
 			return &ledgercore.TxGroupMalformedError{
@@ -1026,6 +1037,8 @@ func (eval *BlockEvaluator) TransactionGroup(txgroup ...transactions.SignedTxnWi
 		}
 	}
 
+	feePaymentCompanionGroup := transactions.IsValidFeePaymentCompanionGroupSignedWithAD(txgroup)
+
 	var txibs []transactions.SignedTxnInBlock
 	hasNonFeePay := false
 	var groupTxBytes int
@@ -1048,6 +1061,13 @@ func (eval *BlockEvaluator) TransactionGroup(txgroup ...transactions.SignedTxnWi
 	// Evaluate each transaction in the group
 	txibs = make([]transactions.SignedTxnInBlock, 0, len(txgroup))
 	for gi, txad := range txgroup {
+		if txad.SignedTxn.Txn.Type == protocol.FeePaymentTx && gi != len(txgroup)-1 {
+			return &ledgercore.TxGroupMalformedError{
+				Msg:    "transactionGroup: FeePayment transaction must be last in group",
+				Reason: ledgercore.TxGroupMalformedErrorReasonGeneric,
+			}
+		}
+
 		var txib transactions.SignedTxnInBlock
 
 		if eval.Tracer != nil {
@@ -1073,29 +1093,31 @@ func (eval *BlockEvaluator) TransactionGroup(txgroup ...transactions.SignedTxnWi
 			}
 		}
 
-		// Make sure all transactions in group have the same group value
-		if txad.SignedTxn.Txn.Group != txgroup[0].SignedTxn.Txn.Group {
-			return &ledgercore.TxGroupMalformedError{
-				Msg: fmt.Sprintf("transactionGroup: inconsistent group values: %v != %v",
-					txad.SignedTxn.Txn.Group, txgroup[0].SignedTxn.Txn.Group),
-				Reason: ledgercore.TxGroupMalformedErrorReasonInconsistentGroupID,
+		if !feePaymentCompanionGroup {
+			// Make sure all transactions in group have the same group value
+			if txad.SignedTxn.Txn.Group != txgroup[0].SignedTxn.Txn.Group {
+				return &ledgercore.TxGroupMalformedError{
+					Msg: fmt.Sprintf("transactionGroup: inconsistent group values: %v != %v",
+						txad.SignedTxn.Txn.Group, txgroup[0].SignedTxn.Txn.Group),
+					Reason: ledgercore.TxGroupMalformedErrorReasonInconsistentGroupID,
+				}
 			}
-		}
 
-		if !txad.SignedTxn.Txn.Group.IsZero() {
-			if txad.SignedTxn.Txn.Type != protocol.FeePaymentTx {
-				hasNonFeePay = true
-			}
-		} else if len(txgroup) > 1 {
-			return &ledgercore.TxGroupMalformedError{
-				Msg:    fmt.Sprintf("transactionGroup: [%d] had zero Group but was submitted in a group of %d", gi, len(txgroup)),
-				Reason: ledgercore.TxGroupMalformedErrorReasonEmptyGroupID,
+			if !txad.SignedTxn.Txn.Group.IsZero() {
+				if txad.SignedTxn.Txn.Type != protocol.FeePaymentTx {
+					hasNonFeePay = true
+				}
+			} else if len(txgroup) > 1 {
+				return &ledgercore.TxGroupMalformedError{
+					Msg:    fmt.Sprintf("transactionGroup: [%d] had zero Group but was submitted in a group of %d", gi, len(txgroup)),
+					Reason: ledgercore.TxGroupMalformedErrorReasonEmptyGroupID,
+				}
 			}
 		}
 	}
 
 	// If we had a non-zero Group value, check that all group members are present.
-	if !txgroup[0].SignedTxn.Txn.Group.IsZero() {
+	if !feePaymentCompanionGroup && !txgroup[0].SignedTxn.Txn.Group.IsZero() {
 		hashes := transactions.TxGroupHashesFromSignedWithAD(txgroup)
 		if len(hashes) == 0 || !hasNonFeePay {
 			return &ledgercore.TxGroupMalformedError{

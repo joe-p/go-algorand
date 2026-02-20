@@ -841,6 +841,10 @@ func (block Block) DecodePaysetGroups() ([][]transactions.SignedTxnWithAD, error
 		}
 
 		if lastGroup != nil && (lastGroup[0].SignedTxn.Txn.Group != stxnad.SignedTxn.Txn.Group || lastGroup[0].SignedTxn.Txn.Group.IsZero()) {
+			if len(lastGroup) == 1 && transactions.IsValidFeePaymentCompanionPair(lastGroup[0].SignedTxn.Txn, stxnad.SignedTxn.Txn) {
+				lastGroup = append(lastGroup, stxnad)
+				continue
+			}
 			res = append(res, lastGroup)
 			lastGroup = nil
 		}
@@ -872,6 +876,10 @@ func SignedTxnsToGroups(txns []transactions.SignedTxn) (res [][]transactions.Sig
 	var lastGroup []transactions.SignedTxn
 	for _, tx := range txns {
 		if lastGroup != nil && (lastGroup[0].Txn.Group != tx.Txn.Group || lastGroup[0].Txn.Group.IsZero()) {
+			if len(lastGroup) == 1 && transactions.IsValidFeePaymentCompanionPair(lastGroup[0].Txn, tx.Txn) {
+				lastGroup = append(lastGroup, tx)
+				continue
+			}
 			res = append(res, lastGroup)
 			lastGroup = nil
 		}

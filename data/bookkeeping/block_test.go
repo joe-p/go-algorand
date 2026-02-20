@@ -857,6 +857,81 @@ func TestBlock_ContentsMatchHeader(t *testing.T) {
 	}
 }
 
+func TestSignedTxnsToGroupsFeePaymentCompanion(t *testing.T) {
+	partitiontest.PartitionTest(t)
+	t.Parallel()
+
+	pay := transactions.Transaction{
+		Type: protocol.PaymentTx,
+		Header: transactions.Header{
+			Sender:     basics.Address{1},
+			FirstValid: 1,
+			LastValid:  2,
+		},
+		PaymentTxnFields: transactions.PaymentTxnFields{Receiver: basics.Address{2}},
+	}
+	fpay := transactions.Transaction{
+		Type: protocol.FeePaymentTx,
+		Header: transactions.Header{
+			Sender:     basics.Address{3},
+			FirstValid: 1,
+			LastValid:  2,
+			Group:      transactions.GroupID([]transactions.Transaction{pay}),
+		},
+	}
+
+	groups := SignedTxnsToGroups([]transactions.SignedTxn{{Txn: pay}, {Txn: fpay}})
+	require.Len(t, groups, 1)
+	require.Len(t, groups[0], 2)
+
+	groups = SignedTxnsToGroups([]transactions.SignedTxn{{Txn: fpay}, {Txn: pay}})
+	require.Len(t, groups, 2)
+	require.Len(t, groups[0], 1)
+	require.Len(t, groups[1], 1)
+}
+
+func TestDecodePaysetGroupsFeePaymentCompanion(t *testing.T) {
+	partitiontest.PartitionTest(t)
+	t.Parallel()
+
+	var genesisHash crypto.Digest
+	crypto.RandBytes(genesisHash[:])
+
+	bh := BlockHeader{UpgradeState: UpgradeState{CurrentProtocol: protocol.ConsensusCurrentVersion}, GenesisHash: genesisHash}
+
+	pay := transactions.SignedTxn{Txn: transactions.Transaction{
+		Type: protocol.PaymentTx,
+		Header: transactions.Header{
+			Sender:      basics.Address{1},
+			FirstValid:  1,
+			LastValid:   2,
+			GenesisHash: genesisHash,
+		},
+		PaymentTxnFields: transactions.PaymentTxnFields{Receiver: basics.Address{2}},
+	}}
+	fpay := transactions.SignedTxn{Txn: transactions.Transaction{
+		Type: protocol.FeePaymentTx,
+		Header: transactions.Header{
+			Sender:      basics.Address{3},
+			FirstValid:  1,
+			LastValid:   2,
+			GenesisHash: genesisHash,
+			Group:       transactions.GroupID([]transactions.Transaction{pay.Txn}),
+		},
+	}}
+
+	payIB, err := bh.EncodeSignedTxn(pay, transactions.ApplyData{})
+	require.NoError(t, err)
+	fpayIB, err := bh.EncodeSignedTxn(fpay, transactions.ApplyData{})
+	require.NoError(t, err)
+
+	block := Block{BlockHeader: bh, Payset: transactions.Payset{payIB, fpayIB}}
+	groups, err := block.DecodePaysetGroups()
+	require.NoError(t, err)
+	require.Len(t, groups, 1)
+	require.Len(t, groups[0], 2)
+}
+
 func testBlockContentsMatchHeader(t *testing.T, cv protocol.ConsensusVersion) {
 	a := require.New(t)
 	// Create a block without SHA256 TxnCommitments

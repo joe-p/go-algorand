@@ -21,6 +21,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/algorand/go-algorand/crypto"
 	"github.com/algorand/go-algorand/data/basics"
 	"github.com/algorand/go-algorand/protocol"
 	"github.com/algorand/go-algorand/test/partitiontest"
@@ -56,4 +57,23 @@ func TestGroupIDIgnoresFeePayment(t *testing.T) {
 
 	require.Equal(t, withoutFeePay, withFeePay)
 	require.Len(t, TxGroupHashes([]Transaction{a, fpay, b}), 2)
+}
+
+func TestFeePaymentCompanionPair(t *testing.T) {
+	partitiontest.PartitionTest(t)
+	t.Parallel()
+
+	other := Transaction{Type: protocol.PaymentTx, Header: Header{Sender: basics.Address{1}, FirstValid: 1, LastValid: 2}, PaymentTxnFields: PaymentTxnFields{Receiver: basics.Address{2}}}
+	feePay := Transaction{Type: protocol.FeePaymentTx, Header: Header{Sender: basics.Address{3}, FirstValid: 1, LastValid: 2, Group: GroupID([]Transaction{other})}}
+
+	require.False(t, IsValidFeePaymentCompanionPair(feePay, other))
+	require.True(t, IsValidFeePaymentCompanionPair(other, feePay))
+
+	otherWithGroup := other
+	otherWithGroup.Group = crypto.Digest{9}
+	require.False(t, IsValidFeePaymentCompanionPair(otherWithGroup, feePay))
+
+	badFeePay := feePay
+	badFeePay.Group = crypto.Digest{7}
+	require.False(t, IsValidFeePaymentCompanionPair(other, badFeePay))
 }

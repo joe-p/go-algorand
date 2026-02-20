@@ -3340,6 +3340,7 @@ func (cx *EvalContext) opTxnImpl(gi uint64, src txnSource, field TxnField, ai ui
 	}
 
 	var group []transactions.SignedTxnWithAD
+	groupLen := 0
 	switch src {
 	case srcGroup:
 		if fs.effects && gi >= uint64(cx.groupIndex) {
@@ -3350,15 +3351,17 @@ func (cx *EvalContext) opTxnImpl(gi uint64, src txnSource, field TxnField, ai ui
 			return sv, fmt.Errorf("txn effects can only be read from past txns %d %d", gi, cx.groupIndex)
 		}
 		group = cx.TxnGroup
+		groupLen = cx.avmGroupSize()
 	case srcInner:
 		group = cx.getLastInner()
+		groupLen = len(group)
 	case srcInnerGroup:
 		group = cx.getLastInnerGroup()
+		groupLen = len(group)
 	}
 
-	// We cast the length up, rather than gi down, in case gi overflows `int`.
-	if gi >= uint64(len(group)) {
-		return sv, fmt.Errorf("txn index %d, len(group) is %d", gi, len(group))
+	if gi >= uint64(groupLen) {
+		return sv, fmt.Errorf("txn index %d, len(group) is %d", gi, groupLen)
 	}
 	tx := &group[gi]
 
@@ -3369,6 +3372,14 @@ func (cx *EvalContext) opTxnImpl(gi uint64, src txnSource, field TxnField, ai ui
 	}
 
 	return sv, nil
+}
+
+func (cx *EvalContext) avmGroupSize() int {
+	groupSize := len(cx.TxnGroup)
+	if groupSize > 0 && cx.TxnGroup[groupSize-1].Txn.Type == protocol.FeePaymentTx {
+		groupSize--
+	}
+	return groupSize
 }
 
 func opTxn(cx *EvalContext) error {
@@ -3714,7 +3725,7 @@ func (cx *EvalContext) globalFieldToValue(fs globalFieldSpec) (sv stackValue, er
 	case ZeroAddress:
 		sv.Bytes = zeroAddress[:]
 	case GroupSize:
-		sv.Uint = uint64(len(cx.TxnGroup))
+		sv.Uint = uint64(cx.avmGroupSize())
 	case LogicSigVersion:
 		sv.Uint = cx.Proto.LogicSigVersion
 	case Round:

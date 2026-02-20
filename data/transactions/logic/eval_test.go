@@ -2207,6 +2207,33 @@ gtxn 0 Sender
 	}
 }
 
+func TestFeePaymentNotAVMVisible(t *testing.T) {
+	partitiontest.PartitionTest(t)
+	t.Parallel()
+
+	txgroup := makeSampleTxnGroup()
+	txgroup = append(txgroup, transactions.SignedTxn{Txn: transactions.Transaction{Type: protocol.FeePaymentTx}})
+	ep := defaultSigParams(txgroup...)
+
+	t.Run("GroupSizeExcludesFeePayment", func(t *testing.T) {
+		testLogic(t, "global GroupSize; int 2; ==", 2, ep)
+	})
+
+	t.Run("GtxnCannotAccessFeePayment", func(t *testing.T) {
+		testLogic(t, "gtxn 2 Amount; int 0; ==", 2, ep, "txn index 2, len(group) is 2")
+	})
+
+	t.Run("GtxnsCannotAccessFeePayment", func(t *testing.T) {
+		testLogic(t, "int 2; gtxns Amount; int 0; ==", 3, ep, "txn index 2, len(group) is 2")
+	})
+
+	t.Run("LogicSigOnFeePaymentStillWorks", func(t *testing.T) {
+		ops := testProg(t, "global GroupSize; int 2; ==", 2)
+		err := testLogicFull(t, ops.Program, 2, ep)
+		require.NoError(t, err)
+	})
+}
+
 func testLogic(t *testing.T, program string, v uint64, ep *EvalParams, problems ...string) {
 	t.Helper()
 	ops := testProg(t, program, v)

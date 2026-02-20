@@ -2793,6 +2793,22 @@ int 1
 `, ep)
 }
 
+func TestFeePaymentNotAVMVisibleInAppMode(t *testing.T) {
+	partitiontest.PartitionTest(t)
+	t.Parallel()
+
+	appTxn := MakeSampleTxn()
+	appTxn.Txn.Type = protocol.ApplicationCallTx
+	appTxn.Txn.ApplicationID = 888
+	txgroup := MakeSampleTxnGroup(appTxn)
+	txgroup = append(txgroup, transactions.SignedTxn{Txn: transactions.Transaction{Type: protocol.FeePaymentTx}})
+	ep := DefaultAppParams(txgroup...)
+
+	TestApp(t, "global GroupSize; int 2; ==", ep)
+	TestApp(t, "gtxn 2 Amount; int 0; ==", ep, "txn index 2, len(group) is 2")
+	TestApp(t, "int 2; gtxns Amount; int 0; ==", ep, "txn index 2, len(group) is 2")
+}
+
 // TestGtxnApps confirms that gtxn can now access previous txn's created app id.
 func TestGtxnApps(t *testing.T) {
 	partitiontest.PartitionTest(t)

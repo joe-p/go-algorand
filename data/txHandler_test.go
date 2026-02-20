@@ -623,8 +623,9 @@ func TestTxHandlerProcessIncomingGroup(t *testing.T) {
 	for i := 1; i <= bounds.MaxTxGroupSize; i++ {
 		checks = append(checks, T{i, i, network.Ignore})
 	}
+	checks = append(checks, T{transactions.MaxGroupSizeWithFeePayment(bounds.MaxTxGroupSize), transactions.MaxGroupSizeWithFeePayment(bounds.MaxTxGroupSize), network.Ignore})
 	for i := 1; i < 10; i++ {
-		checks = append(checks, T{bounds.MaxTxGroupSize + i, 0, network.Disconnect})
+		checks = append(checks, T{transactions.MaxGroupSizeWithFeePayment(bounds.MaxTxGroupSize) + i, 0, network.Disconnect})
 	}
 
 	for _, check := range checks {

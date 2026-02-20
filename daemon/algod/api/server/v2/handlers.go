@@ -1152,8 +1152,12 @@ func (v2 *Handlers) RawTransaction(ctx echo.Context) error {
 	}
 	proto := config.Consensus[stat.LastVersion]
 
-	txgroup, err := decodeTxGroup(ctx.Request().Body, proto.MaxTxGroupSize)
+	txgroup, err := decodeTxGroup(ctx.Request().Body, transactions.MaxGroupSizeWithFeePayment(proto.MaxTxGroupSize))
 	if err != nil {
+		return badRequest(ctx, err, err.Error(), v2.Log)
+	}
+	if !transactions.IsValidGroupSize(proto.MaxTxGroupSize, len(txgroup), transactions.FeePaymentCount(txgroup)) {
+		err = fmt.Errorf("group size %d exceeds maximum %d (or %d with FeePayment)", len(txgroup), proto.MaxTxGroupSize, transactions.MaxGroupSizeWithFeePayment(proto.MaxTxGroupSize))
 		return badRequest(ctx, err, err.Error(), v2.Log)
 	}
 
@@ -1176,8 +1180,12 @@ func (v2 *Handlers) RawTransactionAsync(ctx echo.Context) error {
 	if !v2.Node.Config().EnableDeveloperAPI {
 		return ctx.String(http.StatusNotFound, "/transactions/async was not enabled in the configuration file by setting the EnableDeveloperAPI to true")
 	}
-	txgroup, err := decodeTxGroup(ctx.Request().Body, bounds.MaxTxGroupSize)
+	txgroup, err := decodeTxGroup(ctx.Request().Body, transactions.MaxGroupSizeWithFeePayment(bounds.MaxTxGroupSize))
 	if err != nil {
+		return badRequest(ctx, err, err.Error(), v2.Log)
+	}
+	if !transactions.IsValidGroupSize(bounds.MaxTxGroupSize, len(txgroup), transactions.FeePaymentCount(txgroup)) {
+		err = fmt.Errorf("group size %d exceeds maximum %d (or %d with FeePayment)", len(txgroup), bounds.MaxTxGroupSize, transactions.MaxGroupSizeWithFeePayment(bounds.MaxTxGroupSize))
 		return badRequest(ctx, err, err.Error(), v2.Log)
 	}
 	err = v2.Node.AsyncBroadcastSignedTxGroup(txgroup)
@@ -1462,8 +1470,8 @@ func (v2 *Handlers) SimulateTransaction(ctx echo.Context, params model.SimulateT
 			err = errors.New("empty txgroup")
 			return badRequest(ctx, err, err.Error(), v2.Log)
 		}
-		if len(txgroup.Txns) > proto.MaxTxGroupSize {
-			err = fmt.Errorf("transaction group size %d exceeds protocol max %d", len(txgroup.Txns), proto.MaxTxGroupSize)
+		if !transactions.IsValidGroupSize(proto.MaxTxGroupSize, len(txgroup.Txns), transactions.FeePaymentCount(txgroup.Txns)) {
+			err = fmt.Errorf("transaction group size %d exceeds protocol max %d (or %d with FeePayment)", len(txgroup.Txns), proto.MaxTxGroupSize, transactions.MaxGroupSizeWithFeePayment(proto.MaxTxGroupSize))
 			return badRequest(ctx, err, err.Error(), v2.Log)
 		}
 	}

@@ -68,11 +68,6 @@ var maxAppCallDepth = 8
 // maxStackDepth should not change unless controlled by an AVM version change
 const maxStackDepth = 1000
 
-// maxTxGroupSize is the same as bounds.MaxTxGroupSize, but is a constant so
-// that we can declare an array of this size. A unit test confirms that they
-// match.
-const maxTxGroupSize = 16
-
 // stackValue is the type for the operand stack.
 // Each stackValue is either a valid []byte value or a uint64 value.
 // If (.Bytes != nil) the stackValue is a []byte value, otherwise uint64 value.
@@ -319,7 +314,7 @@ type EvalParams struct {
 
 	TxnGroup []transactions.SignedTxnWithAD
 
-	pastScratch [maxTxGroupSize]*scratchSpace
+	pastScratch []*scratchSpace
 
 	logger logging.Logger
 
@@ -438,6 +433,7 @@ func NewSigEvalParams(txgroup []transactions.SignedTxn, proto *config.ConsensusP
 	return &EvalParams{
 		runMode:              ModeSig,
 		TxnGroup:             withADs,
+		pastScratch:          make([]*scratchSpace, len(withADs)),
 		Proto:                proto,
 		minAvmVersion:        computeMinAvmVersion(withADs),
 		SigLedger:            ls,
@@ -476,6 +472,7 @@ func NewAppEvalParams(txgroup []transactions.SignedTxnWithAD, proto *config.Cons
 	ep := &EvalParams{
 		runMode:                 ModeApp,
 		TxnGroup:                copyWithClearAD(txgroup),
+		pastScratch:             make([]*scratchSpace, len(txgroup)),
 		Proto:                   proto,
 		Specials:                specials,
 		minAvmVersion:           computeMinAvmVersion(txgroup),
@@ -542,6 +539,7 @@ func NewInnerEvalParams(txg []transactions.SignedTxnWithAD, caller *EvalContext)
 		Proto:                   caller.Proto,
 		Trace:                   caller.Trace,
 		TxnGroup:                txg,
+		pastScratch:             make([]*scratchSpace, len(txg)),
 		logger:                  caller.logger,
 		SigLedger:               caller.SigLedger,
 		Ledger:                  caller.Ledger,

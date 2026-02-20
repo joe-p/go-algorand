@@ -927,9 +927,9 @@ func (eval *BlockEvaluator) TestTransactionGroup(txgroup []transactions.SignedTx
 		return nil
 	}
 
-	if len(txgroup) > eval.proto.MaxTxGroupSize {
+	if !transactions.IsValidGroupSize(eval.proto.MaxTxGroupSize, len(txgroup), transactions.FeePaymentCount(txgroup)) {
 		return &ledgercore.TxGroupMalformedError{
-			Msg:    fmt.Sprintf("group size %d exceeds maximum %d", len(txgroup), eval.proto.MaxTxGroupSize),
+			Msg:    fmt.Sprintf("group size %d exceeds maximum %d (or %d with FeePayment)", len(txgroup), eval.proto.MaxTxGroupSize, transactions.MaxGroupSizeWithFeePayment(eval.proto.MaxTxGroupSize)),
 			Reason: ledgercore.TxGroupMalformedErrorReasonExceedMaxSize,
 		}
 	}
@@ -1012,9 +1012,9 @@ func (eval *BlockEvaluator) TransactionGroup(txgroup ...transactions.SignedTxnWi
 		return nil
 	}
 
-	if len(txgroup) > eval.proto.MaxTxGroupSize {
+	if !transactions.IsValidGroupSize(eval.proto.MaxTxGroupSize, len(txgroup), transactions.FeePaymentCountWithAD(txgroup)) {
 		return &ledgercore.TxGroupMalformedError{
-			Msg:    fmt.Sprintf("group size %d exceeds maximum %d", len(txgroup), eval.proto.MaxTxGroupSize),
+			Msg:    fmt.Sprintf("group size %d exceeds maximum %d (or %d with FeePayment)", len(txgroup), eval.proto.MaxTxGroupSize, transactions.MaxGroupSizeWithFeePayment(eval.proto.MaxTxGroupSize)),
 			Reason: ledgercore.TxGroupMalformedErrorReasonExceedMaxSize,
 		}
 	}

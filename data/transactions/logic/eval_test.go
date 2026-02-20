@@ -33,7 +33,6 @@ import (
 	"pgregory.net/rapid"
 
 	"github.com/algorand/go-algorand/config"
-	"github.com/algorand/go-algorand/config/bounds"
 	"github.com/algorand/go-algorand/crypto"
 	"github.com/algorand/go-algorand/data/basics"
 	"github.com/algorand/go-algorand/data/bookkeeping"
@@ -229,7 +228,7 @@ func (ep *EvalParams) reset() {
 			inners := ep.Proto.MaxTxGroupSize * ep.Proto.MaxInnerTransactions
 			ep.pooledAllowedInners = &inners
 		}
-		ep.pastScratch = [maxTxGroupSize]*scratchSpace{}
+		ep.pastScratch = make([]*scratchSpace, len(ep.TxnGroup))
 		for i := range ep.TxnGroup {
 			ep.TxnGroup[i].ApplyData = transactions.ApplyData{}
 		}
@@ -6232,11 +6231,4 @@ func TestNoHeaderLedger(t *testing.T) {
 	_, err := nhl.BlockHdr(1)
 	require.Error(t, err)
 	require.Equal(t, err, fmt.Errorf("no block header access"))
-}
-
-func TestMaxTxGroup(t *testing.T) {
-	partitiontest.PartitionTest(t)
-	t.Parallel()
-
-	require.Equal(t, bounds.MaxTxGroupSize, maxTxGroupSize)
 }

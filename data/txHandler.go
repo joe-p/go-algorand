@@ -682,7 +682,7 @@ func decodeMsg(data []byte) (unverifiedTxGroup []transactions.SignedTxn, consume
 		}
 		consumed = dec.Consumed()
 		ntx++
-		if ntx >= bounds.MaxTxGroupSize {
+		if ntx >= transactions.MaxGroupSizeWithFeePayment(bounds.MaxTxGroupSize) {
 			// max ever possible group size reached, done reading input.
 			if dec.Remaining() > 0 {
 				// if something else left in the buffer - this is an error, drop
@@ -698,7 +698,7 @@ func decodeMsg(data []byte) (unverifiedTxGroup []transactions.SignedTxn, consume
 
 	unverifiedTxGroup = unverifiedTxGroup[:ntx]
 
-	if ntx == bounds.MaxTxGroupSize {
+	if ntx == transactions.MaxGroupSizeWithFeePayment(bounds.MaxTxGroupSize) {
 		transactionMessageTxGroupFull.Inc(nil)
 	}
 

@@ -16,7 +16,10 @@
 
 package transactions
 
-import "github.com/algorand/go-algorand/protocol"
+import (
+	"github.com/algorand/go-algorand/crypto"
+	"github.com/algorand/go-algorand/protocol"
+)
 
 // MaxGroupSizeWithFeePayment returns the physical transaction-group size limit,
 // allowing one additional slot when fee-payment transactions are present.
@@ -54,4 +57,41 @@ func FeePaymentCountWithAD(txgroup []SignedTxnWithAD) int {
 		}
 	}
 	return count
+}
+
+// TxGroupHashes excludes FeePayment transactions from GroupID construction.
+func TxGroupHashes(txgroup []Transaction) []crypto.Digest {
+	hashes := make([]crypto.Digest, 0, len(txgroup))
+	for i := range txgroup {
+		if txgroup[i].Type == protocol.FeePaymentTx {
+			continue
+		}
+		txWithoutGroup := txgroup[i]
+		txWithoutGroup.Group = crypto.Digest{}
+		hashes = append(hashes, crypto.Digest(txWithoutGroup.ID()))
+	}
+	return hashes
+}
+
+// TxGroupHashesFromSigned excludes FeePayment transactions from GroupID construction.
+func TxGroupHashesFromSigned(txgroup []SignedTxn) []crypto.Digest {
+	txns := make([]Transaction, len(txgroup))
+	for i := range txgroup {
+		txns[i] = txgroup[i].Txn
+	}
+	return TxGroupHashes(txns)
+}
+
+// TxGroupHashesFromSignedWithAD excludes FeePayment transactions from GroupID construction.
+func TxGroupHashesFromSignedWithAD(txgroup []SignedTxnWithAD) []crypto.Digest {
+	txns := make([]Transaction, len(txgroup))
+	for i := range txgroup {
+		txns[i] = txgroup[i].Txn
+	}
+	return TxGroupHashes(txns)
+}
+
+// GroupID computes GroupID while excluding FeePayment transactions.
+func GroupID(txgroup []Transaction) crypto.Digest {
+	return crypto.HashObj(TxGroup{TxGroupHashes: TxGroupHashes(txgroup)})
 }

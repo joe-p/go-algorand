@@ -230,6 +230,69 @@ func TestPrivateTransactionGroup(t *testing.T) {
 	require.ErrorContains(t, err, "group size")
 }
 
+func TestFeePaymentGroupIDRules(t *testing.T) {
+	partitiontest.PartitionTest(t)
+	t.Parallel()
+
+	genesisInitState, addrs, keys := ledgertesting.Genesis(2)
+	genesisBalances := bookkeeping.GenesisBalances{
+		Balances:    genesisInitState.Accounts,
+		FeeSink:     testSinkAddr,
+		RewardsPool: testPoolAddr,
+		Timestamp:   0,
+	}
+	l := newTestLedger(t, genesisBalances)
+
+	blkHeader, err := l.BlockHdr(basics.Round(0))
+	require.NoError(t, err)
+	newBlock := bookkeeping.MakeBlock(blkHeader)
+	eval, err := l.StartEvaluator(newBlock.BlockHeader, 0, 0, nil)
+	require.NoError(t, err)
+
+	pay := transactions.Transaction{
+		Type: protocol.PaymentTx,
+		Header: transactions.Header{
+			Sender:      addrs[0],
+			Fee:         basics.MicroAlgos{Raw: eval.proto.MinTxnFee},
+			FirstValid:  newBlock.Round(),
+			LastValid:   newBlock.Round(),
+			GenesisHash: l.GenesisHash(),
+		},
+		PaymentTxnFields: transactions.PaymentTxnFields{
+			Receiver: addrs[1],
+			Amount:   basics.MicroAlgos{Raw: 1},
+		},
+	}
+	fpay := transactions.Transaction{
+		Type: protocol.FeePaymentTx,
+		Header: transactions.Header{
+			Sender:      addrs[0],
+			Fee:         basics.MicroAlgos{Raw: eval.proto.MinTxnFee},
+			FirstValid:  newBlock.Round(),
+			LastValid:   newBlock.Round(),
+			GenesisHash: l.GenesisHash(),
+		},
+	}
+
+	withoutFeePay := transactions.GroupID([]transactions.Transaction{pay})
+	withFeePay := transactions.GroupID([]transactions.Transaction{pay, fpay})
+	require.Equal(t, withoutFeePay, withFeePay)
+
+	pay.Group = withFeePay
+	fpay.Group = withFeePay
+	err = eval.TestTransactionGroup([]transactions.SignedTxn{pay.Sign(keys[0]), fpay.Sign(keys[0])})
+	require.NoError(t, err)
+
+	fpayOnlyA := fpay
+	fpayOnlyB := fpay
+	fpayOnlyB.Sender = addrs[1]
+	fpayOnlyGroup := transactions.GroupID([]transactions.Transaction{fpayOnlyA, fpayOnlyB})
+	fpayOnlyA.Group = fpayOnlyGroup
+	fpayOnlyB.Group = fpayOnlyGroup
+	err = eval.TestTransactionGroup([]transactions.SignedTxn{fpayOnlyA.Sign(keys[0]), fpayOnlyB.Sign(keys[1])})
+	require.ErrorContains(t, err, "FeePayment must be grouped with non-FeePayment transaction")
+}
+
 func TestTransactionGroupWithTracer(t *testing.T) {
 	partitiontest.PartitionTest(t)
 	t.Parallel()

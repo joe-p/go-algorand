@@ -960,15 +960,12 @@ func (c *Client) MakeUnsignedAssetFreezeTx(index basics.AssetIndex, accountToCha
 
 // GroupID computes the group ID for a group of transactions.
 func (c *Client) GroupID(txgroup []transactions.Transaction) (gid crypto.Digest, err error) {
-	var group transactions.TxGroup
 	for _, tx := range txgroup {
 		if !tx.Group.IsZero() {
 			err = fmt.Errorf("tx %v already has a group %v", tx, tx.Group)
 			return
 		}
-
-		group.TxGroupHashes = append(group.TxGroupHashes, crypto.Digest(tx.ID()))
 	}
 
-	return crypto.HashObj(group), nil
+	return transactions.GroupID(txgroup), nil
 }

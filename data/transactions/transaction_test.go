@@ -152,6 +152,26 @@ func TestLogicSigEquality(t *testing.T) {
 
 }
 
+func TestFeePaymentRequiresGroup(t *testing.T) {
+	partitiontest.PartitionTest(t)
+	t.Parallel()
+
+	proto := config.Consensus[protocol.ConsensusCurrentVersion]
+	tx := Transaction{
+		Type: protocol.FeePaymentTx,
+		Header: Header{
+			Sender:     basics.Address{1},
+			Fee:        basics.MicroAlgos{Raw: proto.MinTxnFee},
+			FirstValid: 1,
+			LastValid:  1 + basics.Round(proto.MaxTxnLife),
+		},
+	}
+
+	err := tx.WellFormed(SpecialAddresses{}, proto)
+	require.Error(t, err)
+	require.ErrorContains(t, err, "fee payment transaction must be grouped")
+}
+
 func TestFeePaymentWellFormed(t *testing.T) {
 	partitiontest.PartitionTest(t)
 	t.Parallel()
@@ -164,6 +184,7 @@ func TestFeePaymentWellFormed(t *testing.T) {
 			Fee:        basics.MicroAlgos{Raw: proto.MinTxnFee},
 			FirstValid: 1,
 			LastValid:  1 + basics.Round(proto.MaxTxnLife),
+			Group:      crypto.Digest{3},
 		},
 	}
 
@@ -182,6 +203,7 @@ func TestFeePaymentRejectsPaymentFields(t *testing.T) {
 			Fee:        basics.MicroAlgos{Raw: proto.MinTxnFee},
 			FirstValid: 1,
 			LastValid:  1 + basics.Round(proto.MaxTxnLife),
+			Group:      crypto.Digest{3},
 		},
 		PaymentTxnFields: PaymentTxnFields{Receiver: basics.Address{2}},
 	}

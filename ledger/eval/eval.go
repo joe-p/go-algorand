@@ -934,7 +934,7 @@ func (eval *BlockEvaluator) TestTransactionGroup(txgroup []transactions.SignedTx
 		}
 	}
 
-	var group transactions.TxGroup
+	hasNonFeePay := false
 	for gi, txn := range txgroup {
 		err := eval.testTransaction(txn)
 		if err != nil {
@@ -951,10 +951,9 @@ func (eval *BlockEvaluator) TestTransactionGroup(txgroup []transactions.SignedTx
 		}
 
 		if !txn.Txn.Group.IsZero() {
-			txWithoutGroup := txn.Txn
-			txWithoutGroup.Group = crypto.Digest{}
-
-			group.TxGroupHashes = append(group.TxGroupHashes, crypto.Digest(txWithoutGroup.ID()))
+			if txn.Txn.Type != protocol.FeePaymentTx {
+				hasNonFeePay = true
+			}
 		} else if len(txgroup) > 1 {
 			return &ledgercore.TxGroupMalformedError{
 				Msg:    fmt.Sprintf("transactionGroup: [%d] had zero Group but was submitted in a group of %d", gi, len(txgroup)),
@@ -964,11 +963,19 @@ func (eval *BlockEvaluator) TestTransactionGroup(txgroup []transactions.SignedTx
 	}
 
 	// If we had a non-zero Group value, check that all group members are present.
-	if group.TxGroupHashes != nil {
-		if txgroup[0].Txn.Group != crypto.HashObj(group) {
+	if !txgroup[0].Txn.Group.IsZero() {
+		hashes := transactions.TxGroupHashesFromSigned(txgroup)
+		if len(hashes) == 0 || !hasNonFeePay {
+			return &ledgercore.TxGroupMalformedError{
+				Msg:    "transactionGroup: FeePayment must be grouped with non-FeePayment transaction",
+				Reason: ledgercore.TxGroupMalformedErrorReasonIncompleteGroup,
+			}
+		}
+		expectedGroup := crypto.HashObj(transactions.TxGroup{TxGroupHashes: hashes})
+		if txgroup[0].Txn.Group != expectedGroup {
 			return &ledgercore.TxGroupMalformedError{
 				Msg: fmt.Sprintf("transactionGroup: incomplete group: %v != %v (%v)",
-					txgroup[0].Txn.Group, crypto.HashObj(group), group),
+					txgroup[0].Txn.Group, expectedGroup, transactions.TxGroup{TxGroupHashes: hashes}),
 				Reason: ledgercore.TxGroupMalformedErrorReasonIncompleteGroup,
 			}
 		}
@@ -1020,7 +1027,7 @@ func (eval *BlockEvaluator) TransactionGroup(txgroup ...transactions.SignedTxnWi
 	}
 
 	var txibs []transactions.SignedTxnInBlock
-	var group transactions.TxGroup
+	hasNonFeePay := false
 	var groupTxBytes int
 
 	cow := eval.state.child(len(txgroup))
@@ -1076,10 +1083,9 @@ func (eval *BlockEvaluator) TransactionGroup(txgroup ...transactions.SignedTxnWi
 		}
 
 		if !txad.SignedTxn.Txn.Group.IsZero() {
-			txWithoutGroup := txad.SignedTxn.Txn
-			txWithoutGroup.Group = crypto.Digest{}
-
-			group.TxGroupHashes = append(group.TxGroupHashes, crypto.Digest(txWithoutGroup.ID()))
+			if txad.SignedTxn.Txn.Type != protocol.FeePaymentTx {
+				hasNonFeePay = true
+			}
 		} else if len(txgroup) > 1 {
 			return &ledgercore.TxGroupMalformedError{
 				Msg:    fmt.Sprintf("transactionGroup: [%d] had zero Group but was submitted in a group of %d", gi, len(txgroup)),
@@ -1089,11 +1095,19 @@ func (eval *BlockEvaluator) TransactionGroup(txgroup ...transactions.SignedTxnWi
 	}
 
 	// If we had a non-zero Group value, check that all group members are present.
-	if group.TxGroupHashes != nil {
-		if txgroup[0].SignedTxn.Txn.Group != crypto.HashObj(group) {
+	if !txgroup[0].SignedTxn.Txn.Group.IsZero() {
+		hashes := transactions.TxGroupHashesFromSignedWithAD(txgroup)
+		if len(hashes) == 0 || !hasNonFeePay {
+			return &ledgercore.TxGroupMalformedError{
+				Msg:    "transactionGroup: FeePayment must be grouped with non-FeePayment transaction",
+				Reason: ledgercore.TxGroupMalformedErrorReasonIncompleteGroup,
+			}
+		}
+		expectedGroup := crypto.HashObj(transactions.TxGroup{TxGroupHashes: hashes})
+		if txgroup[0].SignedTxn.Txn.Group != expectedGroup {
 			return &ledgercore.TxGroupMalformedError{
 				Msg: fmt.Sprintf("transactionGroup: incomplete group: %v != %v (%v)",
-					txgroup[0].SignedTxn.Txn.Group, crypto.HashObj(group), group),
+					txgroup[0].SignedTxn.Txn.Group, expectedGroup, transactions.TxGroup{TxGroupHashes: hashes}),
 				Reason: ledgercore.TxGroupMalformedErrorReasonIncompleteGroup,
 			}
 		}

@@ -924,7 +924,7 @@ var groupCmd = &cobra.Command{
 		dec := protocol.NewMsgpDecoderBytes(data)
 
 		var stxns []transactions.SignedTxn
-		var group transactions.TxGroup
+		var txns []transactions.Transaction
 		transactionIdx := 0
 		for {
 			var stxn transactions.SignedTxn
@@ -946,11 +946,11 @@ var groupCmd = &cobra.Command{
 			}
 
 			stxns = append(stxns, stxn)
-			group.TxGroupHashes = append(group.TxGroupHashes, crypto.Digest(stxn.ID()))
+			txns = append(txns, stxn.Txn)
 			transactionIdx++
 		}
 
-		groupHash := crypto.HashObj(group)
+		groupHash := transactions.GroupID(txns)
 		for i := range stxns {
 			stxns[i].Txn.Group = groupHash
 		}

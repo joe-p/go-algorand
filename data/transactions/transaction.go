@@ -398,6 +398,9 @@ func (tx Transaction) WellFormed(spec SpecialAddresses, proto config.ConsensusPa
 		}
 
 	case protocol.FeePaymentTx:
+		if tx.Group.IsZero() {
+			return fmt.Errorf("fee payment transaction must be grouped")
+		}
 
 	default:
 		return fmt.Errorf("unknown tx type %v", tx.Type)

@@ -324,18 +324,17 @@ func (tx Txn) SignedTxn() transactions.SignedTxn {
 // GroupIDs set properly to make them a transaction group. The input
 // Txns are modified with the calculated GroupID.
 func Group(txns ...*Txn) []transactions.SignedTxn {
-	txgroup := transactions.TxGroup{
-		TxGroupHashes: make([]crypto.Digest, len(txns)),
-	}
 	stxns := make([]transactions.SignedTxn, len(txns))
+	groupTxns := make([]transactions.Transaction, len(txns))
 	for i, txn := range txns {
 		stxns[i] = txn.SignedTxn()
+		groupTxns[i] = stxns[i].Txn
 	}
 	for i, txn := range stxns {
 		txn.Txn.Group = crypto.Digest{}
-		txgroup.TxGroupHashes[i] = crypto.Digest(txn.ID())
+		groupTxns[i].Group = crypto.Digest{}
 	}
-	group := crypto.HashObj(txgroup)
+	group := transactions.GroupID(groupTxns)
 	for i, txn := range txns {
 		txn.Group = group
 		stxns[i].Txn.Group = group

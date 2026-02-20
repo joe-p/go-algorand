@@ -6232,3 +6232,20 @@ func TestNoHeaderLedger(t *testing.T) {
 	require.Error(t, err)
 	require.Equal(t, err, fmt.Errorf("no block header access"))
 }
+
+func TestFeeCreditIgnoresFeePayment(t *testing.T) {
+	partitiontest.PartitionTest(t)
+	t.Parallel()
+
+	proto := config.Consensus[protocol.ConsensusCurrentVersion]
+	txgroup := []transactions.SignedTxnWithAD{
+		{SignedTxn: transactions.SignedTxn{Txn: transactions.Transaction{Type: protocol.PaymentTx, Header: transactions.Header{Fee: basics.MicroAlgos{Raw: proto.MinTxnFee}}}}},
+		{SignedTxn: transactions.SignedTxn{Txn: transactions.Transaction{Type: protocol.PaymentTx, Header: transactions.Header{Fee: basics.MicroAlgos{Raw: proto.MinTxnFee}}}}},
+		{SignedTxn: transactions.SignedTxn{Txn: transactions.Transaction{Type: protocol.FeePaymentTx, Header: transactions.Header{Fee: basics.MicroAlgos{Raw: 0}}}}},
+	}
+
+	require.Equal(t, uint64(0), feeCredit(txgroup, proto.MinTxnFee))
+
+	txgroup[2].Txn.Fee = basics.MicroAlgos{Raw: 17}
+	require.Equal(t, uint64(17), feeCredit(txgroup, proto.MinTxnFee))
+}

@@ -448,6 +448,8 @@ func (tx Transaction) WellFormed(spec SpecialAddresses, proto config.ConsensusPa
 	if !proto.EnableFeePooling && tx.Fee.LessThan(basics.MicroAlgos{Raw: proto.MinTxnFee}) {
 		if tx.Type == protocol.StateProofTx {
 			// Zero fee allowed for stateProof txn.
+		} else if tx.Type == protocol.FeePaymentTx {
+			// FeePayment txns do not raise pooled minimum fee requirements.
 		} else {
 			return makeMinFeeErrorf("transaction had fee %d, which is less than the minimum %d", tx.Fee.Raw, proto.MinTxnFee)
 		}

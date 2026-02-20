@@ -507,7 +507,7 @@ func feeCredit(txgroup []transactions.SignedTxnWithAD, minFee uint64) uint64 {
 	minFeeCount := uint64(0)
 	feesPaid := uint64(0)
 	for _, stxn := range txgroup {
-		if stxn.Txn.Type != protocol.StateProofTx {
+		if stxn.Txn.Type != protocol.StateProofTx && stxn.Txn.Type != protocol.FeePaymentTx {
 			minFeeCount++
 		}
 		feesPaid = basics.AddSaturate(feesPaid, stxn.Txn.Fee.Raw)

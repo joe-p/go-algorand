@@ -232,6 +232,10 @@ func txnGroupBatchPrep(stxs []transactions.SignedTxn, contextHdr *bookkeeping.Bl
 			// State proofs are free, bail before incrementing
 			continue
 		}
+		if stxn.Txn.Type == protocol.FeePaymentTx {
+			// Fee-payment txns do not increase pooled minimum fee requirements.
+			continue
+		}
 		if stxn.Txn.Type == protocol.HeartbeatTx && stxn.Txn.Group.IsZero() {
 			// In apply.Heartbeat, we further confirm that the heartbeat is for
 			// a challenged account. Such heartbeats are free, bail before

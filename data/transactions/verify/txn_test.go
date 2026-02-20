@@ -376,6 +376,64 @@ func TestTxnValidationStateProof(t *testing.T) {
 	require.Error(t, err, "state proof txn %#v verified", stxn2)
 }
 
+func TestTxnGroupFeePaymentDoesNotIncreasePooledMinFee(t *testing.T) {
+	partitiontest.PartitionTest(t)
+	t.Parallel()
+
+	proto := config.Consensus[protocol.ConsensusCurrentVersion]
+	secret := keypair()
+	sender := basics.Address(secret.SignatureVerifier)
+	receiver := basics.Address{9}
+
+	payA := txntest.Txn{
+		Type:       protocol.PaymentTx,
+		Sender:     sender,
+		Receiver:   receiver,
+		Amount:     1,
+		Fee:        proto.MinTxnFee,
+		FirstValid: 1,
+		LastValid:  1000,
+	}
+	payB := txntest.Txn{
+		Type:       protocol.PaymentTx,
+		Sender:     sender,
+		Receiver:   receiver,
+		Amount:     1,
+		Fee:        proto.MinTxnFee,
+		FirstValid: 1,
+		LastValid:  1000,
+	}
+	feePay := txntest.Txn{
+		Type:       protocol.FeePaymentTx,
+		Sender:     sender,
+		Fee:        uint64(0),
+		FirstValid: 1,
+		LastValid:  1000,
+	}
+
+	txntest.Group(&feePay, &payA, &payB)
+
+	good := []transactions.SignedTxn{
+		feePay.Txn().Sign(secret),
+		payA.Txn().Sign(secret),
+		payB.Txn().Sign(secret),
+	}
+
+	_, err := TxnGroup(good, blockHeader, nil, nil)
+	require.NoError(t, err)
+
+	payB.Fee = proto.MinTxnFee - 1
+	txntest.Group(&feePay, &payA, &payB)
+	bad := []transactions.SignedTxn{
+		feePay.Txn().Sign(secret),
+		payA.Txn().Sign(secret),
+		payB.Txn().Sign(secret),
+	}
+
+	_, err = TxnGroup(bad, blockHeader, nil, nil)
+	require.ErrorContains(t, err, "txgroup had")
+}
+
 func TestDecodeNil(t *testing.T) {
 	partitiontest.PartitionTest(t)
 

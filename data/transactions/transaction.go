@@ -397,6 +397,8 @@ func (tx Transaction) WellFormed(spec SpecialAddresses, proto config.ConsensusPa
 			return err
 		}
 
+	case protocol.FeePaymentTx:
+
 	default:
 		return fmt.Errorf("unknown tx type %v", tx.Type)
 	}

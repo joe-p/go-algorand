@@ -466,6 +466,7 @@ var TxnTypeNames = [...]string{
 	string(protocol.ApplicationCallTx),
 	string(protocol.StateProofTx),
 	string(protocol.HeartbeatTx),
+	string(protocol.FeePaymentTx),
 }
 
 // txnTypeLongNames provide a friendlier type constant name in assembler.
@@ -478,6 +479,7 @@ var txnTypeLongNames = map[string]string{
 	string(protocol.ApplicationCallTx): "ApplicationCall",
 	string(protocol.StateProofTx):      "State Proof",
 	string(protocol.HeartbeatTx):       "Consensus heartbeat",
+	string(protocol.FeePaymentTx):      "Fee Payment",
 }
 
 // map txn type names (long and short) to index/enum value

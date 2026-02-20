@@ -46,6 +46,7 @@ const (
 	TxTypeAfrz   TxType = "afrz"
 	TxTypeAppl   TxType = "appl"
 	TxTypeAxfer  TxType = "axfer"
+	TxTypeFpay   TxType = "fpay"
 	TxTypeKeyreg TxType = "keyreg"
 	TxTypePay    TxType = "pay"
 	TxTypeStpf   TxType = "stpf"

@@ -1300,6 +1300,8 @@ func (eval *BlockEvaluator) applyTransaction(tx transactions.Transaction, cow *r
 	case protocol.HeartbeatTx:
 		err = apply.Heartbeat(*tx.HeartbeatTxnFields, tx.Header, cow, cow, cow.Round())
 
+	case protocol.FeePaymentTx:
+
 	default:
 		err = fmt.Errorf("unknown transaction type %v", tx.Type)
 	}

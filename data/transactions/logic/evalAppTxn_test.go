@@ -58,6 +58,7 @@ func TestCurrentInnerTypes(t *testing.T) {
 	TestApp(t, "itxn_begin; itxn_submit; int 1;", ep, "unknown tx type")
 	// bad type
 	TestApp(t, "itxn_begin; byte \"pya\"; itxn_field Type; itxn_submit; int 1;", ep, "pya is not a valid Type")
+	TestApp(t, "itxn_begin; byte \"fpay\"; itxn_field Type; itxn_submit; int 1;", ep, "fpay is not a valid Type for itxn_field")
 	// mixed up the int form for the byte form
 	TestApp(t, NoTrack("itxn_begin; int pay; itxn_field Type; itxn_submit; int 1;"), ep, "Type arg not a byte array")
 	// or vice versa

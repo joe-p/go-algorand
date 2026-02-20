@@ -151,3 +151,42 @@ func TestLogicSigEquality(t *testing.T) {
 	}
 
 }
+
+func TestFeePaymentWellFormed(t *testing.T) {
+	partitiontest.PartitionTest(t)
+	t.Parallel()
+
+	proto := config.Consensus[protocol.ConsensusCurrentVersion]
+	tx := Transaction{
+		Type: protocol.FeePaymentTx,
+		Header: Header{
+			Sender:     basics.Address{1},
+			Fee:        basics.MicroAlgos{Raw: proto.MinTxnFee},
+			FirstValid: 1,
+			LastValid:  1 + basics.Round(proto.MaxTxnLife),
+		},
+	}
+
+	require.NoError(t, tx.WellFormed(SpecialAddresses{}, proto))
+}
+
+func TestFeePaymentRejectsPaymentFields(t *testing.T) {
+	partitiontest.PartitionTest(t)
+	t.Parallel()
+
+	proto := config.Consensus[protocol.ConsensusCurrentVersion]
+	tx := Transaction{
+		Type: protocol.FeePaymentTx,
+		Header: Header{
+			Sender:     basics.Address{1},
+			Fee:        basics.MicroAlgos{Raw: proto.MinTxnFee},
+			FirstValid: 1,
+			LastValid:  1 + basics.Round(proto.MaxTxnLife),
+		},
+		PaymentTxnFields: PaymentTxnFields{Receiver: basics.Address{2}},
+	}
+
+	err := tx.WellFormed(SpecialAddresses{}, proto)
+	require.Error(t, err)
+	require.ErrorContains(t, err, "type fpay has non-zero fields for type pay")
+}

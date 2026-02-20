@@ -50,6 +50,9 @@ const (
 	// HeartbeatTx demonstrates the account is alive
 	HeartbeatTx TxType = "hb"
 
+	// FeePaymentTx is a header-only transaction used to pay fees
+	FeePaymentTx TxType = "fpay"
+
 	// Remember to add to TxnTypeNames and txnTypeLongNames in logic/fields.go when
 	// adding a new transaction type!
 

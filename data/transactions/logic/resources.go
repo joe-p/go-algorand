@@ -111,6 +111,8 @@ func (r *resources) fill(tx *transactions.Transaction, ep *EvalParams) {
 	case protocol.StateProofTx:
 		// state proof txns add nothing to availability (they can't even appear
 		// in a group with an appl. but still.)
+	case protocol.FeePaymentTx:
+		r.fillKeyRegistration(&tx.Header)
 	default:
 		panic(tx.Type)
 	}
@@ -128,7 +130,7 @@ func (cx *EvalContext) allows(tx *transactions.Transaction, calleeVer uint64) er
 		return nil
 	}
 	switch tx.Type {
-	case protocol.PaymentTx, protocol.KeyRegistrationTx, protocol.AssetConfigTx:
+	case protocol.PaymentTx, protocol.KeyRegistrationTx, protocol.AssetConfigTx, protocol.FeePaymentTx:
 		// these transactions don't touch cross-product resources, so no error is possible
 		return nil
 	case protocol.AssetTransferTx:

@@ -4270,7 +4270,7 @@
       "in": "query"
     },
     "tx-type": {
-      "enum": ["pay", "keyreg", "acfg", "axfer", "afrz", "appl", "stpf"],
+      "enum": ["pay", "keyreg", "acfg", "axfer", "afrz", "appl", "stpf", "fpay"],
       "type": "string",
       "name": "tx-type",
       "in": "query"

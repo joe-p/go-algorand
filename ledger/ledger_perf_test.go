@@ -369,7 +369,8 @@ func BenchmarkAppGlobal64MaxClone(b *testing.B) {
 	benchmarkFullBlocks(testCases["bench-global-64-max-clone"], b)
 }
 
-func BenchmarkAppInt1(b *testing.B) { benchmarkFullBlocks(testCases["int-1"], b) }
+func BenchmarkAppInt1(b *testing.B)     { benchmarkFullBlocks(testCases["int-1"], b) }
+func BenchmarkAppWasmInt1(b *testing.B) { benchmarkFullBlocks(testCases["wasm-int-1"], b) }
 
 func BenchmarkAppInt1ManyApps(b *testing.B) { benchmarkFullBlocks(testCases["int-1-many-apps"], b) }
 
@@ -535,6 +536,27 @@ program:
 		testType:    "app",
 		name:        "wasm-fibo",
 		wasmProgram: wasmFiboBytes,
+	}
+	testCases[params.name] = params
+
+	params = testParams{
+		testType: "app",
+		name:     "fibo",
+		program:  ops.Program,
+	}
+	testCases[params.name] = params
+
+	wasmRet1Bytes, err := os.ReadFile("../wamrtime/target/wasm32-unknown-unknown/wasm_small/ret_1.wasm")
+
+	if err != nil {
+		panic(fmt.Sprintf("failed to read wasm file: %v", err))
+	}
+
+	params = testParams{
+		testType: "app",
+		name:     "wasm-int-1",
+
+		wasmProgram: wasmRet1Bytes,
 	}
 	testCases[params.name] = params
 }

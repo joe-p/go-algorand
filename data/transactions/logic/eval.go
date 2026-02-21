@@ -31,6 +31,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/algorand/go-algorand/config"
 	"github.com/algorand/go-algorand/config/bounds"
@@ -1261,6 +1262,8 @@ func EvalSignature(gi int, params *EvalParams) (bool, error) {
 
 var wamrtimeInitialized = false
 
+const logExecutionTime = false
+
 // eval implementation
 // A program passes successfully if it finishes with one int element on the stack that is non-zero.
 func eval(program []byte, cx *EvalContext) (pass bool, err error) {
@@ -1278,6 +1281,7 @@ func eval(program []byte, cx *EvalContext) (pass bool, err error) {
 		}
 	}()
 
+	evalStart := time.Now()
 	if cx.txn.Txn.WasmProgram != nil {
 		if !wamrtimeInitialized {
 			wamrtimeInit()
@@ -1285,6 +1289,10 @@ func eval(program []byte, cx *EvalContext) (pass bool, err error) {
 		}
 
 		ret_val := wamrtimeCallProgram(cx, cx.txn.Txn.WasmProgram)
+
+		if logExecutionTime {
+			fmt.Printf("WASM execution time: %s\n", time.Since(evalStart))
+		}
 		return ret_val != 0, nil
 	}
 
@@ -1369,6 +1377,9 @@ func eval(program []byte, cx *EvalContext) (pass bool, err error) {
 		return false, errors.New("stack finished with bytes not int")
 	}
 
+	if logExecutionTime {
+		fmt.Printf("AVM execution time: %s\n", time.Since(evalStart))
+	}
 	return cx.Stack[0].Uint != 0, nil
 
 }

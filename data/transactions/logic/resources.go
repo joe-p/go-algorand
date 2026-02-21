@@ -99,7 +99,7 @@ func (r *resources) fill(tx *transactions.Transaction, ep *EvalParams) {
 	case protocol.PaymentTx:
 		r.fillPayment(&tx.Header, &tx.PaymentTxnFields)
 	case protocol.KeyRegistrationTx:
-		r.fillKeyRegistration(&tx.Header)
+		r.fillHeader(&tx.Header)
 	case protocol.AssetConfigTx:
 		r.fillAssetConfig(&tx.Header, &tx.AssetConfigTxnFields)
 	case protocol.AssetTransferTx:
@@ -112,7 +112,7 @@ func (r *resources) fill(tx *transactions.Transaction, ep *EvalParams) {
 		// state proof txns add nothing to availability (they can't even appear
 		// in a group with an appl. but still.)
 	case protocol.FeePaymentTx:
-		r.fillKeyRegistration(&tx.Header)
+		r.fillHeader(&tx.Header)
 	default:
 		panic(tx.Type)
 	}
@@ -144,7 +144,7 @@ func (cx *EvalContext) allows(tx *transactions.Transaction, calleeVer uint64) er
 	}
 }
 
-func (r *resources) fillKeyRegistration(hdr *transactions.Header) {
+func (r *resources) fillHeader(hdr *transactions.Header) {
 	r.sharedAccounts[hdr.Sender] = struct{}{}
 }
 

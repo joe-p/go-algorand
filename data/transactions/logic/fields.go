@@ -466,6 +466,7 @@ var TxnTypeNames = [...]string{
 	string(protocol.ApplicationCallTx),
 	string(protocol.StateProofTx),
 	string(protocol.HeartbeatTx),
+	string(protocol.FeePaymentTx),
 }
 
 // txnTypeLongNames provide a friendlier type constant name in assembler.
@@ -478,6 +479,7 @@ var txnTypeLongNames = map[string]string{
 	string(protocol.ApplicationCallTx): "ApplicationCall",
 	string(protocol.StateProofTx):      "State Proof",
 	string(protocol.HeartbeatTx):       "Consensus heartbeat",
+	string(protocol.FeePaymentTx):      "Fee Payment",
 }
 
 // map txn type names (long and short) to index/enum value
@@ -625,7 +627,7 @@ var globalFieldSpecs = [...]globalFieldSpec{
 	{MaxTxnLife, StackUint64, modeAny, 0, "rounds"},
 	{ZeroAddress, StackAddress, modeAny, 0, "32 byte address of all zero bytes"},
 	{GroupSize, StackUint64, modeAny, 0,
-		"Number of transactions in this atomic transaction group. At least 1"},
+		"Number of AVM-visible transactions in this atomic transaction group (excludes trailing FeePayment). At least 1"},
 	{LogicSigVersion, StackUint64, modeAny, 2, "Maximum supported version"},
 	{Round, StackUint64, ModeApp, 2, "Current round number"},
 	{LatestTimestamp, StackUint64, ModeApp, 2,

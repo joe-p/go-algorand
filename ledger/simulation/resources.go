@@ -104,7 +104,7 @@ func makeTxnResourceTracker(txn *transactions.Transaction, proto *config.Consens
 // makeGlobalResourceTracker populates a tracker so that it knows what are the
 // bounds on how many new references of various types that could potentially be
 // allowed for the group.
-func makeGlobalResourceTracker(perTxnResources []ResourceTracker, nonAppCalls int, proto *config.ConsensusParams) ResourceTracker {
+func makeGlobalResourceTracker(perTxnResources []ResourceTracker, nonAppCalls int, countedGroupSize int, proto *config.ConsensusParams) ResourceTracker {
 	// Calculate the maximum number of cross-product resources that can be accessed by one app call
 	// under normal circumstances. This is calculated using the case of an app call with a full set
 	// of foreign apps. Including the app being called, there are (MaxAppTxnForeignApps + 1) apps,
@@ -118,7 +118,7 @@ func makeGlobalResourceTracker(perTxnResources []ResourceTracker, nonAppCalls in
 	// <=> MaxAppTxnForeignApps^2 + 2*MaxAppTxnForeignApps
 	// <=> MaxAppTxnForeignApps * (MaxAppTxnForeignApps + 2)
 	maxCrossProductsPerAppCall := proto.MaxAppTxnForeignApps * (proto.MaxAppTxnForeignApps + 2)
-	unusedTxns := proto.MaxTxGroupSize - len(perTxnResources)
+	unusedTxns := proto.MaxTxGroupSize - countedGroupSize
 	globalResources := ResourceTracker{
 		MaxCrossProductReferences: maxCrossProductsPerAppCall * (proto.MaxTxGroupSize - nonAppCalls),
 		// If there are fewer than MaxTxGroupSize transactions, then we can make more resources
@@ -455,16 +455,17 @@ type groupResourceTracker struct {
 func makeGroupResourceTracker(txns []transactions.SignedTxnWithAD, proto *config.ConsensusParams) groupResourceTracker {
 	var startingBoxes int
 	var nonAppCalls int
+	countedGroupSize := len(txns) - transactions.FeePaymentCountWithAD(txns)
 	localTxnResources := make([]ResourceTracker, len(txns))
 	for i := range txns {
 		localTxnResources[i] = makeTxnResourceTracker(&txns[i].Txn, proto)
 		startingBoxes += len(txns[i].Txn.Boxes)
-		if txns[i].Txn.Type != protocol.ApplicationCallTx {
+		if txns[i].Txn.Type != protocol.ApplicationCallTx && txns[i].Txn.Type != protocol.FeePaymentTx {
 			nonAppCalls++
 		}
 	}
 	return groupResourceTracker{
-		globalResources:   makeGlobalResourceTracker(localTxnResources, nonAppCalls, proto),
+		globalResources:   makeGlobalResourceTracker(localTxnResources, nonAppCalls, countedGroupSize, proto),
 		localTxnResources: localTxnResources,
 		startingBoxes:     startingBoxes,
 	}

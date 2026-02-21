@@ -220,6 +220,9 @@ func txnGroupBatchPrep(stxs []transactions.SignedTxn, contextHdr *bookkeeping.Bl
 	feesPaid := uint64(0)
 	lSigPooledSize := 0
 	for i, stxn := range stxs {
+		if stxn.Txn.Type == protocol.FeePaymentTx && i != len(stxs)-1 {
+			return nil, &TxGroupError{err: fmt.Errorf("FeePayment transaction must be last in group"), GroupIndex: i, Reason: TxGroupErrorReasonNotWellFormed}
+		}
 		prepErr := txnBatchPrep(i, groupCtx, verifier)
 		if prepErr != nil {
 			// re-wrap the error with more details
@@ -230,6 +233,10 @@ func txnGroupBatchPrep(stxs []transactions.SignedTxn, contextHdr *bookkeeping.Bl
 		lSigPooledSize += stxn.Lsig.Len()
 		if stxn.Txn.Type == protocol.StateProofTx {
 			// State proofs are free, bail before incrementing
+			continue
+		}
+		if stxn.Txn.Type == protocol.FeePaymentTx {
+			// Fee-payment txns do not increase pooled minimum fee requirements.
 			continue
 		}
 		if stxn.Txn.Type == protocol.HeartbeatTx && stxn.Txn.Group.IsZero() {

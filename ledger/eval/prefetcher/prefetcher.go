@@ -344,6 +344,7 @@ func (p *accountPrefetcher) prefetch(ctx context.Context) {
 
 			case protocol.StateProofTx:
 			case protocol.KeyRegistrationTx: // No extra accounts besides the sender
+			case protocol.FeePaymentTx: // No extra accounts besides the sender
 			case protocol.HeartbeatTx:
 				loadAccountsAddAccountTask(&stxn.Txn.HbAddress, task, accountTasks, queue)
 			}

@@ -391,6 +391,7 @@ var TypeNameDescriptions = map[string]string{
 	string(protocol.ApplicationCallTx): "Application calls",
 	string(protocol.StateProofTx):      "State Proof",
 	string(protocol.HeartbeatTx):       "Consensus heartbeat",
+	string(protocol.FeePaymentTx):      "Fee payment",
 }
 
 // OnCompletionDescriptions end up in the spec, describing what happens for each OnCompletion value.

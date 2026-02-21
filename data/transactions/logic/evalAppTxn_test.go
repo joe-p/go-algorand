@@ -58,6 +58,7 @@ func TestCurrentInnerTypes(t *testing.T) {
 	TestApp(t, "itxn_begin; itxn_submit; int 1;", ep, "unknown tx type")
 	// bad type
 	TestApp(t, "itxn_begin; byte \"pya\"; itxn_field Type; itxn_submit; int 1;", ep, "pya is not a valid Type")
+	TestApp(t, "itxn_begin; byte \"fpay\"; itxn_field Type; itxn_submit; int 1;", ep, "fpay is not a valid Type for itxn_field")
 	// mixed up the int form for the byte form
 	TestApp(t, NoTrack("itxn_begin; int pay; itxn_field Type; itxn_submit; int 1;"), ep, "Type arg not a byte array")
 	// or vice versa
@@ -2790,6 +2791,22 @@ int 333;     itxn_field ApplicationID
 itxn_submit
 int 1
 `, ep)
+}
+
+func TestFeePaymentNotAVMVisibleInAppMode(t *testing.T) {
+	partitiontest.PartitionTest(t)
+	t.Parallel()
+
+	appTxn := MakeSampleTxn()
+	appTxn.Txn.Type = protocol.ApplicationCallTx
+	appTxn.Txn.ApplicationID = 888
+	txgroup := MakeSampleTxnGroup(appTxn)
+	txgroup = append(txgroup, transactions.SignedTxn{Txn: transactions.Transaction{Type: protocol.FeePaymentTx}})
+	ep := DefaultAppParams(txgroup...)
+
+	TestApp(t, "global GroupSize; int 2; ==", ep)
+	TestApp(t, "gtxn 2 Amount; int 0; ==", ep, "txn index 2, len(group) is 2")
+	TestApp(t, "int 2; gtxns Amount; int 0; ==", ep, "txn index 2, len(group) is 2")
 }
 
 // TestGtxnApps confirms that gtxn can now access previous txn's created app id.

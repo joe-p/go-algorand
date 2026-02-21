@@ -376,6 +376,98 @@ func TestTxnValidationStateProof(t *testing.T) {
 	require.Error(t, err, "state proof txn %#v verified", stxn2)
 }
 
+func TestTxnGroupFeePaymentDoesNotIncreasePooledMinFee(t *testing.T) {
+	partitiontest.PartitionTest(t)
+	t.Parallel()
+
+	proto := config.Consensus[protocol.ConsensusCurrentVersion]
+	secret := keypair()
+	sender := basics.Address(secret.SignatureVerifier)
+	receiver := basics.Address{9}
+
+	payA := txntest.Txn{
+		Type:       protocol.PaymentTx,
+		Sender:     sender,
+		Receiver:   receiver,
+		Amount:     1,
+		Fee:        proto.MinTxnFee,
+		FirstValid: 1,
+		LastValid:  1000,
+	}
+	payB := txntest.Txn{
+		Type:       protocol.PaymentTx,
+		Sender:     sender,
+		Receiver:   receiver,
+		Amount:     1,
+		Fee:        proto.MinTxnFee,
+		FirstValid: 1,
+		LastValid:  1000,
+	}
+	feePay := txntest.Txn{
+		Type:       protocol.FeePaymentTx,
+		Sender:     sender,
+		Fee:        uint64(0),
+		FirstValid: 1,
+		LastValid:  1000,
+	}
+
+	txntest.Group(&payA, &payB, &feePay)
+
+	good := []transactions.SignedTxn{
+		payA.Txn().Sign(secret),
+		payB.Txn().Sign(secret),
+		feePay.Txn().Sign(secret),
+	}
+
+	_, err := TxnGroup(good, blockHeader, nil, nil)
+	require.NoError(t, err)
+
+	payB.Fee = proto.MinTxnFee - 1
+	txntest.Group(&payA, &payB, &feePay)
+	bad := []transactions.SignedTxn{
+		payA.Txn().Sign(secret),
+		payB.Txn().Sign(secret),
+		feePay.Txn().Sign(secret),
+	}
+
+	_, err = TxnGroup(bad, blockHeader, nil, nil)
+	require.ErrorContains(t, err, "txgroup had")
+}
+
+func TestTxnGroupFeePaymentMustBeLast(t *testing.T) {
+	partitiontest.PartitionTest(t)
+	t.Parallel()
+
+	secret := keypair()
+	sender := basics.Address(secret.SignatureVerifier)
+	receiver := basics.Address{9}
+
+	pay := txntest.Txn{
+		Type:       protocol.PaymentTx,
+		Sender:     sender,
+		Receiver:   receiver,
+		Amount:     1,
+		Fee:        1000,
+		FirstValid: 1,
+		LastValid:  1000,
+	}
+	feePay := txntest.Txn{
+		Type:       protocol.FeePaymentTx,
+		Sender:     sender,
+		Fee:        0,
+		FirstValid: 1,
+		LastValid:  1000,
+	}
+
+	group := transactions.GroupID([]transactions.Transaction{pay.Txn()})
+	pay.Group = group
+	feePay.Group = group
+
+	badOrder := []transactions.SignedTxn{feePay.Txn().Sign(secret), pay.Txn().Sign(secret)}
+	_, err := TxnGroup(badOrder, blockHeader, nil, nil)
+	require.ErrorContains(t, err, "FeePayment transaction must be last in group")
+}
+
 func TestDecodeNil(t *testing.T) {
 	partitiontest.PartitionTest(t)
 

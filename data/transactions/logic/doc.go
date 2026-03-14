@@ -261,10 +261,14 @@ var opDescByName = map[string]OpDesc{
 	"acct_params_get":   {"X is field F from account A. Y is 1 if A owns positive algos, else 0", "", []string{"account params field index"}, ""},
 	"voter_params_get":  {"X is field F from online account A as of the balance round: 320 rounds before the current round. Y is 1 if A had positive algos online in the agreement round, else Y is 0 and X is a type specific zero-value", "", []string{"voter params field index"}, ""},
 	"online_stake":      {"the total online stake in the agreement round", "", nil, ""},
-	"assert":            {"immediately fail unless A is a non-zero number", "", nil, ""},
-	"callsub":           {"branch unconditionally to TARGET, saving the next instruction on the call stack", "The call stack is separate from the data stack. Only `callsub`, `retsub`, and `proto` manipulate it.", []string{"branch offset"}, ""},
-	"proto":             {"Prepare top call frame for a retsub that will assume A args and R return values.", "Fails unless the last instruction executed was a `callsub`.", []string{"number of arguments", "number of return values"}, ""},
-	"retsub":            {"pop the top instruction from the call stack and branch to it", "If the current frame was prepared by `proto A R`, `retsub` will remove the 'A' arguments from the stack, move the `R` return values down, and pop any stack locations above the relocated return values.", nil, ""},
+
+	"program_pages": {"the number of 4096-byte pages in the current executing program", "The page count is `ceil(len(program) / 4096)`. A program that fits in a single page returns 1.", nil, ""},
+	"program_page":  {"page A of the current executing program as bytes", "Each page is up to 4096 bytes. Fails if A is not a valid page index.", nil, ""},
+
+	"assert":  {"immediately fail unless A is a non-zero number", "", nil, ""},
+	"callsub": {"branch unconditionally to TARGET, saving the next instruction on the call stack", "The call stack is separate from the data stack. Only `callsub`, `retsub`, and `proto` manipulate it.", []string{"branch offset"}, ""},
+	"proto":   {"Prepare top call frame for a retsub that will assume A args and R return values.", "Fails unless the last instruction executed was a `callsub`.", []string{"number of arguments", "number of return values"}, ""},
+	"retsub":  {"pop the top instruction from the call stack and branch to it", "If the current frame was prepared by `proto A R`, `retsub` will remove the 'A' arguments from the stack, move the `R` return values down, and pop any stack locations above the relocated return values.", nil, ""},
 
 	"b+":  {"A plus B. A and B are interpreted as big-endian unsigned integers", "", nil, ""},
 	"b-":  {"A minus B. A and B are interpreted as big-endian unsigned integers. Fail on underflow.", "", nil, ""},
@@ -359,7 +363,7 @@ var OpGroups = map[string][]string{
 	"Byte Array Arithmetic":   {"b+", "b-", "b/", "b*", "b<", "b>", "b<=", "b>=", "b==", "b!=", "b%", "bsqrt"},
 	"Byte Array Logic":        {"b|", "b&", "b^", "b~"},
 	"Cryptography":            {"sha256", "keccak256", "sha512_256", "sha3_256", "sha512", "sumhash512", "falcon_verify", "ed25519verify", "ed25519verify_bare", "ecdsa_verify", "ecdsa_pk_recover", "ecdsa_pk_decompress", "vrf_verify", "ec_add", "ec_scalar_mul", "ec_pairing_check", "ec_multi_scalar_mul", "ec_subgroup_check", "ec_map_to", "mimc"},
-	"Loading Values":          {"intcblock", "intc", "intc_0", "intc_1", "intc_2", "intc_3", "pushint", "pushints", "bytecblock", "bytec", "bytec_0", "bytec_1", "bytec_2", "bytec_3", "pushbytes", "pushbytess", "bzero", "arg", "arg_0", "arg_1", "arg_2", "arg_3", "args", "txn", "gtxn", "txna", "txnas", "gtxna", "gtxnas", "gtxns", "gtxnsa", "gtxnsas", "global", "load", "loads", "store", "stores", "gload", "gloads", "gloadss", "gaid", "gaids"},
+	"Loading Values":          {"intcblock", "intc", "intc_0", "intc_1", "intc_2", "intc_3", "pushint", "pushints", "bytecblock", "bytec", "bytec_0", "bytec_1", "bytec_2", "bytec_3", "pushbytes", "pushbytess", "bzero", "arg", "arg_0", "arg_1", "arg_2", "arg_3", "args", "txn", "gtxn", "txna", "txnas", "gtxna", "gtxnas", "gtxns", "gtxnsa", "gtxnsas", "global", "load", "loads", "store", "stores", "gload", "gloads", "gloadss", "gaid", "gaids", "program_pages", "program_page"},
 	"Flow Control":            {"err", "bnz", "bz", "b", "return", "pop", "popn", "dup", "dup2", "dupn", "dig", "bury", "cover", "uncover", "frame_dig", "frame_bury", "swap", "select", "assert", "callsub", "proto", "retsub", "switch", "match"},
 	"Block Access":            {"online_stake", "log", "block"},
 	"Account Access":          {"balance", "min_balance", "acct_params_get", "voter_params_get"},

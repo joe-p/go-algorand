@@ -2465,6 +2465,74 @@ int 1
 		"invalid ClearStateProgramPages index")
 }
 
+func TestProgramPages(t *testing.T) {
+	partitiontest.PartitionTest(t)
+	t.Parallel()
+
+	// A small program: fits in 1 page. program_pages returns 1, program_page 0 returns the program.
+	testAccepts(t, "program_pages; int 1; ==", LogicVersion)
+
+	// program_page 0 should return the executing program bytes
+	testAccepts(t, "int 0; program_page; len; int 0; >", LogicVersion)
+
+	// page index out of bounds should fail
+	testPanics(t, "int 1; program_page; len; int 0; >", LogicVersion, "program_page index 1 beyond 1 pages")
+
+	// program_page 0 followed by len should give us non-zero length
+	testAccepts(t, "int 0; program_page; len; program_pages; int 1; ==; &&", LogicVersion)
+}
+
+func TestProgramPagesBigProgram(t *testing.T) {
+	partitiontest.PartitionTest(t)
+	t.Parallel()
+
+	// Build a program that's larger than one 4096-byte page.
+	// We use a long chain of `pushint 1; pop;` to pad the program.
+	// Each `pushint 1; pop;` is 3 bytes (pushint 1 = 0x81 0x01, pop = 0x48).
+	// We need > 4096 bytes total. Let's aim for ~4200.
+	padCount := 1400 // each "pushint 1; pop; " is 3 bytes assembled
+	var sb strings.Builder
+	for i := 0; i < padCount; i++ {
+		sb.WriteString("pushint 1; pop\n")
+	}
+	// After padding, add the actual test
+	sb.WriteString(`
+program_pages
+int 2
+==
+assert
+
+int 0
+program_page
+len
+int 4096
+==
+assert
+
+int 1
+program_page
+len
+int 0
+>
+assert
+
+int 1
+`)
+
+	source := sb.String()
+	ops := testProg(t, source, LogicVersion)
+	require.Greater(t, len(ops.Program), 4096, "program should exceed one page")
+	require.LessOrEqual(t, len(ops.Program), 8192, "program should fit in two pages")
+	testLogicBytes(t, ops.Program, nil)
+}
+
+func TestProgramPageOutOfBounds(t *testing.T) {
+	partitiontest.PartitionTest(t)
+	t.Parallel()
+
+	testPanics(t, "int 5; program_page; pop; int 1", LogicVersion, "program_page index")
+}
+
 func TestTxnas(t *testing.T) {
 	partitiontest.PartitionTest(t)
 

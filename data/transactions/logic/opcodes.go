@@ -643,6 +643,10 @@ var OpSpecs = []OpSpec{
 	{0x74, "voter_params_get", opVoterParamsGet, proto("a:aT"), incentiveVersion, field("f", &VoterParamsFields).only(ModeApp)},
 	{0x75, "online_stake", opOnlineStake, proto(":i"), incentiveVersion, only(ModeApp)},
 
+	// Program page access
+	{0x76, "program_pages", opProgramPages, proto(":i"), LogicVersion, detDefault()},
+	{0x77, "program_page", opProgramPage, proto("i:b"), LogicVersion, detDefault()},
+
 	{0x78, "min_balance", opMinBalance, proto("i:i"), 3, only(ModeApp)},
 	{0x78, "min_balance", opMinBalance, proto("a:i"), directRefEnabledVersion, only(ModeApp)},
 

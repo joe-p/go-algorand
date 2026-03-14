@@ -5114,6 +5114,31 @@ func opOnlineStake(cx *EvalContext) error {
 	return nil
 }
 
+func opProgramPages(cx *EvalContext) error {
+	numPages := basics.DivCeil(len(cx.program), maxStringSize)
+	cx.Stack = append(cx.Stack, stackValue{Uint: uint64(numPages)})
+	return nil
+}
+
+func opProgramPage(cx *EvalContext) error {
+	last := len(cx.Stack) - 1
+	pageIdx := cx.Stack[last].Uint
+
+	numPages := basics.DivCeil(len(cx.program), maxStringSize)
+	if pageIdx >= uint64(numPages) {
+		return fmt.Errorf("program_page index %d beyond %d pages", pageIdx, numPages)
+	}
+
+	start := pageIdx * maxStringSize
+	end := min(start+maxStringSize, uint64(len(cx.program)))
+	page := make([]byte, end-start)
+	copy(page, cx.program[start:end])
+
+	cx.Stack[last].Bytes = page
+	cx.Stack[last].Uint = 0
+	return nil
+}
+
 func opLog(cx *EvalContext) error {
 	last := len(cx.Stack) - 1
 

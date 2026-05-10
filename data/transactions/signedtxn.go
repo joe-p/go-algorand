@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2025 Algorand, Inc.
+// Copyright (C) 2019-2026 Algorand Foundation Ltd.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -60,6 +60,18 @@ type SignedTxnWithAD struct {
 // ID returns the Txid (i.e., hash) of the underlying transaction.
 func (s SignedTxn) ID() Txid {
 	return s.Txn.ID()
+}
+
+// WithAD returns a SignedTxnWithAD with an (optional) ApplyData.
+func (s SignedTxn) WithAD(ad ...ApplyData) SignedTxnWithAD {
+	switch len(ad) {
+	case 0:
+		return SignedTxnWithAD{SignedTxn: s}
+	case 1:
+		return SignedTxnWithAD{SignedTxn: s, ApplyData: ad[0]}
+	default:
+		panic("WithAD called incorrectly")
+	}
 }
 
 // ID on SignedTxnInBlock should never be called, because the ID depends
@@ -141,4 +153,20 @@ func WrapSignedTxnsWithAD(txgroup []SignedTxn) []SignedTxnWithAD {
 		txgroupad[i].SignedTxn = tx
 	}
 	return txgroupad
+}
+
+// SummarizeFees takes a group and returns required fees, the total amount paid,
+// and the tip promised. The returned `usage` expresses how many basic
+// transaction fees must be paid by the group.
+func SummarizeFees(txgroup []SignedTxnWithAD) (usage basics.Micros, paid basics.MicroAlgos) {
+	// TODO: We want to prevent the 2A fee paid to become incentive eligible
+	// from being reused for inners. Since that is expressed as a fixed fee, the
+	// best way to do it might be to not count it in `paid`.  The "obvious" way
+	// to do it (by adjusting the KeyReg's FeeFactor() is more difficult because
+	// the 2A fee is not defined in units of MinFee().
+	for _, txad := range txgroup {
+		usage = basics.AddSaturate(usage, txad.SignedTxn.Txn.FeeFactor())
+		paid = paid.AddSaturate(txad.SignedTxn.Txn.Fee)
+	}
+	return usage, paid
 }

@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2025 Algorand, Inc.
+// Copyright (C) 2019-2026 Algorand Foundation Ltd.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -215,9 +215,31 @@ func (d *StatelessDecoder) proposalValueMapSize(mask uint8) uint8 {
 	return uint8(bits.OnesCount8(mask & (bitDig | bitEncDig | bitOper | bitOprop)))
 }
 
+// ErrLikelyUncompressed is returned when vpack decompression detects what appears
+// to be uncompressed msgpack data from a peer claiming vpack support.
+var ErrLikelyUncompressed = fmt.Errorf("data appears to be uncompressed msgpack")
+
+// isLikelyUncompressedMsgpack checks if the source data looks like an uncompressed
+// msgpack vote that was mistakenly treated as vpack-compressed.
+func isLikelyUncompressedMsgpack(src []byte) bool {
+	// uncompressed msgpack votes start with 0x83 (fixmap marker with 3 elements: cred, r, sig),
+	// followed by 0xa4 (fixstr marker of length 4), then "cred"
+	return len(src) > 5 && src[0] == 0x83 && src[1] == 0xa4 &&
+		src[2] == 'c' && src[3] == 'r' && src[4] == 'e' && src[5] == 'd'
+}
+
 // DecompressVote decodes a compressed vote in src and appends it to dst.
 // To re-use dst, run like: dst = dec.DecompressVote(dst[:0], src)
 func (d *StatelessDecoder) DecompressVote(dst, src []byte) ([]byte, error) {
+	result, err := d.decompressVote(dst, src)
+	if err != nil && isLikelyUncompressedMsgpack(src) {
+		return nil, fmt.Errorf("%w: %v", ErrLikelyUncompressed, err)
+	}
+	return result, err
+}
+
+// decompressVote performs the actual decompression logic.
+func (d *StatelessDecoder) decompressVote(dst, src []byte) ([]byte, error) {
 	if len(src) < 2 {
 		return nil, fmt.Errorf("header missing")
 	}
@@ -338,9 +360,18 @@ func (d *StatelessDecoder) DecompressVote(dst, src []byte) ([]byte, error) {
 	return d.dst, nil
 }
 
+// stripMsgpFieldMarker removes the msgpack fixstr marker byte from a field string
+// for cleaner error messages. msgpack field strings like "\xa3per" become "per".
+func stripMsgpFieldMarker(fieldStr string) string {
+	if len(fieldStr) > 1 && (fieldStr[0]&0xe0) == 0xa0 {
+		return fieldStr[1:]
+	}
+	return fieldStr
+}
+
 func (d *StatelessDecoder) bin64(fieldStr string) error {
 	if d.pos+64 > len(d.src) {
-		return fmt.Errorf("not enough data to read value for field %s", fieldStr)
+		return fmt.Errorf("not enough data to read value for field %s", stripMsgpFieldMarker(fieldStr))
 	}
 	d.dst = append(d.dst, fieldStr...)
 	d.dst = append(d.dst, msgpBin8Len64...)
@@ -351,7 +382,7 @@ func (d *StatelessDecoder) bin64(fieldStr string) error {
 
 func (d *StatelessDecoder) bin32(fieldStr string) error {
 	if d.pos+32 > len(d.src) {
-		return fmt.Errorf("not enough data to read value for field %s", fieldStr)
+		return fmt.Errorf("not enough data to read value for field %s", stripMsgpFieldMarker(fieldStr))
 	}
 	d.dst = append(d.dst, fieldStr...)
 	d.dst = append(d.dst, msgpBin8Len32...)
@@ -362,7 +393,7 @@ func (d *StatelessDecoder) bin32(fieldStr string) error {
 
 func (d *StatelessDecoder) bin80(fieldStr string) error {
 	if d.pos+80 > len(d.src) {
-		return fmt.Errorf("not enough data to read value for field %s,  d.pos=%d, len(src)=%d", fieldStr, d.pos, len(d.src))
+		return fmt.Errorf("not enough data to read value for field %s,  d.pos=%d, len(src)=%d", stripMsgpFieldMarker(fieldStr), d.pos, len(d.src))
 	}
 	d.dst = append(d.dst, fieldStr...)
 	d.dst = append(d.dst, msgpBin8Len80...)
@@ -373,16 +404,16 @@ func (d *StatelessDecoder) bin80(fieldStr string) error {
 
 func (d *StatelessDecoder) varuint(fieldName string) error {
 	if d.pos+1 > len(d.src) {
-		return fmt.Errorf("not enough data to read varuint marker for field %s", fieldName)
+		return fmt.Errorf("not enough data to read varuint marker for field %s", stripMsgpFieldMarker(fieldName))
 	}
 	marker := d.src[d.pos] // read msgpack varuint marker
 	moreBytes, err := msgpVaruintRemaining(marker)
 	if err != nil {
-		return fmt.Errorf("invalid varuint marker %d for field %s: %w", marker, fieldName, err)
+		return fmt.Errorf("invalid varuint marker %d for field %s: %w", marker, stripMsgpFieldMarker(fieldName), err)
 	}
 
 	if d.pos+1+moreBytes > len(d.src) {
-		return fmt.Errorf("not enough data for varuint (need %d bytes) for field %s", moreBytes, fieldName)
+		return fmt.Errorf("not enough data for varuint (need %d bytes) for field %s", moreBytes, stripMsgpFieldMarker(fieldName))
 	}
 	d.dst = append(d.dst, fieldName...)
 	d.dst = append(d.dst, marker)

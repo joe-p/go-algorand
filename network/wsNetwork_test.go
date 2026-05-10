@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2025 Algorand, Inc.
+// Copyright (C) 2019-2026 Algorand Foundation Ltd.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -24,6 +24,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"math/rand"
 	"net"
 	"net/http"
@@ -39,20 +40,19 @@ import (
 	"testing"
 	"time"
 
-	"github.com/algorand/go-algorand/internal/rapidgen"
-	"github.com/algorand/go-algorand/network/phonebook"
-	"pgregory.net/rapid"
-
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"pgregory.net/rapid"
 
 	"github.com/algorand/go-deadlock"
 	"github.com/algorand/websocket"
 
 	"github.com/algorand/go-algorand/config"
 	"github.com/algorand/go-algorand/crypto"
+	"github.com/algorand/go-algorand/internal/rapidgen"
 	"github.com/algorand/go-algorand/logging"
 	"github.com/algorand/go-algorand/logging/telemetryspec"
+	"github.com/algorand/go-algorand/network/phonebook"
 	"github.com/algorand/go-algorand/protocol"
 	"github.com/algorand/go-algorand/test/partitiontest"
 	"github.com/algorand/go-algorand/util"
@@ -284,6 +284,20 @@ func TestWebsocketNetworkStartStop(t *testing.T) {
 	netA.Stop()
 }
 
+func TestWebsocketNetworkStartZeroIncomingDoesNotListen(t *testing.T) {
+	partitiontest.PartitionTest(t)
+
+	netA := makeTestWebsocketNode(t)
+	netA.config.IncomingConnectionsLimit = 0
+
+	require.NoError(t, netA.Start())
+	defer netA.Stop()
+
+	require.Nil(t, netA.listener)
+	_, connected := netA.Address()
+	require.False(t, connected)
+}
+
 func waitReady(t testing.TB, wn *WebsocketNetwork, timeout <-chan time.Time) bool {
 	select {
 	case <-wn.Ready():
@@ -340,6 +354,7 @@ func setupWebsocketNetworkABwithLogger(t *testing.T, countTarget int, log loggin
 	readyTimeout := time.NewTimer(5 * time.Second)
 	waitReady(t, netA, readyTimeout.C)
 	t.Log("a ready")
+	readyTimeout.Reset(5 * time.Second)
 	waitReady(t, netB, readyTimeout.C)
 	t.Log("b ready")
 
@@ -512,6 +527,7 @@ func TestWebsocketVoteCompression(t *testing.T) {
 			cfgA := defaultConfig
 			cfgA.GossipFanout = 1
 			cfgA.EnableVoteCompression = test.netAEnableCompression
+			cfgA.StatefulVoteCompressionTableSize = 0 // Disable stateful compression
 			netA := makeTestWebsocketNodeWithConfig(t, cfgA)
 			netA.Start()
 			defer netStop(t, netA, "A")
@@ -519,6 +535,7 @@ func TestWebsocketVoteCompression(t *testing.T) {
 			cfgB := defaultConfig
 			cfgB.GossipFanout = 1
 			cfgB.EnableVoteCompression = test.netBEnableCompression
+			cfgB.StatefulVoteCompressionTableSize = 0 // Disable stateful compression
 			netB := makeTestWebsocketNodeWithConfig(t, cfgB)
 
 			addrA, postListen := netA.Address()
@@ -1421,6 +1438,13 @@ func TestPeeringWithIdentityChallenge(t *testing.T) {
 			return len(netA.GetPeers(PeersConnectedOut)) == 1
 		}, time.Second, 50*time.Millisecond)
 	}
+
+	// netB is the server for this connection, so it registers the inbound
+	// peer asynchronously -- wait for it before asserting.
+	assert.Eventually(t, func() bool {
+		return len(netB.GetPeers(PeersConnectedIn)) == 1
+	}, time.Second, 50*time.Millisecond)
+
 	// just one A->B connection
 	assert.Equal(t, 0, len(netA.GetPeers(PeersConnectedIn)))
 	assert.Equal(t, 1, len(netA.GetPeers(PeersConnectedOut)))
@@ -1578,6 +1602,12 @@ func TestPeeringSenderIdentityChallengeOnly(t *testing.T) {
 			return len(netA.GetPeers(PeersConnectedOut)) == 1
 		}, time.Second, 50*time.Millisecond)
 	}
+
+	// netB is the server -- wait for inbound peer registration.
+	assert.Eventually(t, func() bool {
+		return len(netB.GetPeers(PeersConnectedIn)) == 1
+	}, time.Second, 50*time.Millisecond)
+
 	assert.Equal(t, 1, len(netA.GetPeers(PeersConnectedOut)))
 	assert.Equal(t, 1, len(netB.GetPeers(PeersConnectedIn)))
 
@@ -1643,6 +1673,13 @@ func TestPeeringReceiverIdentityChallengeOnly(t *testing.T) {
 			return len(netA.GetPeers(PeersConnectedOut)) == 1
 		}, time.Second, 50*time.Millisecond)
 	}
+
+	// netB is the server for this connection, so it registers the inbound
+	// peer asynchronously -- wait for it before asserting.
+	assert.Eventually(t, func() bool {
+		return len(netB.GetPeers(PeersConnectedIn)) == 1
+	}, time.Second, 50*time.Millisecond)
+
 	// single A->B connection
 	assert.Equal(t, 0, len(netA.GetPeers(PeersConnectedIn)))
 	assert.Equal(t, 1, len(netA.GetPeers(PeersConnectedOut)))
@@ -1662,6 +1699,13 @@ func TestPeeringReceiverIdentityChallengeOnly(t *testing.T) {
 			return len(netB.GetPeers(PeersConnectedOut)) == 1
 		}, time.Second, 50*time.Millisecond)
 	}
+
+	// netA is the server for this connection, so it registers the inbound
+	// peer asynchronously -- wait for it before asserting.
+	assert.Eventually(t, func() bool {
+		return len(netA.GetPeers(PeersConnectedIn)) == 1
+	}, time.Second, 50*time.Millisecond)
+
 	assert.Equal(t, 1, len(netA.GetPeers(PeersConnectedIn)))
 	assert.Equal(t, 1, len(netA.GetPeers(PeersConnectedOut)))
 	assert.Equal(t, 1, len(netB.GetPeers(PeersConnectedIn)))
@@ -1715,6 +1759,12 @@ func TestPeeringIncorrectDeduplicationName(t *testing.T) {
 			return len(netA.GetPeers(PeersConnectedOut)) == 1
 		}, time.Second, 50*time.Millisecond)
 	}
+
+	// netB is the server -- wait for inbound peer registration.
+	assert.Eventually(t, func() bool {
+		return len(netB.GetPeers(PeersConnectedIn)) == 1
+	}, time.Second, 50*time.Millisecond)
+
 	// single A->B connection
 	assert.Equal(t, 0, len(netA.GetPeers(PeersConnectedIn)))
 	assert.Equal(t, 1, len(netA.GetPeers(PeersConnectedOut)))
@@ -1736,6 +1786,12 @@ func TestPeeringIncorrectDeduplicationName(t *testing.T) {
 	// let the tryConnect go forward
 	assert.Eventually(t, func() bool {
 		return len(netB.GetPeers(PeersConnectedOut)) == 1
+	}, time.Second, 50*time.Millisecond)
+
+	// netA is the server for this connection, so it receives the identity
+	// verification message asynchronously over WebSocket -- wait for it.
+	assert.Eventually(t, func() bool {
+		return netA.identityTracker.(*mockIdentityTracker).getSetCount() == 1
 	}, time.Second, 50*time.Millisecond)
 
 	// confirm that at this point the identityTracker was called once per network
@@ -1902,8 +1958,20 @@ func TestPeeringWithBadIdentityChallenge(t *testing.T) {
 		if _, ok := netA.tryConnectReserveAddr(addrB); ok {
 			netA.wg.Add(1)
 			netA.tryConnect(addrB, gossipB)
-			// let the tryConnect go forward
-			time.Sleep(250 * time.Millisecond)
+			if tc.totalOutA > 0 {
+				assert.Eventually(t, func() bool {
+					return len(netA.GetPeers(PeersConnectedOut)) == tc.totalOutA
+				}, time.Second, 50*time.Millisecond)
+			}
+			if tc.totalInB > 0 {
+				assert.Eventually(t, func() bool {
+					return len(netB.GetPeers(PeersConnectedIn)) == tc.totalInB
+				}, time.Second, 50*time.Millisecond)
+			}
+			if tc.totalOutA == 0 {
+				// No connection expected -- brief wait to confirm it doesn't happen.
+				time.Sleep(250 * time.Millisecond)
+			}
 		}
 		assert.Equal(t, tc.totalInA, len(netA.GetPeers(PeersConnectedIn)))
 		assert.Equal(t, tc.totalOutA, len(netA.GetPeers(PeersConnectedOut)))
@@ -4132,6 +4200,7 @@ func TestDiscardUnrequestedBlockResponse(t *testing.T) {
 	netA.wg.Add(1)
 	netA.tryConnect(addrC, gossipC)
 	require.Eventually(t, func() bool { return netA.NumPeers() == 1 }, 500*time.Millisecond, 25*time.Millisecond)
+	require.Eventually(t, func() bool { return netC.NumPeers() == 1 }, 500*time.Millisecond, 25*time.Millisecond)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	topics := Topics{
@@ -4732,7 +4801,7 @@ func TestWebsocketNetworkHTTPClient(t *testing.T) {
 	require.Equal(t, http.StatusPreconditionFailed, resp.StatusCode) // not enough ws peer headers
 
 	_, err = netB.GetHTTPClient("invalid")
-	require.Error(t, err)
+	require.ErrorContains(t, err, `could not parse a host from url`)
 }
 
 // TestPeerComparisonInBroadcast tests that the peer comparison in the broadcast function works as expected
@@ -4770,4 +4839,191 @@ func TestPeerComparisonInBroadcast(t *testing.T) {
 
 	require.Equal(t, 1, len(testPeer.sendBufferBulk))
 	require.Equal(t, 0, len(exceptPeer.sendBufferBulk))
+}
+
+func TestMaybeSendMessagesOfInterestLegacyPeer(t *testing.T) {
+	partitiontest.PartitionTest(t)
+	t.Parallel()
+
+	makePeer := func(wn *WebsocketNetwork, features peerFeatureFlag) (*wsPeer, chan sendMessage) {
+		ch := make(chan sendMessage, 1)
+		return &wsPeer{
+			wsPeerCore:         makePeerCore(wn.ctx, wn, wn.log, nil, "test-addr", nil, ""),
+			features:           features,
+			sendBufferHighPrio: ch,
+			sendBufferBulk:     make(chan sendMessage, 1),
+			closing:            make(chan struct{}),
+			processed:          make(chan struct{}, 1),
+		}, ch
+	}
+
+	newTestNetwork := func(tags map[protocol.Tag]bool) *WebsocketNetwork {
+		wn := &WebsocketNetwork{
+			log: logging.TestingLog(t),
+		}
+		wn.ctx = context.Background()
+		cloned := maps.Clone(tags)
+		wn.messagesOfInterest = cloned
+		wn.messagesOfInterestEnc = marshallMessageOfInterestMap(cloned)
+		wn.messagesOfInterestGeneration.Store(1)
+		return wn
+	}
+
+	t.Run("filters VP for peers without stateful support", func(t *testing.T) {
+		wn := newTestNetwork(map[protocol.Tag]bool{
+			protocol.AgreementVoteTag: true,
+			protocol.VotePackedTag:    true,
+		})
+
+		peer, ch := makePeer(wn, pfCompressedProposal|pfCompressedVoteVpack)
+		wn.maybeSendMessagesOfInterest(peer, nil)
+
+		select {
+		case msg := <-ch:
+			require.Equal(t, protocol.MsgOfInterestTag, protocol.Tag(msg.data[:2]))
+
+			decoded, err := unmarshallMessageOfInterest(msg.data[2:])
+			require.NoError(t, err)
+
+			require.Contains(t, decoded, protocol.AgreementVoteTag)
+			require.True(t, decoded[protocol.AgreementVoteTag])
+			_, hasVP := decoded[protocol.VotePackedTag]
+			require.False(t, hasVP, "VP tag should be filtered for legacy peers")
+		default:
+			t.Fatal("expected MOI message for legacy peer")
+		}
+	})
+
+	t.Run("retains VP for peers with stateful support", func(t *testing.T) {
+		wn := newTestNetwork(map[protocol.Tag]bool{
+			protocol.AgreementVoteTag: true,
+			protocol.VotePackedTag:    true,
+		})
+
+		peer, ch := makePeer(wn, pfCompressedProposal|pfCompressedVoteVpack|pfCompressedVoteVpackStateful256)
+
+		wn.maybeSendMessagesOfInterest(peer, nil)
+
+		select {
+		case msg := <-ch:
+			require.Equal(t, protocol.MsgOfInterestTag, protocol.Tag(msg.data[:2]))
+
+			decoded, err := unmarshallMessageOfInterest(msg.data[2:])
+			require.NoError(t, err)
+
+			require.Contains(t, decoded, protocol.AgreementVoteTag)
+			require.True(t, decoded[protocol.AgreementVoteTag])
+			require.Contains(t, decoded, protocol.VotePackedTag)
+			require.True(t, decoded[protocol.VotePackedTag], "expected VP tag for peer with stateful support")
+		default:
+			t.Fatal("expected MOI message for stateful peer")
+		}
+	})
+
+	t.Run("gracefully handles configuration without VP tag", func(t *testing.T) {
+		wn := newTestNetwork(map[protocol.Tag]bool{
+			protocol.AgreementVoteTag: true,
+		})
+
+		peer, ch := makePeer(wn, pfCompressedProposal|pfCompressedVoteVpack)
+		wn.maybeSendMessagesOfInterest(peer, nil)
+
+		select {
+		case msg := <-ch:
+			require.Equal(t, protocol.MsgOfInterestTag, protocol.Tag(msg.data[:2]))
+
+			decoded, err := unmarshallMessageOfInterest(msg.data[2:])
+			require.NoError(t, err)
+
+			require.Contains(t, decoded, protocol.AgreementVoteTag)
+			require.True(t, decoded[protocol.AgreementVoteTag])
+			_, hasVP := decoded[protocol.VotePackedTag]
+			require.False(t, hasVP)
+		default:
+			t.Fatal("expected MOI message when VP is absent from configuration")
+		}
+	})
+
+	t.Run("skips sending when peer generation matches", func(t *testing.T) {
+		wn := newTestNetwork(map[protocol.Tag]bool{
+			protocol.AgreementVoteTag: true,
+			protocol.VotePackedTag:    true,
+		})
+
+		peer, ch := makePeer(wn, pfCompressedProposal|pfCompressedVoteVpack)
+		peer.messagesOfInterestGeneration.Store(wn.messagesOfInterestGeneration.Load())
+
+		wn.maybeSendMessagesOfInterest(peer, nil)
+
+		select {
+		case <-ch:
+			t.Fatal("did not expect MOI message when generations already match")
+		default:
+		}
+	})
+}
+
+// TestNumOutgoingPending tests that numOutgoingPending returns the correct count
+// of pending connections, accounting for the fact that tryConnectAddrs always
+// stores two entries per pending connection (addr and gossipAddr).
+func TestNumOutgoingPending(t *testing.T) {
+	partitiontest.PartitionTest(t)
+	t.Parallel()
+
+	netA := makeTestWebsocketNode(t)
+	netA.Start()
+	defer netA.Stop()
+
+	assertEvenEntries := func() {
+		netA.tryConnectLock.Lock()
+		mapLen := len(netA.tryConnectAddrs)
+		netA.tryConnectLock.Unlock()
+		require.Equal(t, 0, mapLen%2, "tryConnectAddrs should always have even number of entries, got %d", mapLen)
+	}
+
+	require.Equal(t, 0, netA.numOutgoingPending())
+	assertEvenEntries()
+
+	gossipAddr1, ok := netA.tryConnectReserveAddr("127.0.0.1:4161")
+	require.True(t, ok)
+	require.NotEmpty(t, gossipAddr1)
+	require.Equal(t, 1, netA.numOutgoingPending())
+	assertEvenEntries()
+
+	netA.tryConnectLock.Lock()
+	require.Equal(t, 2, len(netA.tryConnectAddrs))
+	netA.tryConnectLock.Unlock()
+
+	gossipAddr2, ok := netA.tryConnectReserveAddr("127.0.0.1:4162")
+	require.True(t, ok)
+	require.NotEmpty(t, gossipAddr2)
+	require.Equal(t, 2, netA.numOutgoingPending())
+	assertEvenEntries()
+
+	netA.tryConnectLock.Lock()
+	require.Equal(t, 4, len(netA.tryConnectAddrs))
+	netA.tryConnectLock.Unlock()
+
+	// Trying to reserve the same address should fail
+	_, ok = netA.tryConnectReserveAddr("127.0.0.1:4161")
+	require.False(t, ok)
+	require.Equal(t, 2, netA.numOutgoingPending(), "count should not change after failed reserve")
+	assertEvenEntries()
+
+	// Release addresses
+	netA.tryConnectReleaseAddr("127.0.0.1:4161", gossipAddr1)
+	require.Equal(t, 1, netA.numOutgoingPending())
+	assertEvenEntries()
+
+	netA.tryConnectLock.Lock()
+	require.Equal(t, 2, len(netA.tryConnectAddrs))
+	netA.tryConnectLock.Unlock()
+
+	netA.tryConnectReleaseAddr("127.0.0.1:4162", gossipAddr2)
+	require.Equal(t, 0, netA.numOutgoingPending())
+	assertEvenEntries()
+
+	netA.tryConnectLock.Lock()
+	require.Equal(t, 0, len(netA.tryConnectAddrs), "map should be empty after all releases")
+	netA.tryConnectLock.Unlock()
 }

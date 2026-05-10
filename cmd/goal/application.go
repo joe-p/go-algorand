@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2025 Algorand, Inc.
+// Copyright (C) 2019-2026 Algorand Foundation Ltd.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -27,12 +27,12 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/algorand/avm-abi/abi"
 	"github.com/algorand/avm-abi/apps"
+
 	"github.com/algorand/go-algorand/cmd/util/datadir"
 	"github.com/algorand/go-algorand/crypto"
 	apiclient "github.com/algorand/go-algorand/daemon/algod/api/client"
@@ -84,8 +84,7 @@ var (
 	// controls whether all these refs put into the old-style "foreign arrays" or the new-style tx.Access
 	appUseAccess bool
 
-	appArgs          []string
-	appInputFilename string
+	appArgs []string
 
 	fetchLocal  bool
 	fetchGlobal bool
@@ -111,24 +110,27 @@ func init() {
 	appCmd.PersistentFlags().StringSliceVar(&foreignAssets, "foreign-asset", nil, "Indexes of assets whose parameters are read in this transaction")
 	appCmd.PersistentFlags().StringArrayVar(&appStrBoxes, "box", nil, "A Box that may be accessed by this transaction. Use the same form as app-arg to name the box, preceded by an optional app-id and comma. Zero or omitted app-id indicates the box is accessible by the app being called.")
 	appCmd.PersistentFlags().StringSliceVar(&appStrAccounts, "app-account", nil, "Accounts that may be accessed from application logic")
-	appCmd.PersistentFlags().StringSliceVar(&appStrHoldings, "holding", nil, "A Holding that may be accessed from application logic. An asset-id followed by a comma and an address")
-	appCmd.PersistentFlags().StringSliceVar(&appStrLocals, "local", nil, "A Local State that may be accessed from application logic. An optional app-id and comma, followed by an address. Zero or omitted app-id indicates the local state for app being called.")
+	appCmd.PersistentFlags().StringSliceVar(&appStrHoldings, "holding", nil, "A Holding that may be accessed from application logic. An asset-id followed by a plus sign and an address")
+	appCmd.PersistentFlags().StringSliceVar(&appStrLocals, "local", nil, "A Local State that may be accessed from application logic. An optional app-id and a plus sign, followed by an address. Zero or omitted app-id indicates the local state for app being called.")
 	appCmd.PersistentFlags().BoolVar(&appUseAccess, "access", false, "Put references into the transaction's access list, instead of foreign arrays.")
-	appCmd.PersistentFlags().StringVarP(&appInputFilename, "app-input", "i", "", "JSON file containing encoded arguments and inputs (mutually exclusive with app-arg, app-account, foreign-app, foreign-asset, local, holding, and box)")
 
 	appCmd.PersistentFlags().StringVar(&approvalProgFile, "approval-prog", "", "(Uncompiled) TEAL assembly program filename for approving/rejecting transactions")
 	appCmd.PersistentFlags().StringVar(&clearProgFile, "clear-prog", "", "(Uncompiled) TEAL assembly program filename for updating application state when a user clears their local state")
 
-	appCmd.PersistentFlags().StringVar(&approvalProgRawFile, "approval-prog-raw", "", "Compiled TEAL program filename for approving/rejecting transactions")
-	appCmd.PersistentFlags().StringVar(&clearProgRawFile, "clear-prog-raw", "", "Compiled TEAL program filename for updating application state when a user clears their local state")
+	appCmd.PersistentFlags().StringVar(&approvalProgRawFile, "approval-prog-raw", "", "Compiled AVM bytecode program filename for approving/rejecting transactions")
+	appCmd.PersistentFlags().StringVar(&clearProgRawFile, "clear-prog-raw", "", "Compiled AVM bytecode program filename for updating application state when a user clears their local state")
 
-	createAppCmd.Flags().Uint64Var(&globalSchemaUints, "global-ints", 0, "Maximum number of integer values that may be stored in the global key/value store. Immutable.")
-	createAppCmd.Flags().Uint64Var(&globalSchemaByteSlices, "global-byteslices", 0, "Maximum number of byte slices that may be stored in the global key/value store. Immutable.")
+	createAppCmd.Flags().Uint64Var(&globalSchemaUints, "global-ints", 0, "Maximum number of integer values that may be stored in the global key/value store.")
+	createAppCmd.Flags().Uint64Var(&globalSchemaByteSlices, "global-byteslices", 0, "Maximum number of byte slices that may be stored in the global key/value store.")
 	createAppCmd.Flags().Uint64Var(&localSchemaUints, "local-ints", 0, "Maximum number of integer values that may be stored in local (per-account) key/value stores for this app. Immutable.")
 	createAppCmd.Flags().Uint64Var(&localSchemaByteSlices, "local-byteslices", 0, "Maximum number of byte slices that may be stored in local (per-account) key/value stores for this app. Immutable.")
 	createAppCmd.Flags().StringVar(&appCreator, "creator", "", "Account to create the application")
 	createAppCmd.Flags().StringVar(&onCompletion, "on-completion", "NoOp", "OnCompletion action for application transaction")
-	createAppCmd.Flags().Uint32Var(&extraPages, "extra-pages", 0, "Additional program space for supporting larger TEAL assembly program. A maximum of 3 extra pages is allowed. A page is 1024 bytes.")
+	createAppCmd.Flags().Uint32Var(&extraPages, "extra-pages", 0, "Additional program space for supporting larger AVM bytecode program. A maximum of 3 extra pages is allowed. A page is 1024 bytes.")
+
+	updateAppCmd.Flags().Uint64Var(&globalSchemaUints, "global-ints", 0, "Maximum number of integer values that may be stored in the global key/value store.")
+	updateAppCmd.Flags().Uint64Var(&globalSchemaByteSlices, "global-byteslices", 0, "Maximum number of byte slices that may be stored in the global key/value store.")
+	updateAppCmd.Flags().Uint32Var(&extraPages, "extra-pages", 0, "Additional program space for supporting larger AVM program. A maximum of 3 extra pages is allowed. A page is 1024 bytes.")
 
 	callAppCmd.Flags().StringVarP(&account, "from", "f", "", "Account to call app from")
 	optInAppCmd.Flags().StringVarP(&account, "from", "f", "", "Account to opt in")
@@ -144,11 +146,11 @@ func init() {
 	methodAppCmd.Flags().StringVar(&onCompletion, "on-completion", "NoOp", "OnCompletion action for application transaction")
 	methodAppCmd.Flags().Uint64Var(&rejectVersion, "reject-version", 0, "RejectVersion for application transaction")
 	methodAppCmd.Flags().BoolVar(&methodCreatesApp, "create", false, "Create an application in this method call")
-	methodAppCmd.Flags().Uint64Var(&globalSchemaUints, "global-ints", 0, "Maximum number of integer values that may be stored in the global key/value store. Immutable, only valid when passed with --create.")
-	methodAppCmd.Flags().Uint64Var(&globalSchemaByteSlices, "global-byteslices", 0, "Maximum number of byte slices that may be stored in the global key/value store. Immutable, only valid when passed with --create.")
+	methodAppCmd.Flags().Uint64Var(&globalSchemaUints, "global-ints", 0, "Maximum number of integer values that may be stored in the global key/value store. Valid when passed with --create or when updating.")
+	methodAppCmd.Flags().Uint64Var(&globalSchemaByteSlices, "global-byteslices", 0, "Maximum number of byte slices that may be stored in the global key/value store. Valid when passed with --create or when updating.")
 	methodAppCmd.Flags().Uint64Var(&localSchemaUints, "local-ints", 0, "Maximum number of integer values that may be stored in local (per-account) key/value stores for this app. Immutable, only valid when passed with --create.")
 	methodAppCmd.Flags().Uint64Var(&localSchemaByteSlices, "local-byteslices", 0, "Maximum number of byte slices that may be stored in local (per-account) key/value stores for this app. Immutable, only valid when passed with --create.")
-	methodAppCmd.Flags().Uint32Var(&extraPages, "extra-pages", 0, "Additional program space for supporting larger TEAL assembly program. A maximum of 3 extra pages is allowed. A page is 1024 bytes. Only valid when passed with --create.")
+	methodAppCmd.Flags().Uint32Var(&extraPages, "extra-pages", 0, "Additional program space for supporting larger AVM bytecode program. A maximum of 3 extra pages is allowed. A page is 1024 bytes. Valid when passed with --create or when updating.")
 
 	// Can't use PersistentFlags on the root because for some reason marking
 	// a root command as required with MarkPersistentFlagRequired isn't
@@ -383,26 +385,6 @@ func cliAddress(acct string) basics.Address {
 	return addr
 }
 
-func getAppInputsFromFile() appCallInputs {
-	reportWarnf("Using a JSON app input file is deprecated and will be removed soon. Please speak up if the feature matters to you.")
-	time.Sleep(5 * time.Second)
-
-	var inputs appCallInputs
-	f, err := os.Open(appInputFilename)
-	if err != nil {
-		reportErrorf("Could not open app input JSON file: %v", err)
-	}
-	defer f.Close()
-
-	dec := protocol.NewJSONDecoder(f)
-	err = dec.Decode(&inputs)
-	if err != nil {
-		reportErrorf("Could not decode app input JSON file: %v", err)
-	}
-
-	return inputs
-}
-
 func getAppInputsFromCLI() appCallInputs {
 	// we need to ignore empty strings from appArgs because app-arg was
 	// previously a StringSliceVar, which also does that, and some test depend
@@ -432,19 +414,7 @@ func getAppInputsFromCLI() appCallInputs {
 }
 
 func getAppInputs() ([][]byte, libgoal.RefBundle) {
-	var inputs appCallInputs
-	if appInputFilename != "" {
-		if appArgs != nil || appStrAccounts != nil ||
-			foreignApps != nil || foreignAssets != nil || appStrBoxes != nil ||
-			appStrHoldings != nil || appStrLocals != nil {
-			reportErrorf("Cannot specify both command-line arguments/resources and JSON input filename")
-		}
-		inputs = getAppInputsFromFile()
-	} else {
-		inputs = getAppInputsFromCLI()
-	}
-
-	return parseAppInputs(inputs)
+	return parseAppInputs(getAppInputsFromCLI())
 }
 
 var appCmd = &cobra.Command{
@@ -542,7 +512,8 @@ var createAppCmd = &cobra.Command{
 			reportErrorf("Cannot create application txn: %v", err)
 		}
 
-		// Fill in note and lease
+		// Fill in rekey, note and lease
+		tx.RekeyTo = parseRekey(rekeyToAddress)
 		tx.Note = parseNoteField(cmd)
 		tx.Lease = parseLease(cmd)
 
@@ -616,8 +587,14 @@ var updateAppCmd = &cobra.Command{
 		if err != nil {
 			reportErrorf("Cannot create application txn: %v", err)
 		}
+		tx.GlobalStateSchema = basics.StateSchema{
+			NumUint:      globalSchemaUints,
+			NumByteSlice: globalSchemaByteSlices,
+		}
+		tx.ExtraProgramPages = extraPages
 
-		// Fill in note and lease
+		// Fill in rekey, note and lease
+		tx.RekeyTo = parseRekey(rekeyToAddress)
 		tx.Note = parseNoteField(cmd)
 		tx.Lease = parseLease(cmd)
 
@@ -687,7 +664,8 @@ var optInAppCmd = &cobra.Command{
 			reportErrorf("Cannot create application txn: %v", err)
 		}
 
-		// Fill in note and lease
+		// Fill in rekey, note and lease
+		tx.RekeyTo = parseRekey(rekeyToAddress)
 		tx.Note = parseNoteField(cmd)
 		tx.Lease = parseLease(cmd)
 
@@ -757,7 +735,8 @@ var closeOutAppCmd = &cobra.Command{
 			reportErrorf("Cannot create application txn: %v", err)
 		}
 
-		// Fill in note and lease
+		// Fill in rekey, note and lease
+		tx.RekeyTo = parseRekey(rekeyToAddress)
 		tx.Note = parseNoteField(cmd)
 		tx.Lease = parseLease(cmd)
 
@@ -827,7 +806,8 @@ var clearAppCmd = &cobra.Command{
 			reportErrorf("Cannot create application txn: %v", err)
 		}
 
-		// Fill in note and lease
+		// Fill in rekey, note and lease
+		tx.RekeyTo = parseRekey(rekeyToAddress)
 		tx.Note = parseNoteField(cmd)
 		tx.Lease = parseLease(cmd)
 
@@ -896,7 +876,8 @@ var callAppCmd = &cobra.Command{
 			reportErrorf("Cannot create application txn: %v", err)
 		}
 
-		// Fill in note and lease
+		// Fill in rekey, note and lease
+		tx.RekeyTo = parseRekey(rekeyToAddress)
 		tx.Note = parseNoteField(cmd)
 		tx.Lease = parseLease(cmd)
 
@@ -966,7 +947,8 @@ var deleteAppCmd = &cobra.Command{
 			reportErrorf("Cannot create application txn: %v", err)
 		}
 
-		// Fill in note and lease
+		// Fill in rekey, note and lease
+		tx.RekeyTo = parseRekey(rekeyToAddress)
 		tx.Note = parseNoteField(cmd)
 		tx.Lease = parseLease(cmd)
 
@@ -1123,6 +1105,11 @@ var infoAppCmd = &cobra.Command{
 		ver := params.Version
 		if ver != nil {
 			fmt.Printf("Program version:       %d\n", *ver)
+		}
+
+		sponsor := params.SizeSponsor
+		if sponsor != nil {
+			fmt.Printf("Size sponsor:        %v\n", *sponsor)
 		}
 
 		epp := params.ExtraProgramPages
@@ -1369,12 +1356,16 @@ var methodAppCmd = &cobra.Command{
 				reportErrorf("one of --app-id or --create must be provided")
 			}
 
-			if localSchema != (basics.StateSchema{}) || globalSchema != (basics.StateSchema{}) {
-				reportErrorf("--global-ints, --global-byteslices, --local-ints, and --local-byteslices must only be provided with --create")
+			if onCompletionEnum != transactions.UpdateApplicationOC {
+				if !globalSchema.Empty() {
+					reportErrorf("--global-ints, --global-byteslices, --local-ints, and --local-byteslices must only be provided with --create or when updating")
+				}
+				if extraPages != 0 {
+					reportErrorf("--extra-pages must only be provided with --create or when updating")
+				}
 			}
-
-			if extraPages != 0 {
-				reportErrorf("--extra-pages must only be provided with --create")
+			if !localSchema.Empty() {
+				reportErrorf("--local-ints and --local-byteslices must only be provided with --create")
 			}
 		}
 
@@ -1461,7 +1452,8 @@ var methodAppCmd = &cobra.Command{
 			reportErrorf("Cannot create application txn: %v", err)
 		}
 
-		// Fill in note and lease
+		// Fill in rekey, note and lease
+		appCallTxn.RekeyTo = parseRekey(rekeyToAddress)
 		appCallTxn.Note = parseNoteField(cmd)
 		appCallTxn.Lease = parseLease(cmd)
 

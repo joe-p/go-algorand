@@ -20,8 +20,6 @@ touch gen/generate.go
 
 make build
 
-"${SCRIPTPATH}"/../buildtools/install_buildtools.sh
-
 make gen SHORT_PART_PERIOD=1
 
 echo "Running check_license..."
@@ -51,7 +49,7 @@ touch daemon/algod/api/algod.oas2.json
 make -C daemon/algod/api generate
 
 echo "Regenerate msgp files"
-make msgp
+make -j6 msgp
 
 echo Checking Enlistment...
 if [[ -n $(git status --porcelain) ]]; then

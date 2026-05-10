@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2025 Algorand, Inc.
+// Copyright (C) 2019-2026 Algorand Foundation Ltd.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -79,7 +79,7 @@ func TestBlockEvaluator(t *testing.T) {
 
 	// Correct signature should work
 	st := txn.Sign(keys[0])
-	err = eval.Transaction(st, transactions.ApplyData{})
+	err = eval.TransactionGroup(st.WithAD())
 	require.NoError(t, err)
 
 	// Broken signature should fail
@@ -93,7 +93,7 @@ func TestBlockEvaluator(t *testing.T) {
 	txgroup = []transactions.SignedTxn{st}
 	err = eval.TestTransactionGroup(txgroup)
 	require.Error(t, err)
-	err = eval.Transaction(st, transactions.ApplyData{})
+	err = eval.TransactionGroup(st.WithAD())
 	require.Error(t, err)
 
 	// out of range should fail
@@ -104,7 +104,7 @@ func TestBlockEvaluator(t *testing.T) {
 	txgroup = []transactions.SignedTxn{st}
 	err = eval.TestTransactionGroup(txgroup)
 	require.Error(t, err)
-	err = eval.Transaction(st, transactions.ApplyData{})
+	err = eval.TransactionGroup(st.WithAD())
 	require.Error(t, err)
 
 	// bogus group should fail
@@ -114,7 +114,7 @@ func TestBlockEvaluator(t *testing.T) {
 	txgroup = []transactions.SignedTxn{st}
 	err = eval.TestTransactionGroup(txgroup)
 	require.Error(t, err)
-	err = eval.Transaction(st, transactions.ApplyData{})
+	err = eval.TransactionGroup(st.WithAD())
 	require.Error(t, err)
 
 	// mixed fields should fail
@@ -149,7 +149,7 @@ func TestBlockEvaluator(t *testing.T) {
 	err = eval.TestTransactionGroup(txgroup)
 	require.NoError(t, err)
 
-	err = eval.Transaction(stxn, transactions.ApplyData{})
+	err = eval.TransactionGroup(stxn.WithAD())
 	require.NoError(t, err)
 
 	t3 := txn
@@ -164,7 +164,7 @@ func TestBlockEvaluator(t *testing.T) {
 	err = eval.TestTransactionGroup(txgroup)
 	require.Error(t, err)
 	txgroupad := transactions.WrapSignedTxnsWithAD(txgroup)
-	err = eval.TransactionGroup(txgroupad)
+	err = eval.TransactionGroup(txgroupad...)
 	require.Error(t, err)
 
 	// Test a group that should work
@@ -186,7 +186,7 @@ func TestBlockEvaluator(t *testing.T) {
 	err = eval.TestTransactionGroup(txgroup)
 	require.Error(t, err)
 	txgroupad = transactions.WrapSignedTxnsWithAD(txgroup)
-	err = eval.TransactionGroup(txgroupad)
+	err = eval.TransactionGroup(txgroupad...)
 	require.Error(t, err)
 
 	// missing part of the group should fail
@@ -342,6 +342,92 @@ func TestPayoutFees(t *testing.T) {
 		dl.beginBlock()
 		dl.endBlock(proposer)
 		require.EqualValues(t, micros(t, dl.generator, feesink), 100_000)
+	})
+}
+
+// TestFeePooling checks that fees are sufficient across a group to pay for the group
+func TestFeePooling(t *testing.T) {
+	partitiontest.PartitionTest(t)
+	t.Parallel()
+
+	genBalances, addrs, _ := ledgertesting.NewTestGenesis()
+	// FeePooling was added in v28, but we have now removed the consensus flag,
+	// as we can pretend it was always allowed. Test from v27 to show.
+	ledgertesting.TestConsensusRange(t, 27, 0, func(t *testing.T, ver int, cv protocol.ConsensusVersion, cfg config.Local) {
+		dl := NewDoubleLedger(t, genBalances, cv, cfg)
+		defer dl.Close()
+
+		proto := config.Consensus[cv]
+
+		// A basic transaction has to pay enough!
+		dl.txn(&txntest.Txn{Type: "pay", Sender: addrs[1], Amount: proto.MinBalance, Fee: 1},
+			"fees is less than") // avoid using the exact values in the string
+		dl.txn(&txntest.Txn{Type: "pay", Sender: addrs[1], Amount: proto.MinBalance, Fee: proto.MinFee()})
+
+		// Two txns need two min fees
+		dl.txgroup("fees is less than",
+			&txntest.Txn{Type: "pay", Sender: addrs[1], Amount: proto.MinBalance, Fee: proto.MinFee()},
+			&txntest.Txn{Type: "pay", Sender: addrs[1], Amount: 1, Fee: 1},
+		)
+		dl.txgroup("",
+			&txntest.Txn{Type: "pay", Sender: addrs[1], Amount: proto.MinBalance, Fee: proto.MinFee()},
+			&txntest.Txn{Type: "pay", Sender: addrs[1], Amount: 1, Fee: proto.MinFee()},
+		)
+		dl.txgroup("",
+			&txntest.Txn{Type: "pay", Sender: addrs[1], Amount: proto.MinBalance, Fee: 2 * proto.MinTxnFee},
+			&txntest.Txn{Type: "pay", Sender: addrs[1], Amount: 1, Fee: 1},
+		)
+		dl.txgroup("",
+			&txntest.Txn{Type: "pay", Sender: addrs[1], Amount: 1, Fee: 1},
+			&txntest.Txn{Type: "pay", Sender: addrs[1], Amount: proto.MinBalance, Fee: 2 * proto.MinTxnFee})
+	})
+}
+
+// TestGroupChecks checks that the group checks are working
+func TestGroupChecks(t *testing.T) {
+	partitiontest.PartitionTest(t)
+	t.Parallel()
+
+	genBalances, addrs, _ := ledgertesting.NewTestGenesis()
+	// FeePooling was added in v28, but we have now removed the consensus flag,
+	// as we can pretend it was always allowed. Test from v27 to show.
+	ledgertesting.TestConsensusRange(t, 27, 0, func(t *testing.T, ver int, cv protocol.ConsensusVersion, cfg config.Local) {
+		dl := NewDoubleLedger(t, genBalances, cv, cfg)
+		defer dl.Close()
+
+		proto := config.Consensus[cv]
+
+		tx0 := txntest.Txn{
+			Type:     protocol.PaymentTx,
+			Sender:   addrs[0],
+			Fee:      basics.MicroAlgos{Raw: proto.MinTxnFee},
+			Receiver: addrs[1],
+		}
+
+		// txgroup sets up the Group properly, so it works, but it doesn't let
+		// us test what happens when the group isn't made properly.
+		dl.txgroup("", &tx0, tx0.Noted("again"))
+
+		// so here we make the group and tweak it to see the errors
+
+		showFail := func(txgroup []transactions.SignedTxn, msg string) {
+			t.Helper()
+			err := dl.eval.TestTransactionGroup(txgroup)
+			require.ErrorContains(t, err, msg)
+
+			err = dl.eval.TransactionGroup(transactions.WrapSignedTxnsWithAD(txgroup)...)
+			require.ErrorContains(t, err, msg)
+		}
+
+		dl.beginBlock()
+		g := makeGroup(t, dl.generator, dl.eval, tx0.Noted("x"), tx0.Noted("y"))
+		g[0].Txn.Group = crypto.Digest{}
+		showFail(g, "[0] had zero Group")
+		g[0].Txn.Group = g[1].Txn.Group
+		g[0].Txn.Group[0]++
+		showFail(g, "inconsistent group values")
+		g[1].Txn.Group[0]++
+		showFail(g, "incomplete group")
 	})
 }
 
@@ -1290,7 +1376,7 @@ func TestRekeying(t *testing.T) {
 		require.NoError(t, err)
 
 		for _, stxn := range stxns {
-			err = eval.Transaction(stxn, transactions.ApplyData{})
+			err = eval.TransactionGroup(stxn.WithAD())
 			if err != nil {
 				return err
 			}
@@ -1358,13 +1444,13 @@ func testEvalAppPoolingGroup(t *testing.T, schema basics.StateSchema, approvalPr
 	appcall2 := txntest.Txn{
 		Sender:        addrs[0],
 		Type:          protocol.ApplicationCallTx,
-		ApplicationID: basics.AppIndex(1),
+		ApplicationID: 1,
 	}
 
 	appcall3 := txntest.Txn{
 		Sender:        addrs[1],
 		Type:          protocol.ApplicationCallTx,
-		ApplicationID: basics.AppIndex(1),
+		ApplicationID: 1,
 	}
 
 	return txgroup(t, l, eval, &appcall1, &appcall2, &appcall3)

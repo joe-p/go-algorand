@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2025 Algorand, Inc.
+// Copyright (C) 2019-2026 Algorand Foundation Ltd.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -24,9 +24,11 @@ import (
 	"path/filepath"
 	"regexp"
 
-	"github.com/algorand/go-deadlock"
 	"github.com/jmoiron/sqlx"
 	"github.com/mattn/go-sqlite3"
+
+	"github.com/algorand/go-codec/codec"
+	"github.com/algorand/go-deadlock"
 
 	"github.com/algorand/go-algorand/crypto"
 	"github.com/algorand/go-algorand/daemon/kmd/config"
@@ -35,7 +37,6 @@ import (
 	"github.com/algorand/go-algorand/data/transactions/logic"
 	"github.com/algorand/go-algorand/logging"
 	"github.com/algorand/go-algorand/protocol"
-	"github.com/algorand/go-codec/codec"
 )
 
 const (
@@ -118,7 +119,7 @@ func init() {
 	codecHandle.PositiveIntUnsigned = true
 }
 
-// interface{} => msgpack blob
+// encode interface{} => msgpack blob
 func msgpackEncode(obj interface{}) []byte {
 	var b []byte
 	enc := codec.NewEncoderBytes(&b, codecHandle)
@@ -126,7 +127,7 @@ func msgpackEncode(obj interface{}) []byte {
 	return b
 }
 
-// msgpack blob => interface{}
+// decode msgpack blob => interface{}
 func msgpackDecode(b []byte, objptr interface{}) error {
 	dec := codec.NewDecoderBytes(b, codecHandle)
 	return dec.Decode(objptr)
@@ -263,7 +264,7 @@ func (swd *SQLiteWalletDriver) ListWalletMetadatas() (metadatas []wallet.Metadat
 	return metadatas, nil
 }
 
-// findDBPathsById returns the paths to wallets with the specified id
+// findDBPathsByID returns the paths to wallets with the specified id
 func (swd *SQLiteWalletDriver) findDBPathsByID(id []byte) (paths []string, err error) {
 	return swd.findDBPathsByField("ID", id)
 }

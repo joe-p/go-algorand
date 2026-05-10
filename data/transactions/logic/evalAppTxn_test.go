@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2025 Algorand, Inc.
+// Copyright (C) 2019-2026 Algorand Foundation Ltd.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -19,9 +19,12 @@ package logic_test
 import (
 	"encoding/hex"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 
 	"github.com/algorand/go-algorand/crypto"
 	"github.com/algorand/go-algorand/data/basics"
@@ -30,8 +33,6 @@ import (
 	"github.com/algorand/go-algorand/data/txntest"
 	"github.com/algorand/go-algorand/protocol"
 	"github.com/algorand/go-algorand/test/partitiontest"
-
-	"github.com/stretchr/testify/require"
 )
 
 func TestInnerTypesV5(t *testing.T) {
@@ -132,7 +133,7 @@ func TestFieldLimits(t *testing.T) {
 
 	ep, _, _ := MakeSampleEnv()
 
-	intProgram := "itxn_begin; int %d; itxn_field %s; int 1"
+	intProgram := "itxn_begin; int %v; itxn_field %s; int 1"
 	goodInt := func(field string, value interface{}) {
 		TestApp(t, fmt.Sprintf(intProgram, value, field), ep)
 	}
@@ -168,7 +169,10 @@ func TestFieldLimits(t *testing.T) {
 
 	// header
 	badInt("TypeEnum", 0)
-	testInt("TypeEnum", len(TxnTypeNames)-1)
+	testInt("TypeEnum", slices.Index(TxnTypeNames[:], "appl")) // later ints are illegal for itxn
+	badInt("TypeEnum", "hb")
+	badInt("TypeEnum", "stpf")
+	badInt("TypeEnum", 0)
 	//keyreg
 	testBool("Nonparticipation")
 	//acfg
@@ -213,6 +217,7 @@ func TestAppPay(t *testing.T) {
 	// v5 added inners
 	TestLogicRange(t, 5, 0, func(t *testing.T, ep *EvalParams, tx *transactions.Transaction, ledger *Ledger) {
 		test := func(source string, problem ...string) {
+			t.Helper()
 			TestApp(t, source, ep, problem...)
 		}
 		ledger.NewApp(tx.Receiver, 888, basics.AppParams{})
@@ -222,16 +227,17 @@ func TestAppPay(t *testing.T) {
 			"insufficient balance")
 		ledger.NewAccount(appAddr(888), 1000000)
 
-		// You might NewExpect this to fail because of min balance issue
-		// (receiving account only gets 100 microalgos).  It does not fail at
-		// this level, instead, we must be certain that the existing min
-		// balance check in eval.transaction() properly notices and fails
-		// the transaction later.  This fits with the model that we check
-		// min balances once at the end of each "top-level" transaction.
+		// You might expect this to fail because of min balance issue (receiving
+		// account only gets 100 microalgos).  It does not fail at this level,
+		// instead, we must be certain that the existing min balance check in
+		// eval.transaction() properly notices and fails the transaction later.
+		// This fits with the model that we check min balances once at the end
+		// of each "top-level" transaction.
 		test("global CurrentApplicationAddress; txn Accounts 1; int 100" + pay)
 
-		// 100 of 1000000 spent, plus MinTxnFee in our fake protocol is 1001
-		test("global CurrentApplicationAddress; balance; int 998899; ==")
+		// 100 of 1000000 spent, plus MinTxnFee in our test protocol is 1001
+		const leftOver = 1000000 - 100 - (1001 - 401) // 401 fee credit
+		test("global CurrentApplicationAddress; balance; int " + strconv.Itoa(leftOver) + "; ==")
 		test("txn Receiver; balance; int 100; ==")
 
 		close := `
@@ -243,8 +249,9 @@ func TestAppPay(t *testing.T) {
 `
 		test(close)
 		test("global CurrentApplicationAddress; balance; !")
-		// Receiver got most of the algos (except 1001 for fee)
-		test("txn Receiver; balance; int 997998; ==")
+		// Receiver got most of the algos (except 1001-401 for fee)
+		const transferred = leftOver - 600
+		test("txn Receiver; balance; int " + strconv.Itoa(100+transferred) + "; ==")
 	})
 }
 
@@ -419,9 +426,10 @@ func TestDefaultSender(t *testing.T) {
 		ledger.NewApp(tx.Receiver, 888, basics.AppParams{})
 		tx.Accounts = append(tx.Accounts, appAddr(888))
 		TestApp(t, "txn Accounts 1; int 100"+pay, ep, "insufficient balance")
-		ledger.NewAccount(appAddr(888), 1000000)
+		ledger.NewAccount(appAddr(888), 1_000_000)
 		TestApp(t, "txn Accounts 1; int 100"+pay+"int 1", ep)
-		TestApp(t, "global CurrentApplicationAddress; balance; int 998899; ==", ep)
+		left := 1_000_000 - 100 - int(ep.Proto.MinTxnFee) + 401
+		TestApp(t, "global CurrentApplicationAddress; balance; int "+strconv.Itoa(left)+"; ==", ep)
 	})
 }
 
@@ -1037,11 +1045,11 @@ func TestInnerGroup(t *testing.T) {
 	t.Parallel()
 
 	ep, tx, ledger := MakeSampleEnv()
-	ep.FeeCredit = nil // default sample env starts at 401
+	// default sample env starts at 401 (1337+1066-2*1001)
 
 	ledger.NewApp(tx.Receiver, 888, basics.AppParams{})
-	// Need both fees and both payments
-	ledger.NewAccount(appAddr(888), 999+2*MakeTestProto().MinTxnFee)
+	// Need both fees and both payments, 999<1000
+	ledger.NewAccount(appAddr(888), 999+2*MakeTestProto().MinTxnFee-401) // 401 is fee credit
 	pay := `
 int pay;    itxn_field TypeEnum;
 int 500;    itxn_field Amount;
@@ -1051,8 +1059,9 @@ txn Sender; itxn_field Receiver;
 		"insufficient balance")
 
 	// NewAccount overwrites the existing balance
-	ledger.NewAccount(appAddr(888), 1000+2*MakeTestProto().MinTxnFee)
+	ledger.NewAccount(appAddr(888), 1000+2*MakeTestProto().MinTxnFee-401)
 	TestApp(t, "itxn_begin"+pay+"itxn_next"+pay+"itxn_submit; int 1", ep)
+	ledger.NewAccount(appAddr(888), 1000+2*MakeTestProto().MinTxnFee-401) // replenish
 	TestApp(t, "itxn_begin; itxn_begin"+pay+"itxn_next"+pay+"itxn_submit; int 1", ep,
 		"itxn_begin without itxn_submit")
 	TestApp(t, "itxn_next"+pay+"itxn_next"+pay+"itxn_submit; int 1", ep,
@@ -1064,7 +1073,6 @@ func TestInnerFeePooling(t *testing.T) {
 	t.Parallel()
 
 	ep, tx, ledger := MakeSampleEnv()
-	ep.FeeCredit = nil // default sample env starts at 401
 
 	ledger.NewApp(tx.Receiver, 888, basics.AppParams{})
 	ledger.NewAccount(appAddr(888), 50_000)
@@ -1073,13 +1081,13 @@ int pay;    itxn_field TypeEnum;
 int 500;    itxn_field Amount;
 txn Sender; itxn_field Receiver;
 `
-	// Force the first fee to 3, but the second will default to 2*fee-3 = 2002-3
+	// Force the first fee to 3, so the second will be high to "catchup" (recall we start with 401uA credit)
 	TestApp(t, "itxn_begin"+
 		pay+
 		"int 3; itxn_field Fee;"+
 		"itxn_next"+
 		pay+
-		"itxn_submit; itxn Fee; int 1999; ==", ep)
+		"itxn_submit; itxn Fee; int 1598; ==", ep) // 2*1001-3-401=1598
 
 	// Same as first, but force the second too low
 	TestApp(t, "itxn_begin"+
@@ -1087,36 +1095,35 @@ txn Sender; itxn_field Receiver;
 		"int 3; itxn_field Fee;"+
 		"itxn_next"+
 		pay+
-		"int 1998; itxn_field Fee;"+
-		"itxn_submit; int 1", ep, "fee too small")
+		"int 1597; itxn_field Fee;"+
+		"itxn_submit; int 1", ep, "group fee 1.600mA too small")
 
 	// Overpay in first itxn, the second will default to less
 	TestApp(t, "itxn_begin"+
 		pay+
-		"int 2000; itxn_field Fee;"+
+		"int 1500; itxn_field Fee;"+
 		"itxn_next"+
 		pay+
-		"itxn_submit; itxn Fee; int 2; ==", ep)
+		"itxn_submit; itxn Fee; int 101; ==", ep) // 2*1001-1500-401=101
 
-	// Same first, but force the second too low
+	// Same, but force the second too low
 	TestApp(t, "itxn_begin"+
 		pay+
-		"int 2000; itxn_field Fee;"+
+		"int 1500; itxn_field Fee;"+
 		"itxn_next"+
 		pay+
 		"int 1; itxn_field Fee;"+
-		"itxn_submit; itxn Fee; int 1", ep, "fee too small")
+		"itxn_submit; itxn Fee; int 100", ep, "group fee 1.501mA too small")
 
-	// Test that overpay in first inner group is available in second inner group
-	// also ensure only exactly the _right_ amount of credit is available.
+	// since FeeCredit != nil, ep is reset, leaving 401uA in Surplus
 	TestApp(t, "itxn_begin"+
 		pay+
-		"int 2002; itxn_field Fee;"+ // double pay
+		"int 1601; itxn_field Fee;"+ // 600 mAlgo extra pay
 		"itxn_next"+
 		pay+
 		"int 1001; itxn_field Fee;"+ // regular pay
 		"itxn_submit;"+
-		// At beginning of second group, we should have 1 minfee of credit
+		// At beginning of second group, we should have 1001uA credit available
 		"itxn_begin"+
 		pay+
 		"int 0; itxn_field Fee;"+ // free, due to credit
@@ -1308,7 +1315,43 @@ func TestApplSubmission(t *testing.T) {
 	// Can't set epp when app id is given
 	tx.ForeignApps = append(tx.ForeignApps, basics.AppIndex(7))
 	TestApp(t, p+`int 1; itxn_field ExtraProgramPages;
-                  int 7; itxn_field ApplicationID`+s, ep, "immutable")
+                  int 7; itxn_field ApplicationID`+s, ep, "inappropriate non-zero tx.Extra")
+	// nor can global schema be set
+	TestApp(t, p+`int 1; itxn_field GlobalNumUint;
+                  int 7; itxn_field ApplicationID`+s, ep, "inappropriate non-zero tx.Global")
+	// nor can local schema be set
+	TestApp(t, p+`int 1; itxn_field LocalNumUint;
+                  int 7; itxn_field ApplicationID`+s, ep, "inappropriate non-zero tx.Local")
+
+	// When performing an update, we can set epp and (global only) schema
+	ledger.NewApp(tx.Receiver, 7, basics.AppParams{
+		ApprovalProgram: ops.Program, // which is "int 1"
+	})
+	TestApp(t, p+a+`int UpdateApplication; itxn_field OnCompletion;
+                  int 1; itxn_field ExtraProgramPages;
+                  int 7; itxn_field ApplicationID`+s, ep)
+	// global schema can be set
+	TestApp(t, p+a+`int UpdateApplication; itxn_field OnCompletion;
+                  int 1; itxn_field GlobalNumUint;
+                  int 7; itxn_field ApplicationID`+s, ep)
+	// but local schema still cannot be set
+	TestApp(t, p+a+`int UpdateApplication; itxn_field OnCompletion;
+                  int 1; itxn_field LocalNumUint;
+                  int 7; itxn_field ApplicationID`+s, ep, "inappropriate non-zero tx.Local")
+
+	// Even when performing an update, they cannot be set (in old consensus)
+	ep.Proto.AppSizeUpdates = false
+	TestApp(t, p+a+`int UpdateApplication; itxn_field OnCompletion;
+                  int 1; itxn_field ExtraProgramPages;
+                  int 7; itxn_field ApplicationID`+s, ep, "inappropriate non-zero tx.Extra")
+	// global schema can be set
+	TestApp(t, p+a+`int UpdateApplication; itxn_field OnCompletion;
+                  int 1; itxn_field GlobalNumUint;
+                  int 7; itxn_field ApplicationID`+s, ep, "inappropriate non-zero tx.Global")
+	// but local schema still cannot be set
+	TestApp(t, p+a+`int UpdateApplication; itxn_field OnCompletion;
+                  int 1; itxn_field LocalNumUint;
+                  int 7; itxn_field ApplicationID`+s, ep, "inappropriate non-zero tx.Local")
 
 	TestApp(t, p+a+"int 20; itxn_field GlobalNumUint; int 11; itxn_field GlobalNumByteSlice"+s,
 		ep, "too large")
@@ -1316,7 +1359,9 @@ func TestApplSubmission(t *testing.T) {
 		ep, "too large")
 }
 
-func TestInnerApplCreate(t *testing.T) {
+// TestInnerApplLifecycle tests creation, update, and deletion of apps with
+// inner transactions.
+func TestInnerApplLifecycle(t *testing.T) {
 	partitiontest.PartitionTest(t)
 	t.Parallel()
 
@@ -1345,6 +1390,7 @@ itxn_submit
 int 1
 `)
 
+		// Can't examine it without ForeignApps
 		test("int 5000; app_params_get AppGlobalNumByteSlice; assert; int 0; ==; assert",
 			"unavailable App 5000")
 
@@ -1358,7 +1404,8 @@ int 1
 		// Can't call it either
 		test(call, "unavailable App 5000")
 
-		tx.ForeignApps = []basics.AppIndex{basics.AppIndex(5000)}
+		// Add to ForeignApps, then we can examine and call it.
+		tx.ForeignApps = []basics.AppIndex{5000}
 		test(`
 int 5000; app_params_get AppGlobalNumByteSlice; assert; int 0; ==; assert
 int 5000; app_params_get AppGlobalNumUint;      assert; int 1; ==; assert
@@ -1387,10 +1434,33 @@ int 1
 		test(update)
 
 		if v >= 12 {
-			// Version starts at 0
+			// Version is up to 1
 			test(`int 5000; app_params_get AppVersion; assert; int 1; ==`)
 		}
 
+		updateSchema := `
+itxn_begin
+int appl;    itxn_field TypeEnum
+int 5000;    itxn_field ApplicationID
+` + approve + `; itxn_field ApprovalProgram
+` + approve + `; itxn_field ClearStateProgram
+int 2;       itxn_field GlobalNumUint
+int UpdateApplication; itxn_field OnCompletion
+itxn_submit
+int 1
+`
+		test(updateSchema)
+		if v >= 12 {
+			// Version is up to 2
+			test(`int 5000; app_params_get AppVersion; assert; int 2; ==`)
+		}
+
+		test(`
+int 5000; app_params_get AppGlobalNumUint;      assert; int 2; ==; assert
+int 1
+`)
+
+		// Delete it
 		test(`
 itxn_begin
 int appl;              itxn_field TypeEnum
@@ -1405,7 +1475,6 @@ int 1
 
 		// Can't call it either
 		test(call, "no app 5000")
-
 	})
 }
 
@@ -3023,7 +3092,7 @@ func hexProgram(t *testing.T, source string, v uint64) string {
 	return "0x" + hex.EncodeToString(TestProg(t, source, v).Program)
 }
 
-// TestCreateAndSeeApp checks that an app can be created in an inner txn, and then
+// TestCreateSeeApp checks that an app can be created in an inner txn, and then
 // the address for it can be looked up.
 func TestCreateSeeApp(t *testing.T) {
 	partitiontest.PartitionTest(t)

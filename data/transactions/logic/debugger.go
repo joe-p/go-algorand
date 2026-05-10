@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2025 Algorand, Inc.
+// Copyright (C) 2019-2026 Algorand Foundation Ltd.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -253,14 +253,22 @@ func (sv stackValue) toEncodedTealValue() basics.TealValue {
 	return basics.TealValue{Type: basics.TealUintType, Uint: sv.Uint}
 }
 
-// parseCallStack initializes an array of CallFrame objects from the raw
+// parseCallstack initializes an array of CallFrame objects from the raw
 // callstack.
 func (d *DebugState) parseCallstack(callstack []frame) []CallFrame {
 	callFrames := make([]CallFrame, 0)
 	lines := strings.Split(d.Disassembly, "\n")
 	for _, fr := range callstack {
-		// The callsub is pc - 3 from the callstack pc
-		callsubLineNum := d.PCToLine(fr.retpc - 3)
+		// Find the callsub PC: the largest PC in PCOffset strictly less than
+		// fr.retpc. This works for any callsub instruction size (old 3-byte or
+		// new 2-byte varint), since every instruction has a PCOffset entry.
+		callsubPC := 0
+		for _, pco := range d.PCOffset {
+			if pco.PC < fr.retpc {
+				callsubPC = pco.PC
+			}
+		}
+		callsubLineNum := d.PCToLine(callsubPC)
 		callSubLine := strings.Fields(lines[callsubLineNum])
 		label := ""
 		if callSubLine[0] == "callsub" {

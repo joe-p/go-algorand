@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2025 Algorand, Inc.
+// Copyright (C) 2019-2026 Algorand Foundation Ltd.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -27,7 +27,7 @@ import (
 // the same type in which each element of the slice is the same type as the
 // sample, but exactly one field (or sub-field) is set to a non-zero value. It
 // returns one example for every sub-field.
-func NearZeros(t *testing.T, sample any) []any {
+func NearZeros[T any](t *testing.T, sample T) []T {
 	typ := reflect.TypeOf(sample)
 	// If sample is a pointer, work with the underlying type.
 	if typ.Kind() == reflect.Ptr {
@@ -37,10 +37,10 @@ func NearZeros(t *testing.T, sample any) []any {
 		t.Fatalf("NearZeros: sample must be a struct, got %s", typ.Kind())
 	}
 	paths := collectPaths(typ, nil, nil)
-	var results []any
+	var results []T
 	for _, path := range paths {
 		inst := makeInstanceWithNonZeroField(typ, path)
-		results = append(results, inst)
+		results = append(results, inst.(T))
 	}
 	return results
 }
@@ -69,7 +69,7 @@ func collectPaths(typ reflect.Type, prefix []int, pathStack []reflect.Type) [][]
 
 	case reflect.Struct:
 		// Special case: skip known value-type structs like time.Time
-		if typ == reflect.TypeOf(time.Time{}) {
+		if typ == reflect.TypeFor[time.Time]() {
 			return [][]int{prefix}
 		}
 
@@ -88,7 +88,7 @@ func collectPaths(typ reflect.Type, prefix []int, pathStack []reflect.Type) [][]
 			if !field.IsExported() {
 				continue
 			}
-			newPath := append(append([]int(nil), prefix...), i)
+			newPath := append(slices.Clone(prefix), i)
 			subPaths := collectPaths(field.Type, newPath, newStack)
 
 			// If recursion yielded deeper paths, use them

@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2025 Algorand, Inc.
+// Copyright (C) 2019-2026 Algorand Foundation Ltd.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -21,11 +21,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/stretchr/testify/require"
+
 	"github.com/algorand/go-algorand/config"
 	"github.com/algorand/go-algorand/logging"
 	"github.com/algorand/go-algorand/test/partitiontest"
-	"github.com/libp2p/go-libp2p/core/peer"
-	"github.com/stretchr/testify/require"
 )
 
 // TestHybridNetwork_DuplicateConn checks the same nodes do not connect over ws and p2p.
@@ -39,6 +40,7 @@ func TestHybridNetwork_DuplicateConn(t *testing.T) {
 
 	cfg := config.GetDefaultLocal()
 	cfg.EnableP2PHybridMode = true
+	cfg.DNSBootstrapID = ""
 	log := logging.TestingLog(t)
 	const p2pKeyDir = ""
 
@@ -208,6 +210,7 @@ func TestHybridNetwork_HybridRelayStrategy(t *testing.T) {
 
 	cfg := config.GetDefaultLocal()
 	cfg.EnableP2PHybridMode = true
+	cfg.DNSBootstrapID = ""
 	log := logging.TestingLog(t)
 
 	genesisInfo := GenesisInfo{genesisID, "net"}

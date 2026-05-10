@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2025 Algorand, Inc.
+// Copyright (C) 2019-2026 Algorand Foundation Ltd.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -404,9 +404,8 @@ func TestSimpleUpgrade(t *testing.T) {
 		t.Skip("Test takes ~50 seconds.")
 	}
 
-	if (runtime.GOARCH == "arm" || runtime.GOARCH == "arm64" && runtime.GOOS != "darwin") &&
-		strings.ToUpper(os.Getenv("CIRCLECI")) == "TRUE" {
-		t.Skip("Test is too heavy for amd64 builder running in parallel with other packages")
+	if runtime.GOOS == "darwin" && strings.ToUpper(os.Getenv("GITHUB_ACTIONS")) == "TRUE" {
+		t.Skip("Test is too heavy for macOS builder running in parallel with other packages")
 	}
 
 	// ConsensusTest0 is a version of ConsensusV0 used for testing
@@ -840,6 +839,8 @@ func TestMaxSizesCorrect(t *testing.T) {
 	 */ ////////////////////////////////////////////////
 	avSize := uint64(agreement.UnauthenticatedVoteMaxSize())
 	require.Equal(t, avSize, protocol.AgreementVoteTag.MaxMessageSize())
+	// VP tag should have the same max size as AV tag
+	require.Equal(t, avSize, protocol.VotePackedTag.MaxMessageSize())
 	miSize := uint64(network.MessageOfInterestMaxSize())
 	require.Equal(t, miSize, protocol.MsgOfInterestTag.MaxMessageSize())
 	npSize := uint64(NetPrioResponseSignedMaxSize())
@@ -1020,17 +1021,28 @@ func TestNodeHybridTopology(t *testing.T) {
 		return node0Conn && node1Conn && node2Conn
 	}, 60*time.Second, 500*time.Millisecond)
 
+	// node 0 has GossipFanout=0 but we still want to run all the machinery to update phonebooks
+	// (it this particular case to update peerstore with DHT nodes)
+	nodes[0].net.RequestConnectOutgoing(false, nil)
+
 	initialRound := nodes[0].ledger.NextRound()
 	targetRound := initialRound + 10
 
 	// ensure discovery of archival node by tracking its ledger
 	select {
 	case <-nodes[0].ledger.Wait(targetRound):
-		e0, err := nodes[0].ledger.Block(targetRound)
+		b0, err := nodes[0].ledger.Block(targetRound)
 		require.NoError(t, err)
-		e1, err := nodes[1].ledger.Block(targetRound)
-		require.NoError(t, err)
-		require.Equal(t, e1.Hash(), e0.Hash())
+
+		var err1 error
+		var b1 bookkeeping.Block
+		require.Eventually(t, func() bool {
+			// it is possible N0 commits blocks faster than R, so wait a bit
+			b1, err1 = nodes[1].ledger.Block(targetRound)
+			return err1 == nil
+		}, 3*time.Second, 50*time.Millisecond)
+
+		require.Equal(t, b1.Hash(), b0.Hash())
 	case <-time.After(3 * time.Minute): // set it to 1.5x of the dht.periodicBootstrapInterval to give DHT code to rebuild routing table one more time
 		require.Fail(t, fmt.Sprintf("no block notification for wallet: %v.", wallets[0]))
 	}
@@ -1169,6 +1181,10 @@ func TestNodeSetCatchpointCatchupMode(t *testing.T) {
 			// "start" catchpoint catchup => close services
 			outCh := n.SetCatchpointCatchupMode(true)
 			<-outCh
+			// make sure SetCatchpointCatchupMode' goroutine has completely finished
+			// to prevent data race on stop/start services
+			n.waitMonitoringRoutines()
+
 			// "stop" catchpoint catchup => resume services
 			outCh = n.SetCatchpointCatchupMode(false)
 			<-outCh

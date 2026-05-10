@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2025 Algorand, Inc.
+// Copyright (C) 2019-2026 Algorand Foundation Ltd.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -38,9 +38,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/gorilla/mux"
+
 	"github.com/algorand/go-deadlock"
 	"github.com/algorand/websocket"
-	"github.com/gorilla/mux"
 
 	"github.com/algorand/go-algorand/config"
 	"github.com/algorand/go-algorand/crypto"
@@ -167,6 +168,10 @@ type WebsocketNetwork struct {
 
 	config config.Local
 
+	// voteCompressionTableSize is the validated/normalized table size for VP compression.
+	// It is set during setup() by validating config.StatefulVoteCompressionTableSize.
+	voteCompressionTableSize uint
+
 	log logging.Logger
 
 	wg sync.WaitGroup
@@ -229,12 +234,9 @@ type WebsocketNetwork struct {
 	// connPerfMonitor is used on outgoing connections to measure their relative message timing
 	connPerfMonitor *connectionPerformanceMonitor
 
-	// lastNetworkAdvanceMu synchronized the access to lastNetworkAdvance
-	lastNetworkAdvanceMu deadlock.Mutex
-
-	// lastNetworkAdvance contains the last timestamp where the agreement protocol was able to make a notable progress.
-	// it used as a watchdog to help us detect connectivity issues ( such as cliques )
-	lastNetworkAdvance time.Time
+	// outgoingConnsCloser used to check number of outgoing connections and disconnect as needed.
+	// it is also used as a watchdog to help us detect connectivity issues ( such as cliques ) so that it monitors agreement protocol progress.
+	outgoingConnsCloser *outgoingConnsCloser
 
 	// number of throttled outgoing connections "slots" needed to be populated.
 	throttledOutgoingConnections atomic.Int32
@@ -439,7 +441,7 @@ func (wn *WebsocketNetwork) Disconnect(node DisconnectablePeer) {
 	wn.disconnect(node, disconnectBadData)
 }
 
-// Disconnect from a peer, probably due to protocol errors.
+// disconnect from a peer, probably due to protocol errors.
 func (wn *WebsocketNetwork) disconnect(badnode Peer, reason disconnectReason) {
 	if badnode == nil {
 		return
@@ -557,6 +559,9 @@ func (wn *WebsocketNetwork) setup() error {
 	}
 	wn.dialer = limitcaller.MakeRateLimitingDialer(wn.phonebook, preferredResolver)
 
+	// Validate and normalize vote compression table size
+	wn.voteCompressionTableSize = wn.config.NormalizedVoteCompressionTableSize(wn.log)
+
 	wn.upgrader.ReadBufferSize = 4096
 	wn.upgrader.WriteBufferSize = 4096
 	wn.upgrader.EnableCompression = false
@@ -576,7 +581,7 @@ func (wn *WebsocketNetwork) setup() error {
 	wn.server.IdleTimeout = httpServerIdleTimeout
 	wn.server.MaxHeaderBytes = httpServerMaxHeaderBytes
 	wn.ctx, wn.ctxCancel = context.WithCancel(context.Background())
-	wn.relayMessages = wn.config.IsGossipServer() || wn.config.ForceRelayMessages
+	wn.relayMessages = wn.config.IsListenServer() || wn.config.ForceRelayMessages
 	if wn.relayMessages || wn.config.ForceFetchTransactions {
 		wn.wantTXGossip.Store(wantTXGossipYes)
 	}
@@ -605,6 +610,7 @@ func (wn *WebsocketNetwork) setup() error {
 	var err error
 	wn.mesher, err = meshCreator.create(
 		withContext(wn.ctx),
+		withTargetConnCount(wn.config.GossipFanout),
 		withMeshNetMeshFn(wn.meshThreadInner),
 		withMeshPeerStatReporter(func() {
 			wn.peerStater.sendPeerConnectionsTelemetryStatus(wn)
@@ -636,8 +642,8 @@ func (wn *WebsocketNetwork) setup() error {
 	if wn.config.EnableIncomingMessageFilter {
 		wn.incomingMsgFilter = makeMessageFilter(wn.config.IncomingMessageFilterBucketCount, wn.config.IncomingMessageFilterBucketSize)
 	}
-	wn.connPerfMonitor = makeConnectionPerformanceMonitor([]Tag{protocol.AgreementVoteTag, protocol.TxnTag})
-	wn.lastNetworkAdvance = time.Now().UTC()
+	wn.connPerfMonitor = makeConnectionPerformanceMonitor([]Tag{protocol.AgreementVoteTag})
+	wn.outgoingConnsCloser = makeOutgoingConnsCloser(wn.log, wn, wn.connPerfMonitor, cliqueResolveInterval)
 
 	// set our supported versions
 	if wn.config.NetworkProtocolVersion != "" {
@@ -666,7 +672,7 @@ func (wn *WebsocketNetwork) Start() error {
 		wn.messagesOfInterestEnc = marshallMessageOfInterestMap(wn.messagesOfInterest)
 	}
 
-	if wn.config.IsGossipServer() || wn.config.ForceRelayMessages {
+	if wn.relayMessages && wn.config.IncomingConnectionsLimit != 0 {
 		listener, err := net.Listen("tcp", wn.config.NetAddress)
 		if err != nil {
 			wn.log.Errorf("network could not listen %v: %s", wn.config.NetAddress, err)
@@ -678,6 +684,8 @@ func (wn *WebsocketNetwork) Start() error {
 		// wrap the limited connection listener with a requests tracker listener
 		wn.listener = wn.requestsTracker.Listener(listener)
 		wn.log.Debugf("listening on %s", wn.listener.Addr().String())
+	}
+	if wn.relayMessages {
 		wn.throttledOutgoingConnections.Store(int32(wn.config.GossipFanout / 2))
 	} else {
 		// on non-relay, all the outgoing connections are throttled.
@@ -842,7 +850,8 @@ type peerMetadataProvider interface {
 	PublicAddress() string
 	RandomID() string
 	SupportedProtoVersions() []string
-	Config() config.Local
+	VoteCompressionEnabled() bool
+	StatefulVoteCompressionTableSize() uint
 }
 
 // TelemetryGUID returns the telemetry GUID of this node.
@@ -870,6 +879,16 @@ func (wn *WebsocketNetwork) Config() config.Local {
 	return wn.config
 }
 
+// StatefulVoteCompressionTableSize returns the validated/normalized vote compression table size.
+func (wn *WebsocketNetwork) StatefulVoteCompressionTableSize() uint {
+	return wn.voteCompressionTableSize
+}
+
+// VoteCompressionEnabled returns whether vote compression is enabled for this node.
+func (wn *WebsocketNetwork) VoteCompressionEnabled() bool {
+	return wn.config.EnableVoteCompression
+}
+
 func setHeaders(header http.Header, netProtoVer string, meta peerMetadataProvider) {
 	header.Set(TelemetryIDHeader, meta.TelemetryGUID())
 	header.Set(InstanceNameHeader, meta.InstanceName())
@@ -882,10 +901,32 @@ func setHeaders(header http.Header, netProtoVer string, meta peerMetadataProvide
 	header.Set(GenesisHeader, meta.GetGenesisID())
 
 	// set the features header (comma-separated list)
-	header.Set(PeerFeaturesHeader, PeerFeatureProposalCompression)
-	features := []string{PeerFeatureProposalCompression}
-	if meta.Config().EnableVoteCompression {
-		features = append(features, PeerFeatureVoteVpackCompression)
+	features := []string{peerFeatureProposalCompression}
+	if meta.VoteCompressionEnabled() {
+		features = append(features, peerFeatureVoteVpackCompression)
+
+		// Announce our maximum supported vote compression table size
+		// Both sides will independently calculate min(ourSize, theirSize)
+		// Only advertise stateful features if stateless compression is also enabled
+		// Supported values: 16, 32, 64, 128, 256, 512, 1024, 2048 (or higher, which advertises 2048)
+		switch dtSize := uint32(meta.StatefulVoteCompressionTableSize()); {
+		case dtSize >= 2048:
+			features = append(features, peerFeatureVoteVpackStateful2048)
+		case dtSize >= 1024:
+			features = append(features, peerFeatureVoteVpackStateful1024)
+		case dtSize >= 512:
+			features = append(features, peerFeatureVoteVpackStateful512)
+		case dtSize >= 256:
+			features = append(features, peerFeatureVoteVpackStateful256)
+		case dtSize >= 128:
+			features = append(features, peerFeatureVoteVpackStateful128)
+		case dtSize >= 64:
+			features = append(features, peerFeatureVoteVpackStateful64)
+		case dtSize >= 32:
+			features = append(features, peerFeatureVoteVpackStateful32)
+		case dtSize >= 16:
+			features = append(features, peerFeatureVoteVpackStateful16)
+		}
 	}
 	header.Set(PeerFeaturesHeader, strings.Join(features, ","))
 
@@ -1043,7 +1084,7 @@ func (wn *WebsocketNetwork) checkIncomingConnectionVariables(response http.Respo
 	return http.StatusOK
 }
 
-// ServerHTTP handles the gossip network functions over websockets
+// ServeHTTP handles the gossip network functions over websockets
 func (wn *WebsocketNetwork) ServeHTTP(response http.ResponseWriter, request *http.Request) {
 	if !wn.config.EnableGossipService {
 		response.WriteHeader(http.StatusNotFound)
@@ -1110,21 +1151,23 @@ func (wn *WebsocketNetwork) ServeHTTP(response http.ResponseWriter, request *htt
 
 	client, _ := wn.GetHTTPClient(trackedRequest.remoteAddress())
 	peer := &wsPeer{
-		wsPeerCore:            makePeerCore(wn.ctx, wn, wn.log, wn.handler.readBuffer, trackedRequest.remoteAddress(), client, trackedRequest.remoteHost),
-		conn:                  wsPeerWebsocketConnImpl{conn},
-		outgoing:              false,
-		InstanceName:          trackedRequest.otherInstanceName,
-		incomingMsgFilter:     wn.incomingMsgFilter,
-		prioChallenge:         challenge,
-		createTime:            trackedRequest.created,
-		version:               matchingVersion,
-		identity:              peerID,
-		identityChallenge:     peerIDChallenge,
-		identityVerified:      atomic.Uint32{},
-		features:              decodePeerFeatures(matchingVersion, request.Header.Get(PeerFeaturesHeader)),
-		enableVoteCompression: wn.config.EnableVoteCompression,
+		wsPeerCore:               makePeerCore(wn.ctx, wn, wn.log, wn.handler.readBuffer, trackedRequest.remoteAddress(), client, trackedRequest.remoteHost),
+		conn:                     wsPeerWebsocketConnImpl{conn},
+		outgoing:                 false,
+		InstanceName:             trackedRequest.otherInstanceName,
+		incomingMsgFilter:        wn.incomingMsgFilter,
+		prioChallenge:            challenge,
+		createTime:               trackedRequest.created,
+		version:                  matchingVersion,
+		identity:                 peerID,
+		identityChallenge:        peerIDChallenge,
+		identityVerified:         atomic.Uint32{},
+		features:                 decodePeerFeatures(matchingVersion, request.Header.Get(PeerFeaturesHeader)),
+		enableVoteCompression:    wn.config.EnableVoteCompression,
+		voteCompressionTableSize: wn.voteCompressionTableSize,
 	}
 	peer.TelemetryGUID = trackedRequest.otherTelemetryGUID
+	wn.log.Debugf("Server: client features '%s', decoded %x, our response '%s'", request.Header.Get(PeerFeaturesHeader), peer.features, responseHeader.Get(PeerFeaturesHeader))
 	peer.init(wn.config, wn.outgoingMessagesBufferSize)
 	wn.addPeer(peer)
 	wn.log.With("event", "ConnectedIn").With("remote", trackedRequest.remoteAddress()).With("local", localAddr).Infof("Accepted incoming connection from peer %s", trackedRequest.remoteAddr)
@@ -1151,7 +1194,17 @@ func (wn *WebsocketNetwork) maybeSendMessagesOfInterest(peer *wsPeer, messagesOf
 			messagesOfInterestEnc = wn.messagesOfInterestEnc
 			wn.messagesOfInterestMu.Unlock()
 		}
+
 		if messagesOfInterestEnc != nil {
+			// Filter VP tag for peers lacking stateful compression support
+			// older nodes (<= v4.3) treat unknown tags as protocol violations and disconnect.
+			if !peer.vpackStatefulCompressionSupported() {
+				tags, err := unmarshallMessageOfInterest(messagesOfInterestEnc)
+				if err == nil && tags[protocol.VotePackedTag] {
+					delete(tags, protocol.VotePackedTag)
+					messagesOfInterestEnc = marshallMessageOfInterestMap(tags)
+				}
+			}
 			peer.sendMessagesOfInterest(messagesOfInterestGeneration, messagesOfInterestEnc)
 		} else {
 			wn.log.Infof("msgOfInterest Enc=nil, MOIGen=%d", messagesOfInterestGeneration)
@@ -1428,10 +1481,14 @@ func (wn *msgBroadcaster) preparePeerData(request broadcastRequest, prio bool) (
 	}
 	// Optionally compress votes: only supporting peers will receive it.
 	if prio && request.tag == protocol.AgreementVoteTag && wn.enableVoteCompression {
+		networkVoteBroadcastUncompressedBytes.AddUint64(uint64(len(request.data)), nil)
 		var logMsg string
 		compressedData, logMsg = vpackCompressVote(tbytes, request.data)
 		if len(logMsg) > 0 {
 			wn.log.Warn(logMsg)
+		} else {
+			// Track compressed size only on success (compressedData includes tag)
+			networkVoteBroadcastCompressedBytes.AddUint64(uint64(len(compressedData)), nil)
 		}
 	}
 	return mbytes, compressedData, digest
@@ -1555,19 +1612,26 @@ type meshRequest struct {
 	done chan struct{}
 }
 
-func (wn *WebsocketNetwork) meshThreadInner() bool {
+func (wn *WebsocketNetwork) meshThreadInner(targetConnCount int) int {
 	wn.refreshRelayArchivePhonebookAddresses()
 
 	// as long as the call to checkExistingConnectionsNeedDisconnecting is deleting existing connections, we want to
 	// kick off the creation of new connections.
-	for !wn.checkNewConnectionsNeeded() {
 
-		if !wn.checkExistingConnectionsNeedDisconnecting() {
+	//nolint:staticcheck // easier to read
+	for {
+		if wn.checkNewConnectionsNeeded(targetConnCount) {
+			// new connections were created.
+			break
+		}
+		if !wn.outgoingConnsCloser.checkExistingConnectionsNeedDisconnecting(targetConnCount) {
 			// no connection were removed.
 			break
 		}
 	}
-	return true
+
+	currentConnections := wn.numOutgoingPeers() + wn.numOutgoingPending()
+	return currentConnections
 }
 
 func (wn *WebsocketNetwork) refreshRelayArchivePhonebookAddresses() {
@@ -1609,15 +1673,14 @@ func (wn *WebsocketNetwork) updatePhonebookAddresses(relayAddrs []string, archiv
 // it returns false if no connections are needed, and true otherwise.
 // note that the determination of needed connection could be inaccurate, and it might return false while
 // more connection should be created.
-func (wn *WebsocketNetwork) checkNewConnectionsNeeded() bool {
-	desired := wn.config.GossipFanout
+func (wn *WebsocketNetwork) checkNewConnectionsNeeded(targetConnCount int) bool {
 	numOutgoingTotal := wn.numOutgoingPeers() + wn.numOutgoingPending()
-	need := desired - numOutgoingTotal
+	need := targetConnCount - numOutgoingTotal
 	if need <= 0 {
 		return false
 	}
 	// get more than we need so that we can ignore duplicates
-	newAddrs := wn.phonebook.GetAddresses(desired+numOutgoingTotal, phonebook.RelayRole)
+	newAddrs := wn.phonebook.GetAddresses(targetConnCount+numOutgoingTotal, phonebook.RelayRole)
 	for _, na := range newAddrs {
 		if na == wn.config.PublicAddress {
 			// filter out self-public address, so we won't try to connect to ourselves.
@@ -1636,89 +1699,12 @@ func (wn *WebsocketNetwork) checkNewConnectionsNeeded() bool {
 	return true
 }
 
-// checkExistingConnectionsNeedDisconnecting check to see if existing connection need to be dropped due to
-// performance issues and/or network being stalled.
-func (wn *WebsocketNetwork) checkExistingConnectionsNeedDisconnecting() bool {
-	// we already connected ( or connecting.. ) to  GossipFanout peers.
-	// get the actual peers.
-	outgoingPeers := wn.outgoingPeers()
-	if len(outgoingPeers) < wn.config.GossipFanout {
-		// reset the performance monitor.
-		wn.connPerfMonitor.Reset([]Peer{})
-		return wn.checkNetworkAdvanceDisconnect()
-	}
-
-	if !wn.connPerfMonitor.ComparePeers(outgoingPeers) {
-		// different set of peers. restart monitoring.
-		wn.connPerfMonitor.Reset(outgoingPeers)
-	}
-
-	// same set of peers.
-	peerStat := wn.connPerfMonitor.GetPeersStatistics()
-	if peerStat == nil {
-		// performance metrics are not yet ready.
-		return wn.checkNetworkAdvanceDisconnect()
-	}
-
-	// update peers with the performance metrics we've gathered.
-	var leastPerformingPeer *wsPeer = nil
-	for _, stat := range peerStat.peerStatistics {
-		wsPeer := stat.peer.(*wsPeer)
-		wsPeer.peerMessageDelay = stat.peerDelay
-		wn.log.Infof("network performance monitor - peer '%s' delay %d first message portion %d%%", wsPeer.GetAddress(), stat.peerDelay, int(stat.peerFirstMessage*100))
-		if wsPeer.throttledOutgoingConnection && leastPerformingPeer == nil {
-			leastPerformingPeer = wsPeer
-		}
-	}
-	if leastPerformingPeer == nil {
-		return wn.checkNetworkAdvanceDisconnect()
-	}
-	wn.disconnect(leastPerformingPeer, disconnectLeastPerformingPeer)
-	wn.connPerfMonitor.Reset([]Peer{})
-
-	return true
-}
-
-// checkNetworkAdvanceDisconnect is using the lastNetworkAdvance indicator to see if the network is currently "stuck".
-// if it's seems to be "stuck", a randomally picked peer would be disconnected.
-func (wn *WebsocketNetwork) checkNetworkAdvanceDisconnect() bool {
-	lastNetworkAdvance := wn.getLastNetworkAdvance()
-	if time.Now().UTC().Sub(lastNetworkAdvance) < cliqueResolveInterval {
-		return false
-	}
-	outgoingPeers := wn.outgoingPeers()
-	if len(outgoingPeers) == 0 {
-		return false
-	}
-	if wn.numOutgoingPending() > 0 {
-		// we're currently trying to extend the list of outgoing connections. no need to
-		// disconnect any existing connection to free up room for another connection.
-		return false
-	}
-	var peer *wsPeer
-	disconnectPeerIdx := crypto.RandUint63() % uint64(len(outgoingPeers))
-	peer = outgoingPeers[disconnectPeerIdx].(*wsPeer)
-
-	wn.disconnect(peer, disconnectCliqueResolve)
-	wn.connPerfMonitor.Reset([]Peer{})
-	wn.OnNetworkAdvance()
-	return true
-}
-
-func (wn *WebsocketNetwork) getLastNetworkAdvance() time.Time {
-	wn.lastNetworkAdvanceMu.Lock()
-	defer wn.lastNetworkAdvanceMu.Unlock()
-	return wn.lastNetworkAdvance
-}
-
 // OnNetworkAdvance notifies the network library that the agreement protocol was able to make a notable progress.
 // this is the only indication that we have that we haven't formed a clique, where all incoming messages
 // arrive very quickly, but might be missing some votes. The usage of this call is expected to have similar
 // characteristics as with a watchdog timer.
 func (wn *WebsocketNetwork) OnNetworkAdvance() {
-	wn.lastNetworkAdvanceMu.Lock()
-	defer wn.lastNetworkAdvanceMu.Unlock()
-	wn.lastNetworkAdvance = time.Now().UTC()
+	wn.outgoingConnsCloser.updateLastAdvance()
 	if wn.nodeInfo != nil && !wn.relayMessages && !wn.config.ForceFetchTransactions {
 		select {
 		case wn.messagesOfInterestRefresh <- struct{}{}:
@@ -1937,13 +1923,24 @@ const UserAgentHeader = "User-Agent"
 // PeerFeaturesHeader is the HTTP header listing features
 const PeerFeaturesHeader = "X-Algorand-Peer-Features"
 
-// PeerFeatureProposalCompression is a value for PeerFeaturesHeader indicating peer
+// peerFeatureProposalCompression is a value for PeerFeaturesHeader indicating peer
 // supports proposal payload compression with zstd
-const PeerFeatureProposalCompression = "ppzstd"
+const peerFeatureProposalCompression = "ppzstd"
 
-// PeerFeatureVoteVpackCompression is a value for PeerFeaturesHeader indicating peer
+// peerFeatureVoteVpackCompression is a value for PeerFeaturesHeader indicating peer
 // supports agreement vote message compression with vpack
-const PeerFeatureVoteVpackCompression = "avvpack"
+const peerFeatureVoteVpackCompression = "avvpack"
+
+// peerFeatureVoteVpackStateful* are values for PeerFeaturesHeader indicating peer
+// supports specific table sizes for stateful vpack compression
+const peerFeatureVoteVpackStateful2048 = "avvpack2048"
+const peerFeatureVoteVpackStateful1024 = "avvpack1024"
+const peerFeatureVoteVpackStateful512 = "avvpack512"
+const peerFeatureVoteVpackStateful256 = "avvpack256"
+const peerFeatureVoteVpackStateful128 = "avvpack128"
+const peerFeatureVoteVpackStateful64 = "avvpack64"
+const peerFeatureVoteVpackStateful32 = "avvpack32"
+const peerFeatureVoteVpackStateful16 = "avvpack16"
 
 var websocketsScheme = map[string]string{"http": "ws", "https": "wss"}
 
@@ -1992,7 +1989,8 @@ func (wn *WebsocketNetwork) tryConnectReleaseAddr(addr, gossipAddr string) {
 func (wn *WebsocketNetwork) numOutgoingPending() int {
 	wn.tryConnectLock.Lock()
 	defer wn.tryConnectLock.Unlock()
-	return len(wn.tryConnectAddrs)
+	// tryConnectAddrs always populates two entries per pending connection: addr and gossipAddr
+	return len(wn.tryConnectAddrs) / 2
 }
 
 // GetHTTPClient returns a http.Client with a suitable for the network Transport
@@ -2172,8 +2170,10 @@ func (wn *WebsocketNetwork) tryConnect(netAddr, gossipAddr string) {
 		identity:                    peerID,
 		features:                    decodePeerFeatures(matchingVersion, response.Header.Get(PeerFeaturesHeader)),
 		enableVoteCompression:       wn.config.EnableVoteCompression,
+		voteCompressionTableSize:    wn.voteCompressionTableSize,
 	}
 	peer.TelemetryGUID, peer.InstanceName, _ = getCommonHeaders(response.Header)
+	wn.log.Debugf("Client: server features '%s', decoded %x", response.Header.Get(PeerFeaturesHeader), peer.features)
 
 	// if there is a final verification message to send, it means this peer has a verified identity,
 	// attempt to set the peer and identityTracker

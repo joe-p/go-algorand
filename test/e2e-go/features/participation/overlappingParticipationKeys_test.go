@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2025 Algorand, Inc.
+// Copyright (C) 2019-2026 Algorand Foundation Ltd.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -251,10 +251,6 @@ func prepareParticipationKey(a *require.Assertions, fixture *fixtures.RestClient
 
 	unsignedTxn := persistedParticipation.GenerateRegistrationTransaction(basics.MicroAlgos{Raw: c.MinTxnFee}, basics.Round(txStartRound), basics.Round(txEndRound), [32]byte{}, c.EnableStateProofKeyregCheck)
 	copy(unsignedTxn.GenesisHash[:], genesisHash[:])
-	if err != nil {
-		a.NoError(err)
-		return err
-	}
 	regTransactions[int(txStartRound)] = unsignedTxn.Sign(rootAccount.Secrets())
-	return err
+	return nil
 }

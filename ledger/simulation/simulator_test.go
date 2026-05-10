@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2025 Algorand, Inc.
+// Copyright (C) 2019-2026 Algorand Foundation Ltd.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -21,7 +21,10 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/algorand/go-algorand/crypto"
+	"github.com/algorand/go-algorand/data"
 	"github.com/algorand/go-algorand/data/basics"
 	"github.com/algorand/go-algorand/data/bookkeeping"
 	"github.com/algorand/go-algorand/data/transactions"
@@ -33,7 +36,6 @@ import (
 	simulationtesting "github.com/algorand/go-algorand/ledger/simulation/testing"
 	"github.com/algorand/go-algorand/protocol"
 	"github.com/algorand/go-algorand/test/partitiontest"
-	"github.com/stretchr/testify/require"
 )
 
 // We want to be careful that the Algod ledger does not move on to another round
@@ -42,8 +44,6 @@ import (
 func TestNonOverridenDataLedgerMethodsUseRoundParameter(t *testing.T) {
 	partitiontest.PartitionTest(t)
 	t.Parallel()
-
-	env := simulationtesting.PrepareSimulatorTest(t)
 
 	// methods overridden by `simulatorLedger``
 	overriddenMethods := []string{
@@ -67,7 +67,7 @@ func TestNonOverridenDataLedgerMethodsUseRoundParameter(t *testing.T) {
 	}
 
 	methodExistsInEvalLedger := func(methodName string) bool {
-		evalLedgerType := reflect.TypeOf((*eval.LedgerForEvaluator)(nil)).Elem()
+		evalLedgerType := reflect.TypeFor[eval.LedgerForEvaluator]()
 		for i := 0; i < evalLedgerType.NumMethod(); i++ {
 			if evalLedgerType.Method(i).Name == methodName {
 				return true
@@ -78,14 +78,14 @@ func TestNonOverridenDataLedgerMethodsUseRoundParameter(t *testing.T) {
 
 	methodHasRoundParameter := func(methodType reflect.Type) bool {
 		for i := 0; i < methodType.NumIn(); i++ {
-			if methodType.In(i) == reflect.TypeOf(basics.Round(0)) {
+			if methodType.In(i) == reflect.TypeFor[basics.Round]() {
 				return true
 			}
 		}
 		return false
 	}
 
-	ledgerType := reflect.TypeOf(env.Ledger)
+	ledgerType := reflect.TypeFor[*data.Ledger]()
 	for i := 0; i < ledgerType.NumMethod(); i++ {
 		method := ledgerType.Method(i)
 		if methodExistsInEvalLedger(method.Name) && !methodIsSkipped(method.Name) {

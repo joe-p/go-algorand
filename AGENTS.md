@@ -50,8 +50,6 @@ To verify that this wasn't missed, we run verification steps, which can be found
 ### Development Setup
 ```bash
 ./scripts/configure_dev.sh                    # Initial environment setup
-./scripts/buildtools/install_buildtools.sh   # Install build tools
-make deps                                     # Check/install dependencies
 ```
 
 ### Single Test Execution
@@ -155,6 +153,11 @@ Ledger uses independent state machines that can rebuild from blockchain events, 
 - Integration tests verify cross-component interactions
 - Race detection enabled for concurrent code validation
 - Benchmark tests for performance-critical paths
+
+### Paginated Resource Lookups (`ledger/acctupdates.go`)
+The `lookupAssetResources`, `lookupApplicationResources`, and `lookupBoxResources` functions follow the same pattern: walk in-memory deltas backwards, query the DB, then merge the two result sets. These functions must stay closely aligned — a bug fix or structural change in one almost certainly requires the same change in the others. They are candidates for future consolidation into shared generic logic.
+
+Their corresponding `Ledger`-level wrappers in `ledger/ledger.go` (`LookupAssets`, `LookupApplications`, `LookupBoxes`) must each hold `trackerMu.RLock()`, matching every other method that accesses tracker state.
 
 ### Code Organization
 - Interface-first design for testability and modularity

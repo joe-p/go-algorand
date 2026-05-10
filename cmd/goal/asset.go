@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2025 Algorand, Inc.
+// Copyright (C) 2019-2026 Algorand Foundation Ltd.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -85,12 +85,12 @@ func init() {
 	destroyAssetCmd.Flags().StringVar(&assetManager, "manager", "", "Manager account to issue the destroy transaction (defaults to creator)")
 	destroyAssetCmd.Flags().StringVar(&assetCreator, "creator", "", "Creator account address for asset to destroy")
 	destroyAssetCmd.Flags().Uint64Var((*uint64)(&assetID), "assetid", 0, "Asset ID to destroy")
-	destroyAssetCmd.Flags().StringVar(&assetUnitName, "asset", "", "Unit name of asset to destroy")
+	destroyAssetCmd.Flags().StringVar(&assetUnitName, "unitname", "", "Unit name of asset to destroy")
 
 	configAssetCmd.Flags().StringVar(&assetManager, "manager", "", "Manager account to issue the config transaction")
 	configAssetCmd.Flags().StringVar(&assetCreator, "creator", "", "Account address for asset to configure (defaults to manager)")
 	configAssetCmd.Flags().Uint64Var((*uint64)(&assetID), "assetid", 0, "Asset ID to configure")
-	configAssetCmd.Flags().StringVar(&assetUnitName, "asset", "", "Unit name of asset to configure")
+	configAssetCmd.Flags().StringVar(&assetUnitName, "unitname", "", "Unit name of asset to configure")
 	configAssetCmd.Flags().StringVar(&assetNewManager, "new-manager", "", "New manager address")
 	configAssetCmd.Flags().StringVar(&assetNewReserve, "new-reserve", "", "New reserve address")
 	configAssetCmd.Flags().StringVar(&assetNewFreezer, "new-freezer", "", "New freeze address")
@@ -100,7 +100,7 @@ func init() {
 	sendAssetCmd.Flags().StringVar(&assetClawback, "clawback", "", "Address to issue a clawback transaction from (defaults to no clawback)")
 	sendAssetCmd.Flags().StringVar(&assetCreator, "creator", "", "Account address for asset creator")
 	sendAssetCmd.Flags().Uint64Var((*uint64)(&assetID), "assetid", 0, "ID of the asset being transferred")
-	sendAssetCmd.Flags().StringVar(&assetUnitName, "asset", "", "Unit name of the asset being transferred")
+	sendAssetCmd.Flags().StringVar(&assetUnitName, "unitname", "", "Unit name of the asset being transferred")
 	sendAssetCmd.Flags().StringVarP(&account, "from", "f", "", "Account address to send the money from (if not specified, uses default account)")
 	sendAssetCmd.Flags().StringVarP(&toAddress, "to", "t", "", "Address to send to money to (required)")
 	sendAssetCmd.Flags().Uint64VarP(&amount, "amount", "a", 0, "The amount to be transferred (required), in base units of the asset.")
@@ -111,14 +111,14 @@ func init() {
 	freezeAssetCmd.Flags().StringVar(&assetFreezer, "freezer", "", "Address to issue a freeze transaction from")
 	freezeAssetCmd.Flags().StringVar(&assetCreator, "creator", "", "Account address for asset creator")
 	freezeAssetCmd.Flags().Uint64Var((*uint64)(&assetID), "assetid", 0, "ID of the asset being frozen")
-	freezeAssetCmd.Flags().StringVar(&assetUnitName, "asset", "", "Unit name of the asset being frozen")
+	freezeAssetCmd.Flags().StringVar(&assetUnitName, "unitname", "", "Unit name of the asset being frozen")
 	freezeAssetCmd.Flags().StringVar(&account, "account", "", "Account address to freeze/unfreeze")
 	freezeAssetCmd.Flags().BoolVar(&assetFrozen, "freeze", false, "Freeze or unfreeze")
 	freezeAssetCmd.MarkFlagRequired("freezer")
 	freezeAssetCmd.MarkFlagRequired("account")
 	freezeAssetCmd.MarkFlagRequired("freeze")
 
-	optinAssetCmd.Flags().StringVar(&assetUnitName, "asset", "", "Unit name of the asset being accepted")
+	optinAssetCmd.Flags().StringVar(&assetUnitName, "unitname", "", "Unit name of the asset being accepted")
 	optinAssetCmd.Flags().Uint64Var((*uint64)(&assetID), "assetid", 0, "ID of the asset being accepted")
 	optinAssetCmd.Flags().StringVarP(&account, "account", "a", "", "Account address to opt in to using the asset (if not specified, uses default account)")
 	optinAssetCmd.Flags().StringVar(&assetCreator, "creator", "", "Account address for asset creator")
@@ -132,7 +132,6 @@ func init() {
 	addTxnFlags(optinAssetCmd)
 
 	infoAssetCmd.Flags().Uint64Var((*uint64)(&assetID), "assetid", 0, "ID of the asset to look up")
-	infoAssetCmd.Flags().StringVar(&assetUnitName, "asset", "", "DEPRECATED! Unit name of the asset to look up")
 	infoAssetCmd.Flags().StringVar(&assetUnitName, "unitname", "", "Unit name of the asset to look up")
 	infoAssetCmd.Flags().StringVar(&assetCreator, "creator", "", "Account address of the asset creator")
 }
@@ -148,17 +147,9 @@ var assetCmd = &cobra.Command{
 }
 
 func lookupAssetID(cmd *cobra.Command, creator string, client libgoal.Client) {
-	if cmd.Flags().Changed("asset") {
-		reportWarnln("The [--asset] flag is deprecated and will be removed in a future release, use [--unitname] instead.")
-	}
+	unitSpecified := cmd.Flags().Changed("unitname")
 
-	if cmd.Flags().Changed("asset") && cmd.Flags().Changed("unitname") {
-		reportErrorf("The [--asset] flag has been replaced by [--unitname], do not provide both flags.")
-	}
-
-	assetOrUnit := cmd.Flags().Changed("asset") || cmd.Flags().Changed("unitname")
-
-	if cmd.Flags().Changed("assetid") && assetOrUnit {
+	if cmd.Flags().Changed("assetid") && unitSpecified {
 		reportErrorf("Only one of [--assetid] or [--unitname and --creator] should be specified")
 	}
 
@@ -166,7 +157,7 @@ func lookupAssetID(cmd *cobra.Command, creator string, client libgoal.Client) {
 		return
 	}
 
-	if !assetOrUnit {
+	if !unitSpecified {
 		reportErrorf("Missing required parameter [--assetid] or [--unitname and --creator] must be specified")
 	}
 
@@ -289,6 +280,7 @@ var createAssetCmd = &cobra.Command{
 			reportErrorf("Cannot construct transaction: %s", err)
 		}
 
+		tx.RekeyTo = parseRekey(rekeyToAddress)
 		tx.Note = parseNoteField(cmd)
 		tx.Lease = parseLease(cmd)
 
@@ -368,6 +360,7 @@ var destroyAssetCmd = &cobra.Command{
 			reportErrorf("Cannot construct transaction: %s", err)
 		}
 
+		tx.RekeyTo = parseRekey(rekeyToAddress)
 		tx.Note = parseNoteField(cmd)
 		tx.Lease = parseLease(cmd)
 
@@ -461,6 +454,7 @@ var configAssetCmd = &cobra.Command{
 			reportErrorf("Cannot construct transaction: %s", err)
 		}
 
+		tx.RekeyTo = parseRekey(rekeyToAddress)
 		tx.Note = parseNoteField(cmd)
 		tx.Lease = parseLease(cmd)
 
@@ -546,6 +540,7 @@ var sendAssetCmd = &cobra.Command{
 			reportErrorf("Cannot construct transaction: %s", err)
 		}
 
+		tx.RekeyTo = parseRekey(rekeyToAddress)
 		tx.Note = parseNoteField(cmd)
 		tx.Lease = parseLease(cmd)
 
@@ -617,6 +612,7 @@ var freezeAssetCmd = &cobra.Command{
 			reportErrorf("Cannot construct transaction: %s", err)
 		}
 
+		tx.RekeyTo = parseRekey(rekeyToAddress)
 		tx.Note = parseNoteField(cmd)
 		tx.Lease = parseLease(cmd)
 
@@ -704,6 +700,7 @@ var optinAssetCmd = &cobra.Command{
 			reportErrorf("Cannot construct transaction: %s", err)
 		}
 
+		tx.RekeyTo = parseRekey(rekeyToAddress)
 		tx.Note = parseNoteField(cmd)
 		tx.Lease = parseLease(cmd)
 
@@ -763,20 +760,6 @@ var infoAssetCmd = &cobra.Command{
 		accountList := makeAccountsList(dataDir)
 		creator := accountList.getAddressByName(assetCreator)
 
-		// Helper methods for dereferencing optional asset fields.
-		derefString := func(s *string) string {
-			if s == nil {
-				return ""
-			}
-			return *s
-		}
-		derefBool := func(b *bool) bool {
-			if b == nil {
-				return false
-			}
-			return *b
-		}
-
 		lookupAssetID(cmd, creator, client)
 
 		asset, err := client.AssetInformation(assetID)
@@ -785,7 +768,7 @@ var infoAssetCmd = &cobra.Command{
 		}
 
 		reserveEmpty := false
-		if derefString(asset.Params.Reserve) == "" {
+		if nilToZero(asset.Params.Reserve) == "" {
 			reserveEmpty = true
 			asset.Params.Reserve = &asset.Params.Creator
 		}
@@ -798,21 +781,34 @@ var infoAssetCmd = &cobra.Command{
 
 		fmt.Printf("Asset ID:         %d\n", assetID)
 		fmt.Printf("Creator:          %s\n", asset.Params.Creator)
-		reportInfof("Asset name:       %s", derefString(asset.Params.Name))
-		reportInfof("Unit name:        %s", derefString(asset.Params.UnitName))
-		reportInfof("URL:              %s", derefString(asset.Params.Url))
-		fmt.Printf("Maximum issue:    %s %s\n", assetDecimalsFmt(asset.Params.Total, asset.Params.Decimals), derefString(asset.Params.UnitName))
-		fmt.Printf("Reserve amount:   %s %s\n", assetDecimalsFmt(res.Amount, asset.Params.Decimals), derefString(asset.Params.UnitName))
-		fmt.Printf("Issued:           %s %s\n", assetDecimalsFmt(asset.Params.Total-res.Amount, asset.Params.Decimals), derefString(asset.Params.UnitName))
-		fmt.Printf("Decimals:         %d\n", asset.Params.Decimals)
-		fmt.Printf("Default frozen:   %v\n", derefBool(asset.Params.DefaultFrozen))
-		fmt.Printf("Manager address:  %s\n", derefString(asset.Params.Manager))
-		if reserveEmpty {
-			fmt.Printf("Reserve address:  %s (Empty. Defaulting to creator)\n", derefString(asset.Params.Reserve))
-		} else {
-			fmt.Printf("Reserve address:  %s\n", derefString(asset.Params.Reserve))
+		name := "<unnamed>"
+		if asset.Params.Name != nil {
+			_, name = unicodePrintable(*asset.Params.Name)
 		}
-		fmt.Printf("Freeze address:   %s\n", derefString(asset.Params.Freeze))
-		fmt.Printf("Clawback address: %s\n", derefString(asset.Params.Clawback))
+		fmt.Printf("Asset name: %s\n", name)
+
+		units := "units"
+		if asset.Params.UnitName != nil {
+			_, units = unicodePrintable(*asset.Params.UnitName)
+		}
+		reportInfof("Unit name:        %s", units)
+		fmt.Printf("Maximum issue:    %s %s\n", assetDecimalsFmt(asset.Params.Total, asset.Params.Decimals), units)
+		fmt.Printf("Reserve amount:   %s %s\n", assetDecimalsFmt(res.Amount, asset.Params.Decimals), units)
+		fmt.Printf("Issued:           %s %s\n", assetDecimalsFmt(asset.Params.Total-res.Amount, asset.Params.Decimals), units)
+		fmt.Printf("Decimals:         %d\n", asset.Params.Decimals)
+		fmt.Printf("Default frozen:   %t\n", nilToZero(asset.Params.DefaultFrozen))
+		safeURL := ""
+		if asset.Params.Url != nil {
+			_, safeURL = unicodePrintable(*asset.Params.Url)
+		}
+		fmt.Printf("URL: %s\n", safeURL)
+		fmt.Printf("Manager address:  %s\n", nilToZero(asset.Params.Manager))
+		if reserveEmpty {
+			fmt.Printf("Reserve address:  %s (Empty. Defaulting to creator)\n", nilToZero(asset.Params.Reserve))
+		} else {
+			fmt.Printf("Reserve address:  %s\n", nilToZero(asset.Params.Reserve))
+		}
+		fmt.Printf("Freeze address:   %s\n", nilToZero(asset.Params.Freeze))
+		fmt.Printf("Clawback address: %s\n", nilToZero(asset.Params.Clawback))
 	},
 }

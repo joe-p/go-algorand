@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2025 Algorand, Inc.
+// Copyright (C) 2019-2026 Algorand Foundation Ltd.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -165,7 +165,7 @@ ok:
 	if err != nil {
 		return eval, addrs[0], err
 	}
-	err = eval.TransactionGroup(g)
+	err = eval.TransactionGroup(g...)
 	return eval, addrs[0], err
 }
 
@@ -221,12 +221,12 @@ func TestPrivateTransactionGroup(t *testing.T) {
 
 	var txgroup []transactions.SignedTxnWithAD
 	eval := BlockEvaluator{}
-	err := eval.TransactionGroup(txgroup)
+	err := eval.TransactionGroup(txgroup...)
 	require.NoError(t, err) // nothing to do, no problem
 
 	eval.proto = config.Consensus[protocol.ConsensusCurrentVersion]
 	txgroup = make([]transactions.SignedTxnWithAD, eval.proto.MaxTxGroupSize+1)
-	err = eval.TransactionGroup(txgroup)
+	err = eval.TransactionGroup(txgroup...)
 	require.ErrorContains(t, err, "group size")
 }
 
@@ -327,12 +327,13 @@ int 1`,
 			}
 
 			// a non-app call txn
+			payAmount := basics.MicroAlgos{Raw: 1_000_000}
 			payTxn := txntest.Txn{
 				Type:             protocol.PaymentTx,
 				Sender:           addrs[1],
 				Receiver:         addrs[2],
 				CloseRemainderTo: addrs[3],
-				Amount:           1_000_000,
+				Amount:           payAmount,
 
 				FirstValid:  newBlock.Round(),
 				LastValid:   newBlock.Round() + 1000,
@@ -399,7 +400,7 @@ int 1`,
 
 			require.Len(t, eval.block.Payset, 0)
 
-			err = eval.TransactionGroup(txgroup)
+			err = eval.TransactionGroup(txgroup...)
 			switch testCase.firstTxnBehavior {
 			case "approve":
 				if len(scenario.ExpectedError) != 0 {
@@ -427,9 +428,9 @@ int 1`,
 			}
 			expectedPayTxnAD :=
 				transactions.ApplyData{
-					ClosingAmount: basics.MicroAlgos{
-						Raw: balances[payTxn.Sender].MicroAlgos.Raw - payTxn.Amount - txgroup[1].Txn.Fee.Raw,
-					},
+					ClosingAmount: balances[payTxn.Sender].MicroAlgos.
+						SubSaturate(payAmount).
+						SubSaturate(txgroup[1].Txn.Fee),
 				}
 
 			expectedFeeSinkData := ledgercore.ToAccountData(balances[testSinkAddr])
@@ -489,7 +490,7 @@ int 1`,
 
 				expectedAcct1Data := ledgercore.AccountData{}
 				expectedAcct2Data := ledgercore.ToAccountData(balances[addrs[2]])
-				expectedAcct2Data.MicroAlgos.Raw += payTxn.Amount
+				expectedAcct2Data.MicroAlgos.Raw += payAmount.Raw
 				expectedAcct3Data := ledgercore.ToAccountData(balances[addrs[3]])
 				expectedAcct3Data.MicroAlgos.Raw += expectedPayTxnAD.ClosingAmount.Raw
 				expectedFeeSinkData.MicroAlgos.Raw += txgroup[1].Txn.Fee.Raw
@@ -666,7 +667,7 @@ func testnetFixupExecution(t *testing.T, headerRound basics.Round, poolBonus uin
 		},
 	}
 	st := txn.Sign(keys[0])
-	err = eval.Transaction(st, transactions.ApplyData{})
+	err = eval.TransactionGroup(st.WithAD())
 	require.NoError(t, err)
 
 	poolOld, err := eval.workaroundOverspentRewards(rewardPoolBalance, headerRound)
@@ -857,7 +858,7 @@ func (ledger *evalTestLedger) GenesisProto() config.ConsensusParams {
 	return config.Consensus[ledger.genesisProtoVersion]
 }
 
-// GenesisProto returns the genesis consensus version for this ledger.
+// GenesisProtoVersion returns the genesis consensus version for this ledger.
 func (ledger *evalTestLedger) GenesisProtoVersion() protocol.ConsensusVersion {
 	return ledger.genesisProtoVersion
 }
@@ -1420,12 +1421,11 @@ func TestAbsenteeChecks(t *testing.T) {
 		return pay(i, addrs[i]).Sign(keys[i])
 	}
 
-	require.NoError(t, blkEval.Transaction(selfpay(0), transactions.ApplyData{}))
-	require.NoError(t, blkEval.Transaction(selfpay(1), transactions.ApplyData{}))
-	require.NoError(t, blkEval.Transaction(selfpay(2), transactions.ApplyData{}))
+	require.NoError(t, blkEval.TransactionGroup(selfpay(0).WithAD()))
+	require.NoError(t, blkEval.TransactionGroup(selfpay(1).WithAD()))
+	require.NoError(t, blkEval.TransactionGroup(selfpay(2).WithAD()))
 	for i := 0; i < 32; i++ {
-		require.NoError(t, blkEval.Transaction(pay(0, basics.Address{byte(i << 3), 0xaa}).Sign(keys[0]),
-			transactions.ApplyData{}))
+		require.NoError(t, blkEval.TransactionGroup(pay(0, basics.Address{byte(i << 3), 0xaa}).Sign(keys[0]).WithAD()))
 	}
 
 	// Make sure we validate our block as well
@@ -1626,4 +1626,31 @@ func TestIsAbsent(t *testing.T) {
 	// not absent if never seen
 	a.False(absent(1000, 10, 0, 2001))
 	a.True(absent(1000, 10, 1, 2002))
+}
+
+func TestComputeLoad(t *testing.T) {
+	partitiontest.PartitionTest(t)
+	t.Parallel()
+
+	tests := []struct {
+		blockSize int
+		maxSize   int
+		expected  basics.Micros
+	}{
+		{0, 1000, 0},
+		{250, 1000, 250_000},
+		{500, 1000, 500_000},
+		{750, 1000, 750_000},
+		{1000, 1000, 1_000_000},
+		{1500, 1000, 1_000_000}, // overfull capped at max
+		{1, 10, 100_000},
+		{50000, 100000, 500_000},
+		{1, 1000000, 1},
+		{999, 1000, 999_000},
+	}
+
+	for _, tt := range tests {
+		result := ComputeLoad(tt.blockSize, tt.maxSize)
+		require.Equal(t, tt.expected, result)
+	}
 }

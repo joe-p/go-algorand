@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2025 Algorand, Inc.
+// Copyright (C) 2019-2026 Algorand Foundation Ltd.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -18,15 +18,14 @@ package apply
 
 import (
 	"bytes"
+	"crypto/rand"
 	"fmt"
 	"maps"
-	"math/rand"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/algorand/go-algorand/config"
-	"github.com/algorand/go-algorand/crypto"
 	"github.com/algorand/go-algorand/data/basics"
 	"github.com/algorand/go-algorand/data/transactions"
 	"github.com/algorand/go-algorand/data/transactions/logic"
@@ -36,14 +35,10 @@ import (
 )
 
 func getRandomAddress(a *require.Assertions) basics.Address {
-	const rl = 16
-	b := make([]byte, rl)
-	n, err := rand.Read(b)
+	address := basics.Address{}
+	_, err := rand.Read(address[:])
 	a.NoError(err)
-	a.Equal(rl, n)
-
-	address := crypto.Hash(b)
-	return basics.Address(address)
+	return address
 }
 
 type testBalances struct {
@@ -340,6 +335,11 @@ func TestAppCallAddressByIndex(t *testing.T) {
 	a.ErrorContains(err, "invalid Account reference 2")
 }
 
+func makeTestEp(proto *config.ConsensusParams) *logic.EvalParams {
+	stads := []transactions.SignedTxnWithAD{{}}
+	return logic.NewAppEvalParams(stads, proto, nil)
+}
+
 func TestAppCallCheckProgramCosts(t *testing.T) {
 	partitiontest.PartitionTest(t)
 	t.Parallel()
@@ -349,8 +349,7 @@ func TestAppCallCheckProgramCosts(t *testing.T) {
 	var ac transactions.ApplicationCallTxnFields
 	// This check is for static costs. v26 is last with static cost checking
 	proto := config.Consensus[protocol.ConsensusV26]
-	stads := []transactions.SignedTxnWithAD{{}}
-	ep := logic.NewAppEvalParams(stads, &proto, nil)
+	ep := makeTestEp(&proto)
 
 	proto.MaxAppProgramCost = 1
 	err := checkPrograms(&ac, 0, ep)
@@ -390,8 +389,7 @@ func TestAppCallCheckProgramsWithAccess(t *testing.T) {
 		protocol.ConsensusFuture,
 	} {
 		proto := config.Consensus[cv]
-		stads := []transactions.SignedTxnWithAD{{}}
-		ep := logic.NewAppEvalParams(stads, &proto, nil)
+		ep := makeTestEp(&proto)
 		program := []byte{2, 0x20, 1, 1, 0x22} // version, intcb, int 1
 		ac.ApprovalProgram = program
 		ac.ClearStateProgram = bytes.Clone(program)
@@ -472,8 +470,7 @@ func TestAppCallApplyCreate(t *testing.T) {
 	b := newTestBalances()
 	b.SetProto(protocol.ConsensusFuture)
 	proto := b.ConsensusParams()
-	stads := []transactions.SignedTxnWithAD{{}}
-	ep := logic.NewAppEvalParams(stads, &proto, nil)
+	ep := makeTestEp(&proto)
 
 	var txnCounter uint64 = 1
 
@@ -574,8 +571,7 @@ func TestAppCallApplyCreateOptIn(t *testing.T) {
 	b := newTestBalancesPass()
 	b.SetProto(protocol.ConsensusFuture)
 	proto := b.ConsensusParams()
-	stads := []transactions.SignedTxnWithAD{{}}
-	ep := logic.NewAppEvalParams(stads, &proto, nil)
+	ep := makeTestEp(&proto)
 	var txnCounter uint64 = 1
 	appIdx := basics.AppIndex(txnCounter + 1)
 	var ad *transactions.ApplyData = &transactions.ApplyData{}
@@ -730,7 +726,7 @@ func TestAppCallClearState(t *testing.T) {
 	b := newTestBalances()
 	b.SetProto(protocol.ConsensusFuture)
 	proto := b.ConsensusParams()
-	ep := logic.NewAppEvalParams(nil, &proto, nil)
+	ep := makeTestEp(&proto)
 
 	ad := &transactions.ApplyData{}
 	b.appCreators = make(map[basics.AppIndex]basics.Address)
@@ -1013,8 +1009,7 @@ func TestAppCallApplyUpdate(t *testing.T) {
 	b := newTestBalances()
 	b.SetProto(protocol.ConsensusV28)
 	proto := b.ConsensusParams()
-	stads := []transactions.SignedTxnWithAD{{}}
-	ep := logic.NewAppEvalParams(stads, &proto, nil)
+	ep := makeTestEp(&proto)
 
 	b.balances = make(map[basics.Address]basics.AccountData)
 	cbr := basics.AccountData{
@@ -1201,7 +1196,7 @@ func TestAppCallApplyDelete(t *testing.T) {
 	err = ApplicationCall(ac, h, b, ad, 0, &ep, txnCounter)
 	a.NoError(err)
 	a.Equal(appIdx, b.deAllocatedAppIdx)
-	a.Equal(1, b.put)
+	a.Equal(2, b.put) // creator + sponsor (who happen to be the same here)
 	a.Zero(b.putAppParams)
 	a.Equal(1, b.deleteAppParams)
 	br = b.balances[creator]
@@ -1233,7 +1228,7 @@ func TestAppCallApplyDelete(t *testing.T) {
 		err = ApplicationCall(ac, h, b, ad, 0, &ep, txnCounter)
 		a.NoError(err)
 		a.Equal(appIdx, b.deAllocatedAppIdx)
-		a.Equal(1, b.put)
+		a.Equal(2, b.put) // creator + sponsor (who happen to be the same here)
 		a.Zero(b.putAppParams)
 		a.Equal(1, b.deleteAppParams)
 		br = b.balances[creator]
@@ -1280,8 +1275,7 @@ func TestAppCallApplyCreateClearState(t *testing.T) {
 	b := newTestBalancesPass()
 	b.SetProto(protocol.ConsensusFuture)
 	proto := b.ConsensusParams()
-	stads := []transactions.SignedTxnWithAD{{}}
-	ep := logic.NewAppEvalParams(stads, &proto, nil)
+	ep := makeTestEp(&proto)
 
 	b.balances = make(map[basics.Address]basics.AccountData)
 	b.balances[creator] = basics.AccountData{}
@@ -1331,8 +1325,7 @@ func TestAppCallApplyCreateDelete(t *testing.T) {
 	b := newTestBalancesPass()
 	b.SetProto(protocol.ConsensusFuture)
 	proto := b.ConsensusParams()
-	stads := []transactions.SignedTxnWithAD{{}}
-	ep := logic.NewAppEvalParams(stads, &proto, nil)
+	ep := makeTestEp(&proto)
 
 	b.balances = make(map[basics.Address]basics.AccountData)
 	b.balances[creator] = basics.AccountData{}

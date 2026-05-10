@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2025 Algorand, Inc.
+// Copyright (C) 2019-2026 Algorand Foundation Ltd.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -446,7 +446,7 @@ func verifyStateProofForRound(r *require.Assertions, fixture *fixtures.RestClien
 	return stateProofMessage, nextStateProofBlock
 }
 
-// TestStateProofRecoveryDuringRecoveryInterval simulates a situation where the stateproof chain is lagging after the main chain.
+// TestStateProofRecoveryDuringRecoveryPeriod simulates a situation where the stateproof chain is lagging after the main chain.
 // If the missing data is being accepted before  StateProofMaxRecoveryIntervals * StateProofInterval rounds have passed, nodes should
 // be able to produce stateproofs and continue as normal
 func TestStateProofRecoveryDuringRecoveryPeriod(t *testing.T) {
@@ -1114,7 +1114,7 @@ func TestAtMostOneSPFullPoolWithLoad(t *testing.T) {
 				// ignore the returned error (most of the time will be error)
 				_, err := relay.SendPaymentFromUnencryptedWallet(account0, account0, params.MinFee, ps.amount, []byte{byte(params.LastRound)})
 				require.Error(t, err)
-				require.Equal(t, "HTTP 400 Bad Request: TransactionPool.checkPendingQueueSize: transaction pool have reached capacity", err.Error())
+				require.Equal(t, "HTTP 400 Bad Request: TransactionPool.checkPendingQueueSize: transaction pool has reached capacity", err.Error())
 				time.Sleep(25 * time.Millisecond)
 			}
 		}(uint64(txnSpam + 1))

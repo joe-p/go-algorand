@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2025 Algorand, Inc.
+// Copyright (C) 2019-2026 Algorand Foundation Ltd.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -35,7 +35,7 @@ import (
 //	| | | \___/ \_/-- rnd encoding (00=literal, 01=+1, 10=-1, 11=same as last rnd)
 //	| | |   `-------- prop window reference (000=literal, 001...111=window index)
 //	| | +------------ snd table reference (0=literal, 1=table)
-//	| +-------------- (sig.p,sig.p1s) table reference appears (0=literal, 1=table)
+//	| +-------------- (sig.p, sig.p1s) table reference (0=literal, 1=table)
 //	+---------------- (sig.p2, sig.p2s) table reference (0=literal, 1=table)
 const (
 	// bits 0-1: rnd delta encoding

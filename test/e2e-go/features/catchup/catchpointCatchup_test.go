@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2025 Algorand, Inc.
+// Copyright (C) 2019-2026 Algorand Foundation Ltd.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -171,23 +171,19 @@ func (ec *nodeExitErrorCollector) nodeExitWithError(nc *nodecontrol.NodeControll
 
 	exitError, ok := err.(*exec.ExitError)
 	if !ok {
-		if err != nil {
-			ec.mu.Lock()
-			ec.errors = append(ec.errors, err)
-			ec.messages = append(ec.messages, "Node at %s has terminated with an error", nc.GetDataDir())
-			ec.mu.Unlock()
-		}
+		ec.mu.Lock()
+		ec.errors = append(ec.errors, err)
+		ec.messages = append(ec.messages, fmt.Sprintf("Node at %s has terminated with an error", nc.GetDataDir()))
+		ec.mu.Unlock()
 		return
 	}
 	ws := exitError.Sys().(syscall.WaitStatus)
 	exitCode := ws.ExitStatus()
 
-	if err != nil {
-		ec.mu.Lock()
-		ec.errors = append(ec.errors, err)
-		ec.messages = append(ec.messages, fmt.Sprintf("Node at %s has terminated with error code %d", nc.GetDataDir(), exitCode))
-		ec.mu.Unlock()
-	}
+	ec.mu.Lock()
+	ec.errors = append(ec.errors, err)
+	ec.messages = append(ec.messages, fmt.Sprintf("Node at %s has terminated with error code %d", nc.GetDataDir(), exitCode))
+	ec.mu.Unlock()
 }
 
 func (ec *nodeExitErrorCollector) Print() {

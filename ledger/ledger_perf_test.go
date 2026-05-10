@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2025 Algorand, Inc.
+// Copyright (C) 2019-2026 Algorand Foundation Ltd.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -25,8 +25,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/algorand/go-deadlock"
 	"github.com/stretchr/testify/require"
+
+	"github.com/algorand/go-deadlock"
 
 	"github.com/algorand/go-algorand/agreement"
 	"github.com/algorand/go-algorand/config"
@@ -260,7 +261,7 @@ func benchmarkFullBlocks(params testParams, b *testing.B) {
 				var stxn transactions.SignedTxn
 				stxn.Txn = tx
 				stxn.Sig = crypto.Signature{1}
-				err = eval.Transaction(stxn, transactions.ApplyData{})
+				err = eval.TransactionGroup(stxn.WithAD())
 
 			}
 
@@ -291,7 +292,7 @@ func benchmarkFullBlocks(params testParams, b *testing.B) {
 					var stxn transactions.SignedTxn
 					stxn.Txn = tx
 					stxn.Sig = crypto.Signature{1}
-					err = eval.Transaction(stxn, transactions.ApplyData{})
+					err = eval.TransactionGroup(stxn.WithAD())
 					require.NoError(b, err)
 				}
 				break

@@ -381,8 +381,9 @@ func BenchmarkAppASA(b *testing.B) { benchmarkFullBlocks(testCases["asa"], b) }
 
 func BenchmarkPay(b *testing.B) { benchmarkFullBlocks(testCases["pay"], b) }
 
-func BenchmarkAppFibo(b *testing.B)     { benchmarkFullBlocks(testCases["fibo"], b) }
-func BenchmarkAppWasmFibo(b *testing.B) { benchmarkFullBlocks(testCases["wasm-fibo"], b) }
+func BenchmarkAppFibo7(b *testing.B)      { benchmarkFullBlocks(testCases["fibo-7"], b) }
+func BenchmarkAppWasmFibo7(b *testing.B)  { benchmarkFullBlocks(testCases["wasm-fibo-7"], b) }
+func BenchmarkAppWasmFibo17(b *testing.B) { benchmarkFullBlocks(testCases["wasm-fibo-17"], b) }
 
 func wasmProgram(wasmBytes []byte) []byte {
 	bytesHex := hex.EncodeToString(wasmBytes)
@@ -534,12 +535,12 @@ program:
 
 	params = testParams{
 		testType: "app",
-		name:     "fibo",
+		name:     "fibo-7",
 		program:  ops.Program,
 	}
 	testCases[params.name] = params
 
-	wasmFiboBytes, err := os.ReadFile("../wamrtime/target/wasm32-unknown-unknown/wasm_small/fibo_7.wasm")
+	wasmFibo7Bytes, err := os.ReadFile("../wamrtime/target/wasm32-unknown-unknown/wasm_small/fibo_7.wasm")
 
 	if err != nil {
 		panic(fmt.Sprintf("failed to read wasm file: %v", err))
@@ -547,15 +548,21 @@ program:
 
 	params = testParams{
 		testType: "app",
-		name:     "wasm-fibo",
-		program:  wasmProgram(wasmFiboBytes),
+		name:     "wasm-fibo-7",
+		program:  wasmProgram(wasmFibo7Bytes),
 	}
 	testCases[params.name] = params
 
+	wasmFibo17Bytes, err := os.ReadFile("../wamrtime/target/wasm32-unknown-unknown/wasm_small/fibo.wasm")
+
+	if err != nil {
+		panic(fmt.Sprintf("failed to read wasm file: %v", err))
+	}
+
 	params = testParams{
 		testType: "app",
-		name:     "fibo",
-		program:  ops.Program,
+		name:     "wasm-fibo-17",
+		program:  wasmProgram(wasmFibo17Bytes),
 	}
 	testCases[params.name] = params
 

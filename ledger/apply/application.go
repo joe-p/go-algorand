@@ -440,9 +440,7 @@ func ApplicationCall(ac transactions.ApplicationCallTxnFields, header transactio
 
 	// If this txn is going to set new programs (either for creation or
 	// update), check that the programs are valid and not too expensive
-
-	// TODO: Wasm Program check?
-	if (ac.ApplicationID == 0 || ac.OnCompletion == transactions.UpdateApplicationOC) && ac.WasmProgram == nil {
+	if ac.ApplicationID == 0 || ac.OnCompletion == transactions.UpdateApplicationOC {
 		err = transactions.CheckContractVersions(ac.ApprovalProgram, ac.ClearStateProgram, params, evalParams.Proto)
 		if err != nil {
 			return err

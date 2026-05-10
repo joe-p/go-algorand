@@ -1233,6 +1233,21 @@ func asmDefault(ops *OpStream, spec *OpSpec, mnemonic token, args []token) *sour
 				return args[i].errorf("%s %w", spec.Name, err)
 			}
 			ops.pending.WriteByte(val)
+		case immBytes:
+			val, consumed, err := parseBinaryArgs(args[i:])
+			if err != nil {
+				return args[i].errorf("%s %w", spec.Name, err)
+			}
+			// Encode length as varuint, then the bytes
+			var scratch [binary.MaxVarintLen64]byte
+			vlen := binary.PutUvarint(scratch[:], uint64(len(val)))
+			ops.pending.Write(scratch[:vlen])
+			ops.pending.Write(val)
+			// Skip consumed tokens
+			for consumed > 1 {
+				i++
+				consumed--
+			}
 		default:
 			return args[i].errorf("unable to assemble immKind %d", imm.kind)
 		}
@@ -3148,6 +3163,23 @@ func checkByteImmArgs(cx *EvalContext) error {
 	var err error
 	_, cx.nextpc, err = parseByteImmArgs(cx.program, cx.pc+1)
 	return err
+}
+
+// checkWasmEval checks that wasm_eval has proper bytes immediate
+func checkWasmEval(cx *EvalContext) error {
+	pos := cx.pc + 1 // skip opcode
+	// bytes (varuint length + data)
+	length, bytesUsed := binary.Uvarint(cx.program[pos:])
+	if bytesUsed <= 0 {
+		return fmt.Errorf("could not decode bytes length for wasm_eval at pc=%d", cx.pc)
+	}
+	pos += bytesUsed
+	end := uint64(pos) + length
+	if end > uint64(len(cx.program)) {
+		return fmt.Errorf("wasm_eval bytes immediate exceeds program length")
+	}
+	cx.nextpc = int(end)
+	return nil
 }
 
 func parseLabels(program []byte, pos int) (targets []int, nextpc int, err error) {

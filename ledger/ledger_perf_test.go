@@ -19,6 +19,7 @@ package ledger
 import (
 	"context"
 	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -46,13 +47,12 @@ import (
 )
 
 type testParams struct {
-	testType    string
-	name        string
-	program     []byte
-	schemaSize  uint64
-	numApps     uint64
-	asaAccts    uint64
-	wasmProgram []byte
+	testType   string
+	name       string
+	program    []byte
+	schemaSize uint64
+	numApps    uint64
+	asaAccts   uint64
 }
 
 var testCases map[string]testParams
@@ -70,7 +70,7 @@ func makeUnsignedApplicationCallTxPerf(appIdx basics.AppIndex, params testParams
 	tx.Header.Fee = basics.MicroAlgos{Raw: 1000}
 
 	// If creating, set programs
-	if appIdx == 0 && params.wasmProgram == nil {
+	if appIdx == 0 {
 		tx.ApprovalProgram = params.program
 		tx.ClearStateProgram = params.program
 		tx.GlobalStateSchema = basics.StateSchema{
@@ -79,8 +79,6 @@ func makeUnsignedApplicationCallTxPerf(appIdx basics.AppIndex, params testParams
 		tx.LocalStateSchema = basics.StateSchema{
 			NumByteSlice: params.schemaSize,
 		}
-	} else if params.wasmProgram != nil {
-		tx.WasmProgram = params.wasmProgram
 	}
 
 	return tx
@@ -386,6 +384,20 @@ func BenchmarkPay(b *testing.B) { benchmarkFullBlocks(testCases["pay"], b) }
 func BenchmarkAppFibo(b *testing.B)     { benchmarkFullBlocks(testCases["fibo"], b) }
 func BenchmarkAppWasmFibo(b *testing.B) { benchmarkFullBlocks(testCases["wasm-fibo"], b) }
 
+func wasmProgram(wasmBytes []byte) []byte {
+	bytesHex := hex.EncodeToString(wasmBytes)
+
+	teal := fmt.Sprintf("wasm_eval 0x%s", bytesHex)
+
+	ops, err := logic.AssembleStringWithVersion(teal, 12)
+	if err != nil {
+		panic(err)
+	}
+
+	return ops.Program
+
+}
+
 func init() {
 	testCases = make(map[string]testParams)
 
@@ -534,9 +546,9 @@ program:
 	}
 
 	params = testParams{
-		testType:    "app",
-		name:        "wasm-fibo",
-		wasmProgram: wasmFiboBytes,
+		testType: "app",
+		name:     "wasm-fibo",
+		program:  wasmProgram(wasmFiboBytes),
 	}
 	testCases[params.name] = params
 
@@ -556,8 +568,7 @@ program:
 	params = testParams{
 		testType: "app",
 		name:     "wasm-int-1",
-
-		wasmProgram: wasmRet1Bytes,
+		program:  wasmProgram(wasmRet1Bytes),
 	}
 	testCases[params.name] = params
 }

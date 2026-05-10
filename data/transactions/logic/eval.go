@@ -31,7 +31,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/algorand/go-algorand/config"
 	"github.com/algorand/go-algorand/config/bounds"
@@ -1259,10 +1258,6 @@ func EvalSignature(gi int, params *EvalParams) (bool, error) {
 	return pass, err
 }
 
-var wamrtimeInitialized = false
-
-const logExecutionTime = false
-
 // eval implementation
 // A program passes successfully if it finishes with one int element on the stack that is non-zero.
 func eval(program []byte, cx *EvalContext) (pass bool, err error) {
@@ -1279,21 +1274,6 @@ func eval(program []byte, cx *EvalContext) (pass bool, err error) {
 			cx.EvalParams.log().Errorf("recovered panic in Eval: %v", err)
 		}
 	}()
-
-	evalStart := time.Now()
-	if cx.txn.Txn.WasmProgram != nil {
-		if !wamrtimeInitialized {
-			wamrtimeInit()
-			wamrtimeInitialized = true
-		}
-
-		ret_val := wamrtimeCallProgram(cx, cx.txn.Txn.WasmProgram)
-
-		if logExecutionTime {
-			fmt.Printf("WASM execution time: %s\n", time.Since(evalStart))
-		}
-		return ret_val != 0, nil
-	}
 
 	// 16 is chosen to avoid growth for small programs, and so that repeated
 	// doublings lead to a number just a bit above 1000, the max stack height.
@@ -1355,7 +1335,6 @@ func eval(program []byte, cx *EvalContext) (pass bool, err error) {
 			cx.Tracer.AfterOpcode(cx, err)
 		}
 	}
-
 	if err != nil {
 		if cx.Trace != nil {
 			fmt.Fprintf(cx.Trace, "%3d %s\n", cx.pc, err)
@@ -1376,11 +1355,7 @@ func eval(program []byte, cx *EvalContext) (pass bool, err error) {
 		return false, errors.New("stack finished with bytes not int")
 	}
 
-	if logExecutionTime {
-		fmt.Printf("AVM execution time: %s\n", time.Since(evalStart))
-	}
 	return cx.Stack[0].Uint != 0, nil
-
 }
 
 // CheckContract should be faster than EvalContract.  It can perform
@@ -2559,6 +2534,37 @@ func opPushBytes(cx *EvalContext) error {
 	sv := stackValue{Bytes: cx.program[pos:end]}
 	cx.Stack = append(cx.Stack, sv)
 	cx.nextpc = int(end)
+	return nil
+}
+
+var wamrtimeInitialized = false
+
+func opWasmEval(cx *EvalContext) error {
+	// Read bytecode len
+	pos := cx.pc + 1
+	length, bytesUsed := binary.Uvarint(cx.program[pos:])
+	if bytesUsed <= 0 {
+		return fmt.Errorf("could not decode wasm bytes length at program[%d]", pos)
+	}
+	pos += bytesUsed
+	end := uint64(pos) + length
+	if end > uint64(len(cx.program)) || end < uint64(pos) {
+		return fmt.Errorf("wasm bytes too long at program[%d]", pos)
+	}
+
+	wasmBytecode := cx.program[pos:end]
+
+	if !wamrtimeInitialized {
+		wamrtimeInit()
+		wamrtimeInitialized = true
+	}
+
+	ret_val := wamrtimeCallProgram(cx, wasmBytecode)
+
+	sv := stackValue{Uint: ret_val}
+	cx.Stack = append(cx.Stack, sv)
+	cx.nextpc = int(end)
+
 	return nil
 }
 

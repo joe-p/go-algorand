@@ -184,8 +184,6 @@ type ApplicationCallTxnFields struct {
 	// transaction should immediately fail. 0 indicates that no version check should be performed.
 	RejectVersion uint64 `codec:"aprv"`
 
-	WasmProgram []byte `codec:"apw,allocbound=bounds.MaxAvailableAppProgramLen"`
-
 	// If you add any fields here, remember you MUST modify the Empty
 	// method below!
 }
@@ -421,9 +419,6 @@ func (ac *ApplicationCallTxnFields) Empty() bool {
 	if ac.RejectVersion != 0 {
 		return false
 	}
-	if ac.WasmProgram != nil {
-		return false
-	}
 	return true
 }
 
@@ -448,18 +443,13 @@ func (ac ApplicationCallTxnFields) wellFormed(proto config.ConsensusParams) erro
 
 	// Programs may only be set for creation or update
 	if ac.ApplicationID != 0 && ac.OnCompletion != UpdateApplicationOC {
-		// TODO: Also check WASM program. Not done yet since we don't yet support calling created WASM programs, thus a WasmProgram
-		// must be in every call tx
 		if len(ac.ApprovalProgram) != 0 || len(ac.ClearStateProgram) != 0 {
 			return fmt.Errorf("programs may only be specified during application creation or update")
 		}
-	} else if ac.WasmProgram == nil {
-		// TODO: Versioning WASM programs?
-
+	} else {
 		// This will check version matching, but not downgrading. That
 		// depends on chain state (so we pass an empty AppParams)
 		err := CheckContractVersions(ac.ApprovalProgram, ac.ClearStateProgram, basics.AppParams{}, &proto)
-
 		if err != nil {
 			return err
 		}

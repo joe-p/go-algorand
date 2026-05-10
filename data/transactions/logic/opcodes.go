@@ -278,6 +278,21 @@ func (d OpDetails) trust() OpDetails {
 	return d
 }
 
+// detWasmEval describes the wasm_eval opcode with bytes immediate
+func detWasmEval() OpDetails {
+	d := detDefault()
+	d.check = checkWasmEval
+	d.Size = 0 // variable size
+	d.Immediates = []immediate{imm("b", immBytes)}
+
+	// TODO: Cost is currently 1 for testing.
+	// In reality we probably want to charge ~15 * 700. This number is
+	// based on the difference in the ledger_perf_test benchmarks for
+	// an int 1; return program
+	d = d.costs(1)
+	return d
+}
+
 func immKinded(kind immKind, names ...string) OpDetails {
 	d := detDefault()
 	d.Size = len(names) + 1
@@ -826,6 +841,7 @@ var OpSpecs = []OpSpec{
 			chunkCost: 550,
 			chunkSize: 32,
 		}})},
+	{0xe7, "wasm_eval", opWasmEval, proto(":i"), 12, detWasmEval()},
 }
 
 // OpcodesByVersion returns list of opcodes available in a specific version of TEAL

@@ -13,41 +13,41 @@ void avm_set_exception(void* exec_env, const char* msg);
 void avm_set_ctx(void *ctx);
 
 // WAMR_BINDGEN SECTION_START
-typedef uint64_t (*AvmGetGlobalUintFn)(void* exec_env, void* ctx, uint64_t app, const uint8_t* key_ptr, uint32_t key_len);
+typedef unsigned long long (*AvmGetGlobalUintFn)(void* exec_env, void* ctx, unsigned long long app, const uint8_t* key_ptr, unsigned int key_len);
 
-extern uint64_t goAvmGetGlobalUint(void* exec_env, void* ctx, uint64_t app, uint8_t* key_ptr, uint32_t key_len);
+extern unsigned long long goAvmGetGlobalUint(void* exec_env, void* ctx, unsigned long long app, uint8_t* key_ptr, unsigned int key_len);
 
 static inline AvmGetGlobalUintFn getGoAvmGetGlobalUint() {
 	return (AvmGetGlobalUintFn)goAvmGetGlobalUint;
 }
 
-typedef void (*AvmSetGlobalUintFn)(void* exec_env, void* ctx, uint64_t app, const uint8_t* key_ptr, uint32_t key_len, uint64_t value);
+typedef void (*AvmSetGlobalUintFn)(void* exec_env, void* ctx, unsigned long long app, const uint8_t* key_ptr, unsigned int key_len, unsigned long long value);
 
-extern void goAvmSetGlobalUint(void* exec_env, void* ctx, uint64_t app, uint8_t* key_ptr, uint32_t key_len, uint64_t value);
+extern void goAvmSetGlobalUint(void* exec_env, void* ctx, unsigned long long app, uint8_t* key_ptr, unsigned int key_len, unsigned long long value);
 
 static inline AvmSetGlobalUintFn getGoAvmSetGlobalUint() {
 	return (AvmSetGlobalUintFn)goAvmSetGlobalUint;
 }
 
-typedef int32_t (*AvmGetGlobalBytesFn)(void* exec_env, void* ctx, uint64_t app, const uint8_t* key_ptr, uint32_t key_len, uint8_t* dest_ptr, uint32_t dest_len);
+typedef int (*AvmGetGlobalBytesFn)(void* exec_env, void* ctx, unsigned long long app, const uint8_t* key_ptr, unsigned int key_len, uint8_t* dest_ptr, unsigned int dest_len);
 
-extern int32_t goAvmGetGlobalBytes(void* exec_env, void* ctx, uint64_t app, uint8_t* key_ptr, uint32_t key_len, uint8_t* dest_ptr, uint32_t dest_len);
+extern int goAvmGetGlobalBytes(void* exec_env, void* ctx, unsigned long long app, uint8_t* key_ptr, unsigned int key_len, uint8_t* dest_ptr, unsigned int dest_len);
 
 static inline AvmGetGlobalBytesFn getGoAvmGetGlobalBytes() {
 	return (AvmGetGlobalBytesFn)goAvmGetGlobalBytes;
 }
 
-typedef void (*AvmSetGlobalBytesFn)(void* exec_env, void* ctx, uint64_t app, const uint8_t* key_ptr, uint32_t key_len, const uint8_t* src_ptr, uint32_t src_len);
+typedef void (*AvmSetGlobalBytesFn)(void* exec_env, void* ctx, unsigned long long app, const uint8_t* key_ptr, unsigned int key_len, const uint8_t* src_ptr, unsigned int src_len);
 
-extern void goAvmSetGlobalBytes(void* exec_env, void* ctx, uint64_t app, uint8_t* key_ptr, uint32_t key_len, uint8_t* src_ptr, uint32_t src_len);
+extern void goAvmSetGlobalBytes(void* exec_env, void* ctx, unsigned long long app, uint8_t* key_ptr, unsigned int key_len, uint8_t* src_ptr, unsigned int src_len);
 
 static inline AvmSetGlobalBytesFn getGoAvmSetGlobalBytes() {
 	return (AvmSetGlobalBytesFn)goAvmSetGlobalBytes;
 }
 
-typedef uint64_t (*AvmGetGlobalVarUintFn)(void* exec_env, void* ctx, uint64_t field_index);
+typedef unsigned long long (*AvmGetGlobalVarUintFn)(void* exec_env, void* ctx, unsigned long long field_index);
 
-extern uint64_t goAvmGetGlobalVarUint(void* exec_env, void* ctx, uint64_t field_index);
+extern unsigned long long goAvmGetGlobalVarUint(void* exec_env, void* ctx, unsigned long long field_index);
 
 static inline AvmGetGlobalVarUintFn getGoAvmGetGlobalVarUint() {
 	return (AvmGetGlobalVarUintFn)goAvmGetGlobalVarUint;

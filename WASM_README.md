@@ -1,16 +1,16 @@
 # Spike: `wasm_eval`
 
-This branch adds a new opcode: `wasm_eval` . It currently takes one immediate which is the WASM bytecode. I am using immediates because it allows us to avoid the 4k stack limit and perhaps more importantly it means that app logic updates cannot happen dynamically (must use UpdateApplication and increase the version). Eventually I want to also pass another immediate that defines a gas limit.
+This branch adds a new opcode: `wasm_eval` . It currently takes one immediate which is the WASM bytecode. I am using an immediate because it allows us to avoid the 4k stack limit and perhaps more importantly it means that app logic updates cannot happen dynamically (must use `UpdateApplication` and increase the version). Eventually I want to also pass another immediate that defines a gas limit.
 
-`wasm_eval` should have an up-front cost of ~13x an app call (9,100). This number is based on the benchmarks below.
+`wasm_eval` should have an upfront cost of ~13x an app call (9,100). This number is based on the benchmarks below.
 
-## Bencmarks
+## Benchmarks
 
-| Benchmark                           | Program                                                      | Rationale                                                                                     | Takeaway                                                            |
-| ----------------------------------- | ------------------------------------------------------------ | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| BenchmarkAppFibo19                  | Pure AVM recursive fibonacci of 19                           | This is the highest number we can run in the alrogithim with the max opcode budget (256\*700) | This is the worst case scenario for AVM program execution time      |
-| BenchmarkAppWasmFibo19              | WASM recusrive fibonacci of 19                               | Algorithim that mathces what the AVM currently maxes out on                                   | WASM is **8x faster** than AVM                                      |
-| BenchmarkAppWasmInt1Repeated20Times | 20 `wasm_eval` calls of a WASM program that simply returns 1 | We want to see how many WASM cold starts we can fit in the time of today's max compute        | 20 WASM inits ~= 256 app budgets, thus 1 WASM init ~= 13 app budget |
+| Benchmark                           | Program                                                      | Rationale                                                                                    | Takeaway                                                            |
+| ----------------------------------- | ------------------------------------------------------------ | -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| BenchmarkAppFibo19                  | Pure AVM recursive Fibonacci of 19                           | This is the highest number we can run in the algorithm with the max opcode budget (256\*700) | This is the worst-case scenario for AVM program execution time      |
+| BenchmarkAppWasmFibo19              | WASM recursive Fibonacci of 19                               | Algorithm that matches what the AVM currently maxes out on                                   | WASM is **8x faster** than AVM                                      |
+| BenchmarkAppWasmInt1Repeated20Times | 20 `wasm_eval` calls of a WASM program that simply returns 1 | We want to see how many WASM cold starts we can fit in the time of today's max compute       | 20 WASM inits ~= 256 app budgets, thus 1 WASM init ~= 13 app budget |
 
 ```
 ❯ go test -v -count=1 ./ledger -run ^$ -bench "(Fibo19|Repeat)"
@@ -32,10 +32,10 @@ ok      github.com/algorand/go-algorand/ledger  364.534s
 
 ## Open Questions
 
-- Most importants ones are related to practicality of integration
-  - Are we ok with adding a new dependency (wasm-micro-runtime) for contract eval?
-  - Are we ok with introducing another language into the go-algorand build process?
-    - We could potentially just include pre-built binaries from a seperate repo
+- Most important ones are related to practicality of integration
+  - Are we okay with adding a new dependency (wasm-micro-runtime) for contract eval?
+  - Are we okay with introducing another language into the go-algorand build process?
+    - We could potentially just include prebuilt binaries from a separate repo
 - Are there more important benchmarks we should be running? I chose full block perf test since it seems the most holistic but there may be more insightful tests we can run
 
 ## Future Work

@@ -47,12 +47,14 @@ import (
 )
 
 type testParams struct {
-	testType   string
-	name       string
-	program    []byte
-	schemaSize uint64
-	numApps    uint64
-	asaAccts   uint64
+	testType       string
+	name           string
+	program        []byte
+	schemaSize     uint64
+	numApps        uint64
+	asaAccts       uint64
+	opBudget       int
+	largerPrograms bool
 }
 
 var testCases map[string]testParams
@@ -145,11 +147,27 @@ func benchmarkFullBlocks(params testParams, b *testing.B) {
 	dbName := fmt.Sprintf("%s.%d", b.Name(), crypto.RandUint64())
 	dbPrefix := filepath.Join(dbTempDir, dbName)
 
+	customProtocol := protocol.ConsensusVersion(fmt.Sprintf("test-perf-%s-%d", b.Name(), crypto.RandUint64()))
+	protoParams := config.Consensus[protocol.ConsensusFuture]
+
+	if params.largerPrograms {
+		protoParams.MaxAppProgramLen = 1_000_000
+		protoParams.MaxAppTotalProgramLen = 1_000_000
+	}
+	if params.opBudget != 0 {
+		protoParams.MaxAppProgramCost = params.opBudget
+	}
+
+	config.Consensus[customProtocol] = protoParams
+	defer func() {
+		delete(config.Consensus, customProtocol)
+	}()
+
 	genesisInitState := getInitState()
 
-	// Use future protocol
+	// Use custom protocol
 	genesisInitState.Block.BlockHeader.GenesisHash = crypto.Digest{}
-	genesisInitState.Block.CurrentProtocol = protocol.ConsensusFuture
+	genesisInitState.Block.CurrentProtocol = customProtocol
 	genesisInitState.GenesisHash = crypto.Digest{1}
 	genesisInitState.Block.BlockHeader.GenesisHash = crypto.Digest{1}
 
@@ -381,16 +399,22 @@ func BenchmarkAppASA(b *testing.B) { benchmarkFullBlocks(testCases["asa"], b) }
 
 func BenchmarkPay(b *testing.B) { benchmarkFullBlocks(testCases["pay"], b) }
 
-func BenchmarkAppFibo7(b *testing.B)      { benchmarkFullBlocks(testCases["fibo-7"], b) }
+func BenchmarkAppFibo19(b *testing.B)     { benchmarkFullBlocks(testCases["fibo-19"], b) }
 func BenchmarkAppWasmFibo7(b *testing.B)  { benchmarkFullBlocks(testCases["wasm-fibo-7"], b) }
-func BenchmarkAppWasmFibo17(b *testing.B) { benchmarkFullBlocks(testCases["wasm-fibo-17"], b) }
+func BenchmarkAppWasmFibo19(b *testing.B) { benchmarkFullBlocks(testCases["wasm-fibo-19"], b) }
+func BenchmarkAppWasmInt1Repeated20Times(b *testing.B) {
+	benchmarkFullBlocks(testCases["wasm-int-1-repeated-x-times"], b)
+}
 
-func wasmProgram(wasmBytes []byte) []byte {
+func wasmProgram(wasmBytes []byte, calls int) []byte {
 	bytesHex := hex.EncodeToString(wasmBytes)
 
 	teal := fmt.Sprintf("wasm_eval 0x%s", bytesHex)
+	repeatedTeal := strings.Repeat(teal, calls)
+	finalTeal := strings.ReplaceAll(repeatedTeal, teal, teal+"\n")
 
-	ops, err := logic.AssembleStringWithVersion(teal, 12)
+	finalTeal += fmt.Sprintf("\npopn %d", calls-1)
+	ops, err := logic.AssembleStringWithVersion(finalTeal, 12)
 	if err != nil {
 		panic(err)
 	}
@@ -523,7 +547,7 @@ fibonacci:
 
 
 program:
-	int 7
+	int 19
 	callsub fibonacci
 	return
 `
@@ -535,8 +559,9 @@ program:
 
 	params = testParams{
 		testType: "app",
-		name:     "fibo-7",
+		name:     "fibo-19",
 		program:  ops.Program,
+		opBudget: 256 * 700,
 	}
 	testCases[params.name] = params
 
@@ -549,7 +574,7 @@ program:
 	params = testParams{
 		testType: "app",
 		name:     "wasm-fibo-7",
-		program:  wasmProgram(wasmFibo7Bytes),
+		program:  wasmProgram(wasmFibo7Bytes, 1),
 	}
 	testCases[params.name] = params
 
@@ -561,8 +586,8 @@ program:
 
 	params = testParams{
 		testType: "app",
-		name:     "wasm-fibo-17",
-		program:  wasmProgram(wasmFibo17Bytes),
+		name:     "wasm-fibo-19",
+		program:  wasmProgram(wasmFibo17Bytes, 1),
 	}
 	testCases[params.name] = params
 
@@ -575,7 +600,15 @@ program:
 	params = testParams{
 		testType: "app",
 		name:     "wasm-int-1",
-		program:  wasmProgram(wasmRet1Bytes),
+		program:  wasmProgram(wasmRet1Bytes, 1),
+	}
+	testCases[params.name] = params
+
+	params = testParams{
+		testType:       "app",
+		name:           "wasm-int-1-repeated-x-times",
+		program:        wasmProgram(wasmRet1Bytes, 20),
+		largerPrograms: true,
 	}
 	testCases[params.name] = params
 }

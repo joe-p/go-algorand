@@ -285,10 +285,18 @@ func detWasmEval() OpDetails {
 	d.Size = 0 // variable size
 	d.Immediates = []immediate{imm("b", immBytes)}
 
-	// TODO: Cost is currently 1 for testing.
-	// In reality we probably want to charge ~15 * 700. This number is
-	// based on the difference in the ledger_perf_test benchmarks for
-	// an int 1; return program
+	// TODO: Update cost to 13*700
+	//
+	// This number is based on the fact that a program with 20 wasm_eval
+	// int 1; return programs takes about the same time as a max compute
+	// AVM program (256 * 700 op budget). The wasm_eval program is actually
+	// a bit faster, but we want to leave some headroom
+	//
+	// 256 / 20 = 12.8
+	//
+	// This is determined from the following benches in ledger_perf_test.go
+	// - BenchmarkAppWasmInt1Repeated20Times
+	// - BenchmarkAppFibo19
 	d = d.costs(1)
 	return d
 }

@@ -51,6 +51,8 @@ ok      github.com/algorand/go-algorand/ledger  223.711s
 
 - Most important ones are related to practicality of integration
   - Are we okay with adding a new dependency (wasm-micro-runtime) for contract eval?
+    - WAMR is currently *~60K LOC* of C
+    - Small wrapper for thread/execution orchestration in ~1k LOC of Rust
   - Are we okay with introducing another language into the go-algorand build process?
     - We could potentially just include prebuilt binaries from a separate repo
 - Are there more important benchmarks we should be running? I chose full block perf test since it seems the most holistic but there may be more insightful tests we can run
@@ -63,4 +65,5 @@ If we want to go forward with this work at some point in the future, we need to:
 - Do way more testing
   - Particularly across different platforms/hardware
   - Also need to test innertxn performance/implications
+- Determine reasonable memory limits
 - Implement a less "spikey" integration

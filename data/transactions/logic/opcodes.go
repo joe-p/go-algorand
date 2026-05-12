@@ -85,6 +85,8 @@ const varintBranchVersion = 13 // branch offsets encoded as binary.Varint instea
 // their version, and fixup TestAssemble() in assembler_test.go.
 const sumhashVersion = 13
 
+const poseidon2Version = 13
+
 // Unlimited Global Storage opcodes
 const boxVersion = 8 // box_*
 
@@ -849,7 +851,18 @@ var OpSpecs = []OpSpec{
 			chunkCost: 550,
 			chunkSize: 32,
 		}})},
-	{0xe7, "wasm_eval", opWasmEval, proto(":i"), 12, detWasmEval()},
+	{0xe7, "poseidon2", opPoseidon2, proto("b:b{32}"), poseidon2Version, costByFieldAndLength("c", &Poseidon2Configs, []linearCost{
+		BN254t2: {
+			baseCost:  7,
+			chunkCost: 350,
+			chunkSize: 32,
+		},
+		BLS12_381t2: {
+			baseCost:  7,
+			chunkCost: 350,
+			chunkSize: 32,
+		}})},
+	{0xe8, "wasm_eval", opWasmEval, proto(":i"), 12, detWasmEval()},
 }
 
 // OpcodesByVersion returns list of opcodes available in a specific version of TEAL

@@ -6,29 +6,46 @@ This branch adds a new opcode: `wasm_eval` . It currently takes one immediate wh
 
 ## Benchmarks
 
-| Benchmark                           | Program                                                      | Rationale                                                                                    | Takeaway                                                            |
-| ----------------------------------- | ------------------------------------------------------------ | -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| BenchmarkAppFibo19                  | Pure AVM recursive Fibonacci of 19                           | This is the highest number we can run in the algorithm with the max opcode budget (256\*700) | This is the worst-case scenario for AVM program execution time      |
-| BenchmarkAppWasmFibo19              | WASM recursive Fibonacci of 19                               | Algorithm that matches what the AVM currently maxes out on                                   | WASM is **8x faster** than AVM                                      |
-| BenchmarkAppWasmInt1Repeated20Times | 20 `wasm_eval` calls of a WASM program that simply returns 1 | We want to see how many WASM cold starts we can fit in the time of today's max compute       | 20 WASM inits ~= 256 app budgets, thus 1 WASM init ~= 13 app budget |
+### Raw Results
 
 ```
-❯ go test -v -count=1 ./ledger -run ^$ -bench "(Fibo19|Repeat)"
+❯ go test -v -count=1 ./ledger -run ^$ -bench "(RepeatAdd|WasmInt1|Fibo19)"
 goos: linux
 goarch: arm64
 pkg: github.com/algorand/go-algorand/ledger
-BenchmarkAppFibo19
+BenchmarkAppWasmInt1
     ledger_perf_test.go:340: built 1 blocks, each with 32233 txns
-BenchmarkAppFibo19-8                                   1        88721556310 ns/op
+BenchmarkAppWasmInt1-8                         1        5009875815 ns/op
+BenchmarkAppFibo19AppBudget256X
+    ledger_perf_test.go:340: built 1 blocks, each with 32233 txns
+BenchmarkAppFibo19AppBudget256X-8              1        89524677072 ns/op
+BenchmarkAppRepeatAddBudget13X
+    ledger_perf_test.go:340: built 1 blocks, each with 32233 txns
+BenchmarkAppRepeatAddBudget13X-8               1        5237368123 ns/op
 BenchmarkAppWasmFibo19
     ledger_perf_test.go:340: built 1 blocks, each with 32233 txns
-BenchmarkAppWasmFibo19-8                               1        10974437348 ns/op
-BenchmarkAppWasmInt1Repeated20Times
-    ledger_perf_test.go:340: built 1 blocks, each with 32233 txns
-BenchmarkAppWasmInt1Repeated20Times-8                  1        82588779486 ns/op
+BenchmarkAppWasmFibo19-8                       1        12264464731 ns/op
 PASS
-ok      github.com/algorand/go-algorand/ledger  364.534s
+ok      github.com/algorand/go-algorand/ledger  223.711s
 ```
+
+### Results Table
+
+| Benchmark          | App Budget Mult | Time (ns/op)   | Time (sec) |
+| ------------------ | --------------- | -------------- | ---------- |
+| `AVM Repeated Add` | 13x             | 5,237,368,123  | ~5.24      |
+| `WASM Int 1`       | N/A (WASM)      | 5,009,875,815  | ~5.01      |
+| `AVM Fibo(19)`     | 256x            | 89,524,677,072 | ~89.52     |
+| `WASM Fibo(19)`    | N/A (WASM)      | 12,264,464,731 | ~12.26     |
+
+### Key Takeaways
+
+- A `wasm_eval` of a no-op program takes as much time as a 13x app budget AVM app (repeated addition)
+- A `wasm_eval` of recursive `fibo(19)` is *7x faster* than AVM recursive `fibo(19)`
+
+### Conclusion
+
+`wasm_eval` has a *slower startup* time than AVM but *faster execution*
 
 ## Open Questions
 

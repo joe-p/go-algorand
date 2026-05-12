@@ -399,11 +399,9 @@ func BenchmarkAppASA(b *testing.B) { benchmarkFullBlocks(testCases["asa"], b) }
 
 func BenchmarkPay(b *testing.B) { benchmarkFullBlocks(testCases["pay"], b) }
 
-func BenchmarkAppFibo19(b *testing.B)     { benchmarkFullBlocks(testCases["fibo-19"], b) }
-func BenchmarkAppWasmFibo19(b *testing.B) { benchmarkFullBlocks(testCases["wasm-fibo-19"], b) }
-func BenchmarkAppWasmInt1Repeated20Times(b *testing.B) {
-	benchmarkFullBlocks(testCases["wasm-int-1-repeated-x-times"], b)
-}
+func BenchmarkAppFibo19AppBudget256X(b *testing.B) { benchmarkFullBlocks(testCases["fibo-19"], b) }
+func BenchmarkAppRepeatAddBudget13X(b *testing.B)  { benchmarkFullBlocks(testCases["repeat-add"], b) }
+func BenchmarkAppWasmFibo19(b *testing.B)          { benchmarkFullBlocks(testCases["wasm-fibo-19"], b) }
 
 func wasmProgram(wasmBytes []byte, calls int) []byte {
 	bytesHex := hex.EncodeToString(wasmBytes)
@@ -564,6 +562,22 @@ program:
 	}
 	testCases[params.name] = params
 
+	repeatTimes := 349
+	repeatBudgetMult := 13
+	ops, err = logic.AssembleStringWithVersion("int 1\n"+strings.Repeat("int 1\n+\n", repeatBudgetMult*repeatTimes), 12)
+	if err != nil {
+		panic(err)
+	}
+
+	params = testParams{
+		testType:       "app",
+		name:           "repeat-add",
+		program:        ops.Program,
+		opBudget:       repeatBudgetMult * 700,
+		largerPrograms: true,
+	}
+	testCases[params.name] = params
+
 	wasmFibo17Bytes, err := os.ReadFile("../wamrtime/target/wasm32-unknown-unknown/wasm_small/fibo.wasm")
 
 	if err != nil {
@@ -587,14 +601,6 @@ program:
 		testType: "app",
 		name:     "wasm-int-1",
 		program:  wasmProgram(wasmRet1Bytes, 1),
-	}
-	testCases[params.name] = params
-
-	params = testParams{
-		testType:       "app",
-		name:           "wasm-int-1-repeated-x-times",
-		program:        wasmProgram(wasmRet1Bytes, 20),
-		largerPrograms: true,
 	}
 	testCases[params.name] = params
 }

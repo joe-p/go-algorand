@@ -166,6 +166,11 @@ api:
 logic:
 	$(MAKE) -C data/transactions/logic
 
+# Build the Rust wasmi executor linked into the logic package by cgo.
+wasmlib:
+	@command -v cargo >/dev/null 2>&1 || { echo "cargo (Rust toolchain) is required to build the WASM LogicSig executor: https://rustup.rs"; exit 1; }
+	cargo build --release --locked --manifest-path wasm/Cargo.toml
+
 MSGP := go run github.com/algorand/msgp@v1.1.66
 %/msgp_gen.go: ALWAYS
 		@set +e; \
@@ -295,7 +300,7 @@ rebuild_kmd_swagger:
 build: buildsrc buildsrc-special
 
 
-buildsrc: check-go-version crypto/libs/$(OS_TYPE)/$(ARCH)/lib/libsodium.a node_exporter NONGO_BIN
+buildsrc: check-go-version crypto/libs/$(OS_TYPE)/$(ARCH)/lib/libsodium.a node_exporter NONGO_BIN wasmlib
 	$(GO_INSTALL) -trimpath $(GOTAGS) $(GOBUILDMODE) -ldflags="$(GOLDFLAGS)" ./...
 
 buildsrc-special:
@@ -315,7 +320,7 @@ build-race: build
 	cp $(GOBIN)/kmd $(GOBIN)-race
 
 # Build binaries needed for e2e/integration tests
-build-e2e: check-go-version crypto/libs/$(OS_TYPE)/$(ARCH)/lib/libsodium.a
+build-e2e: check-go-version crypto/libs/$(OS_TYPE)/$(ARCH)/lib/libsodium.a wasmlib
 	@mkdir -p $(GOBIN)-race
 	# Build regular binaries (kmd, algod, goal) and race binaries in parallel
 	$(GO_INSTALL) -trimpath $(GOTAGS) $(GOBUILDMODE) -ldflags="$(GOLDFLAGS)" ./cmd/kmd ./cmd/algod ./cmd/goal & \
@@ -371,6 +376,7 @@ clean:
 	rm -rf crypto/lib
 	rm -rf crypto/libs
 	rm -rf crypto/copies
+	rm -rf wasm/target
 	rm -rf ./gen/devnet ./gen/mainnetnet ./gen/testnet
 	rm -rf $(GOBIN)-darwin-amd64 $(GOBIN)-darwin-arm64
 
@@ -437,7 +443,7 @@ dump: $(addprefix gen/,$(addsuffix /genesis.dump, $(NETWORKS)))
 install: build
 	scripts/dev_install.sh -p $(GOBIN)
 
-.PHONY: default fmt lint check_shell sanity cover prof build build-race build-e2e test fulltest shorttest x-repo-types clean cleango deploy node_exporter install %gen gen NONGO_BIN check-go-version rebuild_kmd_swagger universal libsodium modernize
+.PHONY: default fmt lint check_shell sanity cover prof build build-race build-e2e test fulltest shorttest x-repo-types clean cleango deploy node_exporter install %gen gen NONGO_BIN check-go-version rebuild_kmd_swagger universal libsodium modernize wasmlib
 
 ###### TARGETS FOR CICD PROCESS ######
 include ./scripts/release/mule/Makefile.mule

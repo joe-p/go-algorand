@@ -1,0 +1,41 @@
+# Copyright (C) 2019-2026 Algorand Foundation Ltd.
+# This file is part of go-algorand
+#
+# go-algorand is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
+#
+# go-algorand is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with go-algorand.  If not, see <https://www.gnu.org/licenses/>.
+
+[package]
+name = "wasm_lsig"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-or-later"
+
+[lib]
+name = "wasm_lsig"
+# staticlib for linking into cgo; rlib so `cargo test` can build the unit tests.
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+# `deterministic` and `portable-dispatch` keep execution identical across
+# machines, which consensus requires. `std` because algod is a normal process.
+# `validate` so invalid modules are rejected at load time.
+wasmi = { version = "2.0.0", default-features = false, features = [
+    "std",
+    "validate",
+    "deterministic",
+    "portable-dispatch",
+] }
+
+[dev-dependencies]
+wat = "1.0"

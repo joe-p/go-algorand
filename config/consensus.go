@@ -637,6 +637,13 @@ type ConsensusParams struct {
 	// program has no way to detect it.
 	RequireLogicSigArgAccess bool
 
+	// EnableWasmLogicSig enables LogicSigs whose Logic is WebAssembly bytecode
+	// rather than AVM/TEAL bytecode. Such a program is recognized by the WASM
+	// magic number (`\0asm`) at the start of Logic, and is executed by the wasmi
+	// interpreter rather than the AVM. For now the guest program can only read
+	// the LogicSig arguments.
+	EnableWasmLogicSig bool
+
 	// CloseRequiresBaseMinBalance allows an account to be closed only if its
 	// minimum balance requirement is exactly the base MinBalance. Before this,
 	// closing was guarded by checks of specific resource counters, which
@@ -1581,6 +1588,8 @@ func initConsensusProtocols() {
 	vFuture.AllowGroupedHeartbeats = true
 
 	vFuture.EnablePQSchemeLogicSig = true
+
+	vFuture.EnableWasmLogicSig = true
 
 	Consensus[protocol.ConsensusFuture] = vFuture
 

@@ -28,6 +28,9 @@ cmd/updater/updater
 # custom golangci-lint binary with plugins
 custom-golangci-lint
 
+# Rust build artifacts for the wasmi LogicSig executor
+wasm/target/
+
 # Exclude our local temp directory
 tmp/
 

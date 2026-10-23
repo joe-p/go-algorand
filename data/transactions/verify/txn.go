@@ -478,6 +478,16 @@ func sigProgramSanityCheck(program []byte, name string, groupCtx *GroupContext) 
 	if uint64(len(program)) > groupCtx.consensusParams.MaxAbsoluteLogicSigProgramSize {
 		return fmt.Errorf("%s too long. max size is %d bytes", name, groupCtx.consensusParams.MaxAbsoluteLogicSigProgramSize)
 	}
+
+	// WASM LogicSigs do not carry an AVM version, so skip the version parse
+	// and let the logic package check the module instead.
+	if logic.IsWasmProgram(program) {
+		if !groupCtx.consensusParams.EnableWasmLogicSig {
+			return fmt.Errorf("%s: WASM LogicSig not enabled", name)
+		}
+		return logic.CheckSignature(program, groupCtx.evalParams)
+	}
+
 	version, vlen := binary.Uvarint(program)
 	if vlen <= 0 {
 		return fmt.Errorf("%s bad version", name)

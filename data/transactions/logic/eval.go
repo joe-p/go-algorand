@@ -1419,6 +1419,9 @@ func EvalSignatureProgram(program []byte, args [][]byte, gi int, params *EvalPar
 	if params.runMode != ModeSig {
 		return false, nil, fmt.Errorf("attempt to evaluate a signature with %s mode EvalParams", params.runMode)
 	}
+	if wasmEnabled(params) && IsWasmProgram(program) {
+		return evalWasmSignatureProgram(program, args, gi, params)
+	}
 	cx := EvalContext{
 		EvalParams: params,
 		runMode:    ModeSig,
@@ -1558,6 +1561,9 @@ func CheckContract(program []byte, gi int, params *EvalParams) error {
 // are about to evaluate, so the check and the evaluation cannot disagree about
 // which bytes run.
 func CheckSignature(program []byte, params *EvalParams) error {
+	if wasmEnabled(params) && IsWasmProgram(program) {
+		return checkWasmSignature(program, params)
+	}
 	return check(program, nil, params, ModeSig)
 }
 

@@ -19,6 +19,10 @@ gated by the `EnableWasmLogicSig` consensus parameter (currently set only in
 - [ ] Decide whether resource accounting should carry a dedicated knob (e.g. a
       `WasmLogicSigMaxFuel` / fuel-per-cost rate) instead of reusing
       `LogicSigMaxCost` 1:1 with wasmi fuel.
+- [ ] Review the fixed per-invocation resource caps (one 64 KiB linear memory,
+      one table of up to 1024 elements, one instance) before release, and decide
+      whether they need dedicated consensus parameters. Both initial allocation
+      and runtime growth are bounded by these caps.
 - [ ] Pin down the accepted WebAssembly feature set explicitly (currently floats
       off, no SIMD, no memory64, no auto-dispatch). Verify bulk-memory,
       reference-types, multi-value, etc. are intended and deterministic.

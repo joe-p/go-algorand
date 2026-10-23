@@ -87,7 +87,7 @@ fib_done:
 // BenchmarkBlockEvaluatorLsigs times the cost of *executing* a block of
 // fibonacci LogicSigs: the eval/verification pass, where the LogicSigs run.
 // It isolates the AVM vs wasmi execution cost. See
-// BenchmarkBlockEvaluatorLsigsFull for the whole block-processing path.
+// BenchmarkBlockEvaluatorLsigsFull for validation, apply, and in-memory commit.
 func BenchmarkBlockEvaluatorLsigs(b *testing.B) {
 	teal, wasm, arg := lsigFibPrograms(b)
 	b.Run("teal-fib", func(b *testing.B) {
@@ -98,11 +98,12 @@ func BenchmarkBlockEvaluatorLsigs(b *testing.B) {
 	})
 }
 
-// BenchmarkBlockEvaluatorLsigsFull times the full path a node takes for a block
+// BenchmarkBlockEvaluatorLsigsFull times the in-memory processing path for a block
 // of fibonacci LogicSigs: Ledger.Validate (which executes the LogicSigs and
 // computes the state delta) followed by AddValidatedBlock and a wait for the
-// block to be durably committed (trackers and disk). This includes the
-// non-execution work that BenchmarkBlockEvaluatorLsigs leaves out.
+// block to be committed to the in-memory block database. This includes the
+// non-execution work that BenchmarkBlockEvaluatorLsigs leaves out, but does not
+// measure disk persistence or every background tracker commit.
 func BenchmarkBlockEvaluatorLsigsFull(b *testing.B) {
 	teal, wasm, arg := lsigFibPrograms(b)
 	b.Run("teal-fib", func(b *testing.B) {

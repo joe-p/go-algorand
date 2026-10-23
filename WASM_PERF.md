@@ -10,9 +10,11 @@ The benchmarks live in `ledger/lsigbench_test.go`:
 - `BenchmarkBlockEvaluatorLsigs` — **execution only**: the block eval /
   verification pass (`eval.Eval(validate=true)`), which is where the LogicSigs
   actually run.
-- `BenchmarkBlockEvaluatorLsigsFull` — **full path**: `Ledger.Validate` (executes
+- `BenchmarkBlockEvaluatorLsigsFull` — **in-memory validate + apply + commit**:
+  `Ledger.Validate` (executes
   the LogicSigs and computes the state delta) followed by `AddValidatedBlock`
-  and a wait for the block to be durably committed.
+  and a wait for the block to be committed to an in-memory database. It does not
+  measure durable disk persistence.
 
 ## Setup
 
@@ -42,11 +44,12 @@ Measured on linux/arm64 (8 cores), Go 1.25.3, with
 | benchmark | teal-fib | wasm-fib | wasm speedup |
 |---|---|---|---|
 | execution only | ~6.38 ms/block (~63.8 µs/tx) | ~2.15 ms/block (~21.4 µs/tx) | ~3.0x |
-| full path (validate + apply + commit) | ~6.73 ms/block (~67.3 µs/tx) | ~2.46 ms/block (~24.6 µs/tx) | ~2.7x |
+| in-memory validate + apply + commit | ~6.73 ms/block (~67.3 µs/tx) | ~2.46 ms/block (~24.6 µs/tx) | ~2.7x |
 
-The non-execution block work (state-delta apply, tracker notification, commit)
-adds only ~5–15% on top of execution for these blocks, so the wasm-vs-TEAL gap
-survives end-to-end.
+The non-execution block work (state-delta apply, tracker notification, in-memory
+commit) adds only ~5–15% on top of execution for these blocks, so the wasm-vs-TEAL
+gap survives this in-memory processing path. This does not establish the speedup
+for a disk-backed node.
 
 Note this is a **wall-clock** comparison. On the metered axis, WASM is the more
 expensive engine: it burns more fuel per iteration and pays a fixed startup cost
@@ -75,12 +78,12 @@ performance:
 - WASM pays module compile + instantiate per lsig: there is no module cache or
   engine reuse yet (see `TODO.md`). The WASM numbers are therefore the current,
   unoptimized implementation.
-- The full-path benchmark includes `Validate` + `AddValidatedBlock` + block-DB
-  commit, but not every background tracker commit (the account tracker lags by
-  `MaxAcctLookback`).
+- The `Full` benchmark uses an in-memory ledger database: it includes `Validate`
+  + `AddValidatedBlock` + in-memory block-DB commit, not disk I/O, fsync, or every
+  background tracker commit (the account tracker lags by `MaxAcctLookback`).
 - Single machine, warm in-memory ledger caches, and core-count dependent
   (`PaysetGroups` verifies concurrently).
 
-For a more production-like picture, measure a realistic byte-limited block with
-a mixed transaction set and delegated lsigs, and land module caching / engine
-reuse in the WASM path before drawing conclusions.
+For a more production-like picture, use a disk-backed ledger and measure a
+realistic byte-limited block with a mixed transaction set and delegated lsigs,
+and land module caching / engine reuse in the WASM path before drawing conclusions.

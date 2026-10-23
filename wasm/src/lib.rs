@@ -54,6 +54,11 @@ const ARGS_READ_WORDS: usize = MAX_ARGS.div_ceil(64);
 /// Default cap on a guest's linear memory, in bytes.
 const DEFAULT_MEMORY_LIMIT: usize = 64 * 1024;
 
+/// A guest may have at most one table, with this many elements. Restricting
+/// both the size and count bounds aggregate table allocation at instantiation,
+/// which is not metered by execution fuel.
+const MAX_TABLE_ELEMENTS: usize = 1024;
+
 // Error sentinels returned by the `arg` host function.
 const ARG_ERR_INDEX: i32 = -1;
 const ARG_ERR_BUFFER: i32 = -2;
@@ -96,18 +101,18 @@ fn arg(mut caller: Caller<'_, HostState>, index: i32, out_ptr: i32, out_len: i32
         None => return ARG_ERR_INDEX,
     };
 
-    if bytes.len() > out_len.max(0) as usize {
+    if out_len < 0 || bytes.len() > out_len as usize {
         return ARG_ERR_BUFFER;
+    }
+    if out_ptr < 0 {
+        return ARG_ERR_MEMORY;
     }
 
     let memory: Option<wasmi::Memory> = caller.get_export("memory").and_then(|e| e.into_memory());
     let Some(memory) = memory else {
         return ARG_ERR_MEMORY;
     };
-    if memory
-        .write(&mut caller, out_ptr.max(0) as usize, &bytes)
-        .is_err()
-    {
+    if memory.write(&mut caller, out_ptr as usize, &bytes).is_err() {
         return ARG_ERR_MEMORY;
     }
 
@@ -126,6 +131,13 @@ struct Outcome {
 fn store_limits(memory_limit_bytes: usize) -> StoreLimits {
     StoreLimitsBuilder::new()
         .memory_size(memory_limit_bytes)
+        // Size limits are per memory/table, so count limits are also needed
+        // to bound aggregate guest allocation. These apply before start runs
+        // as well as to subsequent memory.grow/table.grow instructions.
+        .memories(1)
+        .table_elements(MAX_TABLE_ELEMENTS)
+        .tables(1)
+        .instances(1)
         .build()
 }
 
@@ -455,6 +467,96 @@ mod tests {
         "#;
         let out = run_wat(wat, vec![b"a".to_vec(), b"b".to_vec()], 1000).unwrap();
         assert_eq!(out.accessed, [0b10, 0, 0, 0]);
+    }
+
+    #[test]
+    fn invalid_arg_buffers_do_not_write_or_mark_read() {
+        for (index, ptr, len, bytes, expected) in [
+            (0, -1, 1, &b"x"[..], ARG_ERR_MEMORY),
+            (0, i32::MIN, 1, &b"x"[..], ARG_ERR_MEMORY),
+            (0, 0, -1, &b"x"[..], ARG_ERR_BUFFER),
+            (0, 0, -1, &b""[..], ARG_ERR_BUFFER),
+            (0, -1, 0, &b""[..], ARG_ERR_MEMORY),
+            (0, 0, 0, &b"x"[..], ARG_ERR_BUFFER),
+            (0, 65536, 1, &b"x"[..], ARG_ERR_MEMORY),
+            (0, 65535, 2, &b"xx"[..], ARG_ERR_MEMORY),
+            (-1, 0, 1, &b"x"[..], ARG_ERR_INDEX),
+            (1, 0, 1, &b"x"[..], ARG_ERR_INDEX),
+        ] {
+            let wat = format!(
+                r#"(module
+                    (import "env" "arg" (func $arg (param i32 i32 i32) (result i32)))
+                    (memory (export "memory") 1)
+                    (data (i32.const 0) "*")
+                    (func (export "program") (result i32)
+                        (i32.eq (call $arg (i32.const {index}) (i32.const {ptr}) (i32.const {len}))
+                                (i32.const {expected}))
+                        (i32.eq (i32.load8_u (i32.const 0)) (i32.const 42))
+                        i32.and))"#
+            );
+            let out = run_wat(&wat, vec![bytes.to_vec()], 1000).unwrap();
+            assert!(
+                out.pass,
+                "index={index}, ptr={ptr}, len={len}, bytes={bytes:?}"
+            );
+            assert_eq!(out.accessed, [0; ARGS_READ_WORDS]);
+        }
+    }
+
+    #[test]
+    fn arg_writes_at_memory_boundary() {
+        for (ptr, bytes) in [(65535, &b"x"[..]), (65536, &b""[..])] {
+            let len = bytes.len();
+            let wat = format!(
+                r#"(module
+                    (import "env" "arg" (func $arg (param i32 i32 i32) (result i32)))
+                    (memory (export "memory") 1)
+                    (func (export "program") (result i32)
+                        (i32.eq (call $arg (i32.const 0) (i32.const {ptr}) (i32.const {len}))
+                                (i32.const {len}))))"#
+            );
+            let out = run_wat(&wat, vec![bytes.to_vec()], 1000).unwrap();
+            assert!(out.pass);
+            assert_eq!(out.accessed, [1, 0, 0, 0]);
+        }
+    }
+
+    #[test]
+    fn instantiation_limits_guest_allocation() {
+        for resources in [
+            "(table 1000000 funcref)",
+            "(table 1025 funcref)",
+            "(table 1 funcref) (table 1 funcref)",
+            "(memory 2)",
+            "(memory 1) (memory 1)",
+        ] {
+            let wat = format!(
+                r#"(module {resources}
+                    (func (export "program") (result i32) i32.const 1))"#
+            );
+            let err = run_wat(&wat, vec![], 1000).unwrap_err();
+            assert!(err.contains("could not instantiate"), "{resources}: {err}");
+        }
+    }
+
+    #[test]
+    fn resource_limits_apply_to_growth_in_start_and_program() {
+        let wat = format!(
+            r#"(module
+                (memory 1)
+                (table {MAX_TABLE_ELEMENTS} funcref)
+                (func $check_limits
+                    (if (i32.ne (memory.grow (i32.const 1)) (i32.const -1))
+                        (then unreachable))
+                    (if (i32.ne (table.grow (ref.null func) (i32.const 1)) (i32.const -1))
+                        (then unreachable)))
+                (start $check_limits)
+                (func (export "program") (result i32)
+                    call $check_limits
+                    i32.const 1))"#
+        );
+        let out = run_wat(&wat, vec![], 20000).unwrap();
+        assert!(out.pass);
     }
 
     #[test]

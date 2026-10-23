@@ -23,10 +23,11 @@ The module may import, from the `env` module:
 - `arg_count() -> i32`: the number of LogicSig arguments.
 - `arg(i: i32, out: i32, len: i32) -> i32`: copy argument `i` into linear
   memory at `out`, up to `len` bytes. Returns the number of bytes copied, or a
-  negative value on error (`-1` unknown index, `-2` buffer too small, `-3` no
-  `memory` export or out-of-bounds write). A successful read marks the argument
-  as read, which enforces the rule that a LogicSig reads every argument it
-  carries.
+  negative value on error (`-1` unknown index, `-2` negative length or buffer
+  too small, `-3` negative pointer, no `memory` export, or out-of-bounds write).
+  Errors neither write memory nor mark the argument as read. A successful read
+  marks the argument as read, which enforces the rule that a LogicSig reads every
+  argument it carries.
 
 In the future, host functions exposing opcodes, transaction fields, and the
 like will be added to the same `env` module.
@@ -35,7 +36,11 @@ like will be added to the same `env` module.
 
 - Fuel metered; the AVM cost budget is reused as the fuel limit, one fuel unit
   per cost unit. Running out of fuel is an error.
-- Linear memory is capped (currently 64 KiB).
+- Each invocation permits at most one linear memory (64 KiB), one table
+  (1024 elements), and one instance. Size and count limits bound aggregate
+  guest memory/table allocation, including initial allocation before `start`.
+  Instantiation fails if the initial allocation exceeds these limits;
+  `memory.grow` and `table.grow` return `-1` when growth would exceed them.
 - Floats are disabled, and the engine uses portable dispatch, so execution is
   deterministic across platforms.
 

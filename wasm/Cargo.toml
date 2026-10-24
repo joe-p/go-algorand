@@ -36,6 +36,9 @@ wasmi = { version = "2.0.0", default-features = false, features = [
     "deterministic",
     "portable-dispatch",
 ] }
+# Use the same binary reader version as wasmi; no validator or compiler is
+# needed for the bounded setup preflight.
+wasmparser = { version = "0.228.0", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 wat = "1.0"

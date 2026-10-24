@@ -184,6 +184,11 @@ wasm-opcost:
 	@command -v cargo >/dev/null 2>&1 || { echo "cargo (Rust toolchain) is required: https://rustup.rs"; exit 1; }
 	cargo test --release --locked --manifest-path wasm/Cargo.toml -- --ignored --nocapture opcode_cost_table
 
+# Separate cold engine/compile/linker/instantiate costs without running program.
+wasm-setupcost:
+	@command -v cargo >/dev/null 2>&1 || { echo "cargo (Rust toolchain) is required: https://rustup.rs"; exit 1; }
+	cargo test --release --locked --manifest-path wasm/Cargo.toml -- --ignored --nocapture module_setup_cost_table
+
 MSGP := go run github.com/algorand/msgp@v1.1.66
 %/msgp_gen.go: ALWAYS
 		@set +e; \
@@ -456,7 +461,7 @@ dump: $(addprefix gen/,$(addsuffix /genesis.dump, $(NETWORKS)))
 install: build
 	scripts/dev_install.sh -p $(GOBIN)
 
-.PHONY: default fmt lint check_shell sanity cover prof build build-race build-e2e test fulltest shorttest x-repo-types clean cleango deploy node_exporter install %gen gen NONGO_BIN check-go-version rebuild_kmd_swagger universal libsodium modernize wasmlib wasm-guest-fixtures wasm-opcost
+.PHONY: default fmt lint check_shell sanity cover prof build build-race build-e2e test fulltest shorttest x-repo-types clean cleango deploy node_exporter install %gen gen NONGO_BIN check-go-version rebuild_kmd_swagger universal libsodium modernize wasmlib wasm-guest-fixtures wasm-opcost wasm-setupcost
 
 ###### TARGETS FOR CICD PROCESS ######
 include ./scripts/release/mule/Makefile.mule

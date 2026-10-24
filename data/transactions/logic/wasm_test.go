@@ -20,6 +20,7 @@ package logic
 
 import (
 	"bytes"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -153,10 +154,10 @@ func TestWasmEd25519VerifyBare(t *testing.T) {
 	pass, cx, err := EvalSignatureProgram(program, [][]byte{data, sig[:], c.SignatureVerifier[:]}, 0, optSigParams(wasmProto))
 	require.NoError(t, err)
 	require.True(t, pass)
-	// Re-denominating fuel must preserve the verifier's ~1900 AVM-unit cost.
+	// The verifier retains its 1900-unit charge; total cost now includes setup.
 	require.GreaterOrEqual(t, cx.wasmFuelUsed, uint64(28_500))
 	require.GreaterOrEqual(t, cx.Cost(), 1900)
-	require.Less(t, cx.Cost(), 2000)
+	require.Less(t, cx.Cost(), 3000)
 
 	// A tampered message fails verification, so the program rejects rather than
 	// erroring.
@@ -343,6 +344,33 @@ func TestWasmFuelRoundsUp(t *testing.T) {
 	require.ErrorContains(t, err, "fuel")
 }
 
+func TestWasmSetupFuel(t *testing.T) {
+	partitiontest.PartitionTest(t)
+	program := loadWasm(t, "approve.wasm")
+	pass, cx, err := EvalSignatureProgram(program, nil, 0, optSigParams(wasmProto))
+	require.NoError(t, err)
+	require.True(t, pass)
+	require.GreaterOrEqual(t, cx.wasmFuelUsed, uint64(6_124))
+
+	// Add a valid custom section with an empty name and 64 uninterpreted bytes.
+	// No execution changes; every added byte must still pay setup fuel.
+	padded := append(bytes.Clone(program), 0, 65, 0)
+	padded = append(padded, make([]byte, 64)...)
+	pass, paddedCx, err := EvalSignatureProgram(padded, nil, 0, optSigParams(wasmProto))
+	require.NoError(t, err)
+	require.True(t, pass)
+	require.Equal(t, uint64(len(padded)-len(program))*6, paddedCx.wasmFuelUsed-cx.wasmFuelUsed)
+	require.Greater(t, paddedCx.Cost(), cx.Cost())
+
+	// A one-unit budget cannot pay even for the setup of a trivial module.
+	ep := optSigParams(wasmProto)
+	budget := 1
+	ep.PooledLogicSigBudget = &budget
+	_, _, err = EvalSignatureProgram(program, nil, 0, ep)
+	require.ErrorContains(t, err, "fuel during setup")
+	require.Zero(t, budget)
+}
+
 func TestCheckWasmSignature(t *testing.T) {
 	partitiontest.PartitionTest(t)
 
@@ -357,6 +385,20 @@ func TestCheckWasmSignatureDisabled(t *testing.T) {
 	// With WASM disabled, a magic-prefixed program must not check out as AVM
 	// bytecode.
 	require.Error(t, CheckSignature(loadWasm(t, "approve.wasm"), optSigParams(nil)))
+}
+
+func TestWasmRejectImplicitStart(t *testing.T) {
+	partitiontest.PartitionTest(t)
+	// (module (func $init) (start $init)
+	//   (func (export "program") (result i32) i32.const 1))
+	program, err := hex.DecodeString("0061736d010000000108026000017f6000000303020100070b010770726f6772616d00010801000a090202000b040041010b")
+	require.NoError(t, err)
+	require.ErrorContains(t, validateWasmProgram(program), "start")
+	require.ErrorContains(t, CheckSignature(program, optSigParams(wasmProto)), "start")
+	_, _, err = EvalSignatureProgram(program, nil, 0, optSigParams(wasmProto))
+	require.ErrorContains(t, err, "start")
+	_, _, err = EvalContract(program, 0, 888, wasmAppParams())
+	require.ErrorContains(t, err, "start")
 }
 
 func TestValidateWasmProgram(t *testing.T) {

@@ -97,11 +97,13 @@ fib_done:
 
 // BenchmarkAppGlobalLoop compares the execution cost of a TEAL and a WASM
 // application program that each increment the same uint64 global the same
-// number of times, run for the largest N that fits the AVM app budget in both
-// engines. It drives EvalContract directly on the in-memory test ledger, so it
-// isolates engine execution.
+// number of times, run for the largest N that fits a two-app-sized allowance in
+// both engines. The cap is lifted only for this microbenchmark: setup plus the
+// zero-iteration WASM fixture no longer fits a single 700-unit app budget.
+// It drives EvalContract directly on the in-memory test ledger.
 func BenchmarkAppGlobalLoop(b *testing.B) {
 	proto := makeTestProto(wasmAppProto)
+	proto.MaxAppProgramCost *= 2
 	tealOps, err := AssembleString(tealGlobalIncSrc)
 	require.NoError(b, err)
 	wasm := loadWasm(b, "app_global_loop.wasm")
@@ -125,6 +127,7 @@ func maxGlobalLoops(b *testing.B, proto *config.ConsensusParams, teal, wasm []by
 			pass, _, err := EvalContract(program, 0, 888, appLoopParams(proto, n, isWasm))
 			return err == nil && pass
 		}
+		require.True(b, fits(0), "zero-iteration fixture must fit the benchmark budget")
 		lo, hi := 0, 1
 		for fits(hi) {
 			lo = hi

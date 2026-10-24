@@ -62,7 +62,7 @@ func TestWasmAppApproveReject(t *testing.T) {
 func TestWasmAppFuelBudgetConversion(t *testing.T) {
 	partitiontest.PartitionTest(t)
 	proto := makeTestProto(wasmAppProto)
-	ep := appLoopParams(proto, 100, true)
+	ep := appLoopParams(proto, 50, true)
 	before := *ep.PooledApplicationBudget
 	pass, cx, err := EvalContract(loadWasm(t, "app_fib.wasm"), 0, 888, ep)
 	require.NoError(t, err)
@@ -71,6 +71,21 @@ func TestWasmAppFuelBudgetConversion(t *testing.T) {
 	cost := int((cx.wasmFuelUsed + wasmFuelPerCost - 1) / wasmFuelPerCost)
 	require.Equal(t, cost, cx.Cost())
 	require.Equal(t, before-cost, *ep.PooledApplicationBudget)
+}
+
+func TestWasmAppFailedSetupAndExecutionAreCharged(t *testing.T) {
+	partitiontest.PartitionTest(t)
+	for _, completion := range []transactions.OnCompletion{transactions.NoOpOC, transactions.ClearStateOC} {
+		txn := makeSampleTxn()
+		txn.Txn.Type = protocol.ApplicationCallTx
+		txn.Txn.OnCompletion = completion
+		ep := wasmAppParams(txn)
+		before := *ep.PooledApplicationBudget
+		_, cx, err := EvalContract(loadWasm(t, "runaway.wasm"), 0, 888, ep)
+		require.ErrorContains(t, err, "fuel")
+		require.Positive(t, cx.Cost())
+		require.Equal(t, before-cx.Cost(), *ep.PooledApplicationBudget)
+	}
 }
 
 // TestWasmAppClearState runs WASM programs as clear-state programs.

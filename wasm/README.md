@@ -98,7 +98,11 @@ opcode. More opcodes will be added to the same `env` module.
 - Fuel metered at **15 fuel per AVM cost unit**: a 20,000-cost LogicSig budget
   permits 300,000 fuel. Guest instruction charges are unchanged. Consumed fuel
   is divided by fifteen, rounding up per evaluation, before charging AVM/shared
-  budgets. Host charges are calibrated toward 1 ns/fuel on the fixtures in
+  budgets. Fuel includes deterministic setup charges reserved before compilation
+  and allocation (see `../WASM_PERF.md` and `src/setup.rs`), as well as execution
+  and wasmi's lazy translation. Failed evaluations also retain consumed fuel;
+  invalid/unaffordable preflights consume their supplied allowance. Host charges
+  are calibrated toward 1 ns/fuel on the fixtures in
   `../WASM_PERF.md`: `arg` 30, `arg_count` 10, `txn_uint`/`txna_uint` 125,
   `txn_bytes` 190, `txna_bytes` 200, global get uint/bytes 130/170, global put
   uint/bytes 410/390, and global delete 140 fuel. These fixed charges include
@@ -108,9 +112,18 @@ opcode. More opcodes will be added to the same `env` module.
 - Each invocation permits at most one linear memory (4 MiB, matching the AVM's
   bound on live data of `maxStringSize` 4096 by `maxStackDepth` 1000), one table
   (1024 elements), and one instance. Size and count limits bound aggregate
-  guest memory/table allocation, including initial allocation before `start`.
+  guest memory/table allocation, including initial allocation at instantiation.
   Instantiation fails if the initial allocation exceeds these limits;
   `memory.grow` and `table.grow` return `-1` when growth would exceed them.
+- The Rust setup preflight caps encoded modules at 16 KiB and expanded locals
+  at 50,000 per function. Go still enforces narrower mode/protocol byte limits.
+- WebAssembly start sections are forbidden, including no-op start functions.
+  Both static validation and execution reject them before instantiation; only
+  the explicit `program` entry point is invoked. An exported `_start` name alone
+  is not a start section and is never invoked automatically.
+- `make wasm-setupcost` measures cold preflight, engine creation, compilation,
+  host linker setup, instantiation, and teardown separately, without invoking
+  `program`. It includes size sweeps used to calibrate the setup weights.
 - Floats are disabled, and the engine uses portable dispatch, so execution is
   deterministic across platforms.
 

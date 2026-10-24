@@ -147,9 +147,6 @@ func wasmEval(cx *EvalContext, program []byte) (bool, error) {
 		return false, errors.New("WASM fuel budget overflow")
 	}
 	pass, fuelUsed, accessed, err := runWasmProgram(program, cx.sigArgs, uint64(budget)*wasmFuelPerCost, cx)
-	if err != nil {
-		return false, err
-	}
 
 	cx.wasmFuelUsed = fuelUsed
 	// Round up so even a partial cost unit is charged to the shared budget.
@@ -167,6 +164,11 @@ func wasmEval(cx *EvalContext, program []byte) (bool, error) {
 		*cx.PooledApplicationBudget -= cost
 	case cx.PooledLogicSigBudget != nil:
 		*cx.PooledLogicSigBudget -= cost
+	}
+	// Charge even failed evaluations: clear-state errors can be ignored, but
+	// compilation, allocation, and any execution already performed are not free.
+	if err != nil {
+		return false, err
 	}
 
 	if cx.runMode == ModeSig {

@@ -67,6 +67,8 @@
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
+mod setup;
+
 use wasmi::{
     Caller, Config, Engine, ExternType, Instance, Linker, Module, Store, StoreLimits,
     StoreLimitsBuilder, TrapCode, TypedFunc, ValType,
@@ -82,9 +84,9 @@ const ARGS_READ_WORDS: usize = MAX_ARGS.div_ceil(64);
 /// bound on live data, `maxStringSize` (4096) times `maxStackDepth` (1000),
 /// rounded up to a whole number of wasm pages (64 pages, 4 MiB).
 ///
-/// This is a consensus-relevant resource cap that is not metered by execution
-/// fuel: a guest can declare a large minimum memory and make the node allocate
-/// it. It is fixed at 4 MiB while WASM LogicSigs are gated behind `vFuture`;
+/// This consensus-relevant hard cap applies independently of fuel. Initial
+/// allocation is priced by setup fuel, but a large budget must not permit
+/// unbounded memory. It is fixed at 4 MiB behind `vFuture`;
 /// before release it should become a dedicated consensus parameter.
 const DEFAULT_MEMORY_LIMIT: usize = 4 * 1024 * 1024;
 
@@ -96,7 +98,7 @@ const DEFAULT_MEMORY_PAGES: usize = DEFAULT_MEMORY_LIMIT / 65536;
 
 /// A guest may have at most one table, with this many elements. Restricting
 /// both the size and count bounds aggregate table allocation at instantiation,
-/// which is not metered by execution fuel.
+/// independently of its setup fuel charge.
 const MAX_TABLE_ELEMENTS: usize = 1024;
 
 // Error sentinels returned by the `arg` host function.
@@ -225,8 +227,13 @@ type GlobalPutCb = unsafe extern "C" fn(
 
 /// A global-state deleter, implemented in Go. It returns `0` on success and `-1`
 /// on error.
-type GlobalDelCb =
-    unsafe extern "C" fn(ctx: usize, key: *const u8, key_len: usize, err: *mut u8, err_cap: usize) -> i32;
+type GlobalDelCb = unsafe extern "C" fn(
+    ctx: usize,
+    key: *const u8,
+    key_len: usize,
+    err: *mut u8,
+    err_cap: usize,
+) -> i32;
 
 /// A single LogicSig argument passed across the C ABI as a pointer/length pair.
 #[repr(C)]
@@ -847,8 +854,8 @@ fn store_limits(memory_limit_bytes: usize) -> StoreLimits {
     StoreLimitsBuilder::new()
         .memory_size(memory_limit_bytes)
         // Size limits are per memory/table, so count limits are also needed
-        // to bound aggregate guest allocation. These apply before start runs
-        // as well as to subsequent memory.grow/table.grow instructions.
+        // to bound aggregate guest allocation, both at instantiation and during
+        // subsequent memory.grow/table.grow instructions.
         .memories(1)
         .table_elements(MAX_TABLE_ELEMENTS)
         .tables(1)
@@ -859,6 +866,9 @@ fn store_limits(memory_limit_bytes: usize) -> StoreLimits {
 fn new_engine() -> Engine {
     let mut config = Config::default();
     config.consume_fuel(true);
+    // Only the explicit `program` entry point may execute guest code.
+    // Reject start sections during compilation, including static validation.
+    config.allow_start_fn(false);
     // Floats are disabled: their NaN bit patterns are not stable enough to
     // reason about across platforms, and no LogicSig needs them yet.
     config.floats(false);
@@ -868,8 +878,21 @@ fn new_engine() -> Engine {
 }
 
 /// Loads and instantiates `wasm`, returning the store, instance, and `program`
-/// export. The module's `start` function, if any, runs here.
+/// export. Modules declaring an implicit start function are rejected.
+#[cfg(test)]
 fn instantiate(
+    wasm: &[u8],
+    args: Vec<Vec<u8>>,
+    memory_limit_bytes: usize,
+    fuel: u64,
+    host: HostCallbacks,
+) -> Result<(Store<HostState>, Instance, TypedFunc<(), i32>), String> {
+    let setup_fuel = setup::fuel(wasm, memory_limit_bytes, fuel)?;
+    instantiate_prepaid(wasm, args, memory_limit_bytes, fuel - setup_fuel, host)
+}
+
+// Only call after setup::fuel has checked the module and reserved its charge.
+fn instantiate_prepaid(
     wasm: &[u8],
     args: Vec<Vec<u8>>,
     memory_limit_bytes: usize,
@@ -878,8 +901,21 @@ fn instantiate(
 ) -> Result<(Store<HostState>, Instance, TypedFunc<(), i32>), String> {
     let engine = new_engine();
     let module = Module::new(&engine, wasm).map_err(|err| format!("invalid wasm module: {err}"))?;
+    let linker = new_linker(&engine)?;
+    instantiate_module(
+        &engine,
+        &module,
+        &linker,
+        args,
+        memory_limit_bytes,
+        fuel,
+        host,
+    )
+}
 
-    let mut linker = Linker::new(&engine);
+/// Builds the host import definitions without compiling or instantiating a guest.
+fn new_linker(engine: &Engine) -> Result<Linker<HostState>, String> {
+    let mut linker = Linker::new(engine);
     linker
         .func_wrap("env", "arg_count", arg_count)
         .map_err(|err| format!("could not link env.arg_count: {err}"))?;
@@ -916,9 +952,23 @@ fn instantiate(
     linker
         .func_wrap("env", "ed25519verify_bare", ed25519verify_bare)
         .map_err(|err| format!("could not link env.ed25519verify_bare: {err}"))?;
+    Ok(linker)
+}
 
+/// Instantiates an already compiled module in a fresh store. Keeping this step
+/// separate lets the setup benchmark distinguish compilation from allocation,
+/// data/element initialization, import resolution, and export lookup.
+fn instantiate_module(
+    engine: &Engine,
+    module: &Module,
+    linker: &Linker<HostState>,
+    args: Vec<Vec<u8>>,
+    memory_limit_bytes: usize,
+    fuel: u64,
+    host: HostCallbacks,
+) -> Result<(Store<HostState>, Instance, TypedFunc<(), i32>), String> {
     let mut store = Store::new(
-        &engine,
+        engine,
         HostState {
             args,
             accessed: [0; ARGS_READ_WORDS],
@@ -932,7 +982,7 @@ fn instantiate(
         .map_err(|err| format!("could not set fuel: {err}"))?;
 
     let instance = linker
-        .instantiate_and_start(&mut store, &module)
+        .instantiate_and_start(&mut store, module)
         .map_err(|err| format!("could not instantiate wasm module: {err}"))?;
     let program = instance
         .get_typed_func::<(), i32>(&store, "program")
@@ -950,8 +1000,9 @@ fn func_type_is(ty: &ExternType, params: &[ValType], results: &[ValType]) -> boo
 
 /// Validates a WASM program's structure without executing it: the module must
 /// import only the host functions available in `env`, and must export `program`
-/// with type `() -> i32`.
+/// with type `() -> i32`. Implicit start functions are forbidden by the engine.
 fn validate_inner(wasm: &[u8]) -> Result<(), String> {
+    setup::fuel(wasm, DEFAULT_MEMORY_LIMIT, u64::MAX)?;
     let engine = new_engine();
     let module = Module::new(&engine, wasm).map_err(|err| format!("invalid wasm module: {err}"))?;
 
@@ -975,9 +1026,7 @@ fn validate_inner(wasm: &[u8]) -> Result<(), String> {
                     &[ValType::I32, ValType::I32, ValType::I64],
                     &[],
                 ),
-                "app_global_put_bytes" => {
-                    func_type_is(import.ty(), &[ValType::I32; 4], &[])
-                }
+                "app_global_put_bytes" => func_type_is(import.ty(), &[ValType::I32; 4], &[]),
                 "app_global_del" => func_type_is(import.ty(), &[ValType::I32; 2], &[]),
                 "ed25519verify_bare" => {
                     func_type_is(import.ty(), &[ValType::I32; 6], &[ValType::I32])
@@ -1009,20 +1058,42 @@ fn validate_inner(wasm: &[u8]) -> Result<(), String> {
 }
 
 /// Runs a WASM LogicSig to completion.
+#[cfg(test)]
 fn run_inner(
     wasm: &[u8],
     args: Vec<Vec<u8>>,
     fuel: u64,
     host: HostCallbacks,
 ) -> Result<Outcome, String> {
+    run_inner_metered(wasm, args, fuel, host, &mut 0)
+}
+
+/// Also reports consumed fuel on failure, so ignored clear-state traps cannot
+/// escape setup/execution charges. An unaffordable/invalid preflight consumes
+/// its supplied allowance; later failures retain setup plus consumed execution.
+fn run_inner_metered(
+    wasm: &[u8],
+    args: Vec<Vec<u8>>,
+    fuel: u64,
+    host: HostCallbacks,
+    consumed: &mut u64,
+) -> Result<Outcome, String> {
+    *consumed = 0;
     if args.len() > MAX_ARGS {
         return Err(format!("too many LogicSig args: {}", args.len()));
     }
 
+    *consumed = fuel;
+    let setup = setup::fuel(wasm, DEFAULT_MEMORY_LIMIT, fuel)?;
+    *consumed = setup;
     let (mut store, _instance, program) =
-        instantiate(wasm, args, DEFAULT_MEMORY_LIMIT, fuel, host)?;
+        instantiate_prepaid(wasm, args, DEFAULT_MEMORY_LIMIT, fuel - setup, host)?;
 
     let result = program.call(&mut store, ());
+    let remaining = store
+        .get_fuel()
+        .map_err(|err| format!("could not read remaining fuel: {err}"))?;
+    *consumed = fuel.saturating_sub(remaining);
     let pass = match result {
         Ok(value) => value != 0,
         Err(err) => {
@@ -1033,14 +1104,11 @@ fn run_inner(
         }
     };
 
-    let remaining = store
-        .get_fuel()
-        .map_err(|err| format!("could not read remaining fuel: {err}"))?;
     let accessed = store.data().accessed;
 
     Ok(Outcome {
         pass,
-        fuel_used: fuel.saturating_sub(remaining),
+        fuel_used: *consumed,
         accessed,
     })
 }
@@ -1084,7 +1152,8 @@ unsafe fn args_from_raw(args: *const WasmLsigArg, args_len: usize) -> Result<Vec
 ///
 /// Returns `1` if the program approved, `0` if it rejected, and `-1` on any
 /// error (invalid module, trap, out of fuel). On error a message is written to
-/// `err_buf`. `fuel_used` receives the fuel consumed and `args_read` receives
+/// `err_buf`. `fuel_used` receives setup plus consumed execution fuel even on
+/// failure (a failed preflight consumes the supplied allowance). `args_read` receives
 /// `ARGS_READ_WORDS` words recording which arguments were read.
 ///
 /// `txn_cb`, if non-null, is the host's provider for `txn` field reads,
@@ -1126,13 +1195,14 @@ pub unsafe extern "C" fn wasm_lsig_run(
         ctx,
         is_app: is_app != 0,
     };
+    let mut consumed = 0;
     let result = catch_unwind(AssertUnwindSafe(|| {
         if code.is_null() && code_len != 0 {
             return Err("null program pointer".to_string());
         }
         let wasm = std::slice::from_raw_parts(code, code_len);
         let args = args_from_raw(args, args_len)?;
-        run_inner(wasm, args, fuel, host)
+        run_inner_metered(wasm, args, fuel, host, &mut consumed)
     }));
 
     match result {
@@ -1154,10 +1224,16 @@ pub unsafe extern "C" fn wasm_lsig_run(
             }
         }
         Ok(Err(msg)) => {
+            if !fuel_used.is_null() {
+                *fuel_used = consumed;
+            }
             write_error(err_buf, err_buf_len, &msg);
             -1
         }
         Err(_) => {
+            if !fuel_used.is_null() {
+                *fuel_used = fuel;
+            }
             write_error(err_buf, err_buf_len, "internal panic in wasm executor");
             -1
         }
@@ -1207,7 +1283,78 @@ mod tests {
 
     fn run_wat(wat: &str, args: Vec<Vec<u8>>, fuel: u64) -> Result<Outcome, String> {
         let wasm = wat::parse_str(wat).expect("valid wat");
-        run_inner(&wasm, args, fuel, HostCallbacks::default())
+        // Existing semantic tests specify an execution allowance; setup pricing
+        // and total-budget boundaries are tested separately below.
+        let setup = setup::fuel(&wasm, DEFAULT_MEMORY_LIMIT, u64::MAX)?;
+        run_inner(&wasm, args, fuel + setup, HostCallbacks::default())
+    }
+
+    #[test]
+    fn setup_is_reserved_before_compilation_and_included_in_total_fuel() {
+        let wasm = wat::parse_str("(module (func (export \"program\") (result i32) i32.const 1))")
+            .unwrap();
+        let setup = setup::fuel(&wasm, DEFAULT_MEMORY_LIMIT, u64::MAX).unwrap();
+        let (store, _, _) = instantiate(
+            &wasm,
+            vec![],
+            DEFAULT_MEMORY_LIMIT,
+            setup,
+            HostCallbacks::default(),
+        )
+        .unwrap();
+        assert_eq!(store.get_fuel().unwrap(), 0);
+        assert!(run_inner(&wasm, vec![], setup, HostCallbacks::default())
+            .unwrap_err()
+            .contains("fuel"));
+        let first = run_inner(&wasm, vec![], setup + 1000, HostCallbacks::default()).unwrap();
+        assert!(first.fuel_used > setup);
+        let exact = run_inner(&wasm, vec![], first.fuel_used, HostCallbacks::default()).unwrap();
+        assert_eq!(first.fuel_used, exact.fuel_used);
+        assert!(exact.pass);
+        assert!(
+            run_inner(&wasm, vec![], first.fuel_used - 1, HostCallbacks::default())
+                .unwrap_err()
+                .contains("fuel")
+        );
+
+        // Valid preflight metadata, invalid instruction stack typing. With an
+        // insufficient setup budget we must not reach wasmi's compiler error.
+        let invalid =
+            wat::parse_str("(module (func (export \"program\") (result i32) i64.const 1))")
+                .unwrap();
+        let charge = setup::fuel(&invalid, DEFAULT_MEMORY_LIMIT, u64::MAX).unwrap();
+        let err = run_inner(&invalid, vec![], charge - 1, HostCallbacks::default()).unwrap_err();
+        assert!(err.contains("fuel during setup"), "{err}");
+        let err = run_inner(&invalid, vec![], charge + 1000, HostCallbacks::default()).unwrap_err();
+        assert!(err.contains("invalid wasm module"), "{err}");
+        let mut consumed = 0;
+        assert!(run_inner_metered(
+            &invalid,
+            vec![],
+            charge + 1000,
+            HostCallbacks::default(),
+            &mut consumed
+        )
+        .is_err());
+        assert_eq!(consumed, charge);
+        assert!(run_inner_metered(
+            &wasm,
+            vec![],
+            setup - 1,
+            HostCallbacks::default(),
+            &mut consumed
+        )
+        .is_err());
+        assert_eq!(consumed, setup - 1);
+        assert!(run_inner_metered(
+            &wasm,
+            vec![],
+            setup,
+            HostCallbacks::default(),
+            &mut consumed
+        )
+        .is_err());
+        assert_eq!(consumed, setup);
     }
 
     // Field indices used by `fake_txn_field`, matching the Go `TxnField` enum.
@@ -1269,10 +1416,11 @@ mod tests {
 
     fn run_wat_with_txn(wat: &str, fuel: u64) -> Result<Outcome, String> {
         let wasm = wat::parse_str(wat).expect("valid wat");
+        let setup = setup::fuel(&wasm, DEFAULT_MEMORY_LIMIT, u64::MAX)?;
         run_inner(
             &wasm,
             vec![],
-            fuel,
+            fuel + setup,
             HostCallbacks {
                 txn_field: Some(fake_txn_field),
                 ..Default::default()
@@ -1321,10 +1469,11 @@ mod tests {
 
     fn run_wat_with_ed25519(wat: &str, fuel: u64) -> Result<Outcome, String> {
         let wasm = wat::parse_str(wat).expect("valid wat");
+        let setup = setup::fuel(&wasm, DEFAULT_MEMORY_LIMIT, u64::MAX)?;
         run_inner(
             &wasm,
             vec![],
-            fuel,
+            fuel + setup,
             HostCallbacks {
                 ed25519_verify_bare: Some(fake_ed25519_verify_bare),
                 ..Default::default()
@@ -1356,7 +1505,7 @@ mod tests {
         let out = run_wat(
             r#"(module (func (export "program") (result i32) i32.const 1))"#,
             vec![],
-            1000,
+            10_000,
         )
         .unwrap();
         assert!(out.pass);
@@ -1367,7 +1516,7 @@ mod tests {
         let out = run_wat(
             r#"(module (func (export "program") (result i32) i32.const 0))"#,
             vec![],
-            1000,
+            10_000,
         )
         .unwrap();
         assert!(!out.pass);
@@ -1475,12 +1624,12 @@ mod tests {
                     (func (export "program") (result i32) i32.const 1))"#
             );
             let err = run_wat(&wat, vec![], 1000).unwrap_err();
-            assert!(err.contains("could not instantiate"), "{resources}: {err}");
+            assert!(err.contains("limit"), "{resources}: {err}");
         }
     }
 
     #[test]
-    fn resource_limits_apply_to_growth_in_start_and_program() {
+    fn resource_limits_apply_to_growth_in_program() {
         let wat = format!(
             r#"(module
                 (memory 1)
@@ -1490,13 +1639,71 @@ mod tests {
                         (then unreachable))
                     (if (i32.ne (table.grow (ref.null func) (i32.const 1)) (i32.const -1))
                         (then unreachable)))
-                (start $check_limits)
                 (func (export "program") (result i32)
                     call $check_limits
                     i32.const 1))"#
         );
         let out = run_wat(&wat, vec![], 20000).unwrap();
         assert!(out.pass);
+    }
+
+    #[test]
+    fn implicit_start_functions_are_rejected() {
+        for body in ["", "unreachable", "(loop $l (br $l))"] {
+            let wasm = wat::parse_str(format!(
+                r#"(module
+                    (func $init {body})
+                    (start $init)
+                    (func (export "program") (result i32) i32.const 1))"#,
+            ))
+            .unwrap();
+            let err = validate_inner(&wasm).unwrap_err();
+            assert!(err.contains("start"), "{err}");
+            let err = run_inner(&wasm, vec![], 10_000, HostCallbacks::default()).unwrap_err();
+            assert!(err.contains("start"), "{err}");
+        }
+    }
+
+    #[test]
+    fn rejected_start_cannot_call_host() {
+        let wasm = wat::parse_str(
+            r#"(module
+                (import "env" "txn_uint" (func $txn (param i32) (result i64)))
+                (func $init (drop (call $txn (i32.const 1))))
+                (start $init)
+                (func (export "program") (result i32) i32.const 1))"#,
+        )
+        .unwrap();
+        let mut calls = 0usize;
+        let err = run_inner(
+            &wasm,
+            vec![],
+            10_000,
+            HostCallbacks {
+                txn_field: Some(fake_txn_field),
+                ctx: (&mut calls as *mut usize) as usize,
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert!(err.contains("start"), "{err}");
+        assert_eq!(calls, 0);
+    }
+
+    #[test]
+    fn exported_start_name_is_not_an_implicit_start() {
+        let wasm = wat::parse_str(
+            r#"(module
+                (func (export "_start") unreachable)
+                (func (export "program") (result i32) i32.const 1))"#,
+        )
+        .unwrap();
+        validate_inner(&wasm).unwrap();
+        assert!(
+            run_inner(&wasm, vec![], 10_000, HostCallbacks::default())
+                .unwrap()
+                .pass
+        );
     }
 
     #[test]
@@ -1640,7 +1847,7 @@ mod tests {
                 &wasm,
                 vec![],
                 DEFAULT_MEMORY_LIMIT,
-                1000,
+                10_000,
                 HostCallbacks {
                     txn_field: Some(fake_txn_field),
                     ctx: (&mut calls as *mut usize) as usize,
@@ -1665,7 +1872,7 @@ mod tests {
             &wasm,
             vec![vec![42]],
             DEFAULT_MEMORY_LIMIT,
-            1000,
+            10_000,
             HostCallbacks::default(),
         )
         .unwrap();
@@ -1705,7 +1912,7 @@ mod tests {
             &wasm,
             vec![],
             DEFAULT_MEMORY_LIMIT,
-            1000,
+            10_000,
             HostCallbacks {
                 is_app: true,
                 ..Default::default()
@@ -1767,7 +1974,7 @@ mod tests {
             &wasm,
             vec![],
             DEFAULT_MEMORY_LIMIT,
-            1000,
+            10_000,
             HostCallbacks {
                 txn_field: Some(fake_txn_field),
                 ctx: (&mut calls as *mut usize) as usize,
@@ -2065,7 +2272,7 @@ mod tests {
         let outcome = run_inner(
             &wasm,
             vec![],
-            1000,
+            10_000,
             HostCallbacks {
                 txn_field: Some(cb),
                 ctx: (&mut rec as *mut (u32, u32, u32)) as usize,
@@ -2090,7 +2297,7 @@ mod tests {
         let err = run_inner(
             &wasm,
             vec![vec![1, 2, 3]],
-            1000,
+            10_000,
             HostCallbacks {
                 is_app: true,
                 ..Default::default()
@@ -2136,7 +2343,7 @@ mod tests {
         run_inner(
             &wasm,
             vec![],
-            1000,
+            10_000,
             HostCallbacks {
                 global_get: Some(fake_global_get),
                 is_app: true,
@@ -2190,7 +2397,7 @@ mod tests {
             "#,
         )
         .unwrap();
-        let err = run_inner(&wasm, vec![], 1000, HostCallbacks::default()).unwrap_err();
+        let err = run_inner(&wasm, vec![], 10_000, HostCallbacks::default()).unwrap_err();
         assert!(err.contains("signature mode"), "{err}");
     }
 
@@ -2229,7 +2436,7 @@ mod tests {
         let out = run_inner(
             &wasm,
             vec![],
-            1000,
+            10_000,
             HostCallbacks {
                 global_put: Some(fake_global_put),
                 ctx: (&mut rec as *mut (u32, u64)) as usize,
@@ -2270,6 +2477,242 @@ mod tests {
         )
         .unwrap();
         assert!(validate_inner(&wasm).is_err());
+    }
+
+    /// Measures cold setup without executing `program`. Every iteration uses
+    /// a fresh engine, module, linker, and store, matching today's uncached path.
+    #[test]
+    #[ignore = "perf table; run with --release --ignored --nocapture"]
+    fn module_setup_cost_table() {
+        use std::{hint::black_box, time::Instant};
+
+        let minimal = r#"(func (export "program") (result i32) i32.const 1)"#;
+        let synthetic = [
+            ("minimal", format!("(module {minimal})")),
+            ("memory_4MiB", format!("(module (memory 64) {minimal})")),
+            (
+                "data_4KiB",
+                format!(
+                    r#"(module (memory 1) (data (i32.const 0) "{}") {minimal})"#,
+                    "x".repeat(4096),
+                ),
+            ),
+            (
+                "table_1024_active",
+                format!(
+                    "(module (table 1024 funcref) (func $f) (elem (i32.const 0) {}) {minimal})",
+                    "$f ".repeat(1024),
+                ),
+            ),
+            (
+                "functions_1000",
+                format!(
+                    "(module {} {minimal})",
+                    "(func (result i32) i32.const 7)".repeat(1000),
+                ),
+            ),
+        ];
+        let mut cases: Vec<(&str, Vec<u8>)> = synthetic
+            .into_iter()
+            .map(|(name, wat)| (name, wat::parse_str(wat).unwrap()))
+            .collect();
+        cases.push((
+            "app_fib",
+            include_bytes!("../../data/transactions/logic/testdata/wasm/app_fib.wasm").to_vec(),
+        ));
+        cases.push((
+            "ed25519_guest",
+            include_bytes!("../../data/transactions/logic/testdata/wasm/ed25519_dalek.wasm")
+                .to_vec(),
+        ));
+
+        // Independent size sweeps used to calibrate deterministic setup fuel.
+        let mut sweep = Vec::new();
+        for pages in [1, 4, 16, 32, 64] {
+            sweep.push((
+                format!("memory_{pages}p"),
+                format!("(module (memory {pages}) {minimal})"),
+            ));
+        }
+        for count in [10, 100, 500, 2000] {
+            sweep.push((
+                format!("funcs_{count}"),
+                format!(
+                    "(module {} {minimal})",
+                    "(func (result i32) i32.const 7)".repeat(count)
+                ),
+            ));
+        }
+        for count in [100, 1000, 5000, 12000] {
+            sweep.push((
+                format!("nops_{count}"),
+                format!(
+                    "(module (func (export \"program\") (result i32) {} i32.const 1))",
+                    "nop ".repeat(count)
+                ),
+            ));
+        }
+        for count in [16, 256, 4096, 32768] {
+            sweep.push((
+                format!("locals_{count}"),
+                format!(
+                    "(module (func (export \"program\") (result i32) (local {}) i32.const 1))",
+                    "i32 ".repeat(count)
+                ),
+            ));
+        }
+        for count in [256, 4096, 15000] {
+            sweep.push((
+                format!("data_{count}"),
+                format!(
+                    "(module (memory 1) (data (i32.const 0) \"{}\") {minimal})",
+                    "x".repeat(count)
+                ),
+            ));
+        }
+        for count in [64, 256, 1024] {
+            sweep.push((
+                format!("table_{count}"),
+                format!("(module (table {count} funcref) {minimal})"),
+            ));
+            sweep.push((
+                format!("elems_{count}"),
+                format!(
+                    "(module (table {count} funcref) (func $f) (elem (i32.const 0) {}) {minimal})",
+                    "$f ".repeat(count)
+                ),
+            ));
+        }
+        for count in [16, 256, 1000] {
+            sweep.push((
+                format!("globals_{count}"),
+                format!(
+                    "(module {} {minimal})",
+                    "(global i32 (i32.const 0))".repeat(count)
+                ),
+            ));
+            sweep.push((
+                format!("types_{count}"),
+                format!("(module {} {minimal})", "(type (func))".repeat(count)),
+            ));
+            sweep.push((
+                format!("segments_{count}"),
+                format!(
+                    "(module (memory 1) {} {minimal})",
+                    "(data (i32.const 0) \"\")".repeat(count)
+                ),
+            ));
+        }
+        sweep.push((
+            "shared_params".into(),
+            format!(
+                "(module (type $t (func (param {}))) {} {minimal})",
+                "i32 ".repeat(256),
+                "(func (type $t))".repeat(100),
+            ),
+        ));
+        for count in [100, 1000, 4000] {
+            sweep.push((
+                format!("blocks_{count}"),
+                format!(
+                    "(module (func (export \"program\") (result i32) {} {} i32.const 1))",
+                    "(block ".repeat(count),
+                    ")".repeat(count)
+                ),
+            ));
+        }
+        for count in [100, 1000] {
+            sweep.push((
+                format!("arith_{count}"),
+                format!(
+                    "(module (func (export \"program\") (result i32) {} i32.const 1))",
+                    "(drop (i32.add (i32.const 1) (i32.const 2)))".repeat(count)
+                ),
+            ));
+            sweep.push((
+                format!("exports_{count}"),
+                format!(
+                    "(module (func $f) {} {minimal})",
+                    (0..count)
+                        .map(|i| format!("(export \"f{i}\" (func $f))"))
+                        .collect::<String>()
+                ),
+            ));
+        }
+        let sweep_modules: Vec<(&str, Vec<u8>)> = sweep
+            .iter()
+            .map(|(name, source)| (name.as_str(), wat::parse_str(source).unwrap()))
+            .collect();
+        cases.extend(sweep_modules);
+
+        let n = 5000u32;
+        let fuel = 1u64 << 50;
+        println!("\nCold module setup, {n} iterations; all times ns/module; program is not called");
+        println!(
+            "{:<18} {:>7} {:>10} {:>10} {:>10} {:>10} {:>12} {:>10} {:>10} {:>10}",
+            "module",
+            "bytes",
+            "preflight",
+            "engine",
+            "compile",
+            "linker",
+            "instantiate",
+            "teardown",
+            "setup",
+            "setup_fuel",
+        );
+        for (name, wasm) in cases {
+            validate_inner(&wasm).unwrap();
+            let mut totals = [0u128; 7];
+            let mut setup_fuel = None;
+            for _ in 0..n {
+                let start = Instant::now();
+                let charge = setup::fuel(&wasm, DEFAULT_MEMORY_LIMIT, fuel).unwrap();
+                let after_preflight = Instant::now();
+                let engine = new_engine();
+                let after_engine = Instant::now();
+                let module = Module::new(&engine, &wasm).unwrap();
+                let after_compile = Instant::now();
+                let linker = new_linker(&engine).unwrap();
+                let after_linker = Instant::now();
+                let (store, instance, program) = instantiate_module(
+                    &engine,
+                    &module,
+                    &linker,
+                    vec![],
+                    DEFAULT_MEMORY_LIMIT,
+                    fuel - charge,
+                    HostCallbacks::default(),
+                )
+                .unwrap();
+                let after_instantiate = Instant::now();
+                black_box((&store, instance, program));
+                let used = fuel - store.get_fuel().unwrap();
+                if let Some(expected) = setup_fuel {
+                    assert_eq!(used, expected);
+                }
+                setup_fuel = Some(used);
+                let before_drop = Instant::now();
+                drop((store, linker, module, engine));
+                let after_drop = Instant::now();
+                for (total, duration) in totals.iter_mut().zip([
+                    after_preflight - start,
+                    after_engine - after_preflight,
+                    after_compile - after_engine,
+                    after_linker - after_compile,
+                    after_instantiate - after_linker,
+                    after_drop - before_drop,
+                    after_instantiate - start,
+                ]) {
+                    *total += duration.as_nanos();
+                }
+            }
+            let ns = totals.map(|total| total as f64 / f64::from(n));
+            println!(
+                "{name:<18} {:>7} {:>10.1} {:>10.1} {:>10.1} {:>10.1} {:>12.1} {:>10.1} {:>10.1} {:>10}",
+                wasm.len(), ns[0], ns[1], ns[2], ns[3], ns[4], ns[5], ns[6], setup_fuel.unwrap(),
+            );
+        }
     }
 
     // ---- per-opcode cost table -------------------------------------------
@@ -2336,7 +2779,9 @@ mod tests {
         let result = program.call(&mut store, ()).unwrap();
         let elapsed = start.elapsed().as_secs_f64();
         assert_eq!(result, 1);
-        let used = fuel - store.get_fuel().unwrap();
+        let used = fuel
+            - store.get_fuel().unwrap()
+            - setup::fuel(&wasm, DEFAULT_MEMORY_LIMIT, fuel).unwrap();
         (used, elapsed)
     }
 
@@ -2354,29 +2799,81 @@ mod tests {
             ("local.tee", "(drop (local.tee $x (local.get $x)))", ""),
             ("global.get", "(drop (global.get $g))", ""),
             ("global.set", "(global.set $g (local.get $x))", ""),
-            ("i32.add", "(drop (i32.add (local.get $x) (local.get $y)))", ""),
-            ("i32.mul", "(drop (i32.mul (local.get $x) (local.get $y)))", ""),
-            ("i32.div_s", "(drop (i32.div_s (local.get $x) (local.get $y)))", ""),
-            ("i32.rem_s", "(drop (i32.rem_s (local.get $x) (local.get $y)))", ""),
-            ("i32.rotl", "(drop (i32.rotl (local.get $x) (local.get $y)))", ""),
-            ("i32.shl", "(drop (i32.shl (local.get $x) (local.get $y)))", ""),
-            ("i32.eq", "(drop (i32.eq (local.get $x) (local.get $y)))", ""),
-            ("i32.lt_s", "(drop (i32.lt_s (local.get $x) (local.get $y)))", ""),
+            (
+                "i32.add",
+                "(drop (i32.add (local.get $x) (local.get $y)))",
+                "",
+            ),
+            (
+                "i32.mul",
+                "(drop (i32.mul (local.get $x) (local.get $y)))",
+                "",
+            ),
+            (
+                "i32.div_s",
+                "(drop (i32.div_s (local.get $x) (local.get $y)))",
+                "",
+            ),
+            (
+                "i32.rem_s",
+                "(drop (i32.rem_s (local.get $x) (local.get $y)))",
+                "",
+            ),
+            (
+                "i32.rotl",
+                "(drop (i32.rotl (local.get $x) (local.get $y)))",
+                "",
+            ),
+            (
+                "i32.shl",
+                "(drop (i32.shl (local.get $x) (local.get $y)))",
+                "",
+            ),
+            (
+                "i32.eq",
+                "(drop (i32.eq (local.get $x) (local.get $y)))",
+                "",
+            ),
+            (
+                "i32.lt_s",
+                "(drop (i32.lt_s (local.get $x) (local.get $y)))",
+                "",
+            ),
             ("i32.clz", "(drop (i32.clz (local.get $x)))", ""),
             ("i32.ctz", "(drop (i32.ctz (local.get $x)))", ""),
             ("i32.popcnt", "(drop (i32.popcnt (local.get $x)))", ""),
             ("i32.eqz", "(drop (i32.eqz (local.get $x)))", ""),
-            ("i64.add", "(drop (i64.add (local.get $a) (local.get $b)))", ""),
-            ("i64.mul", "(drop (i64.mul (local.get $a) (local.get $b)))", ""),
-            ("i64.div_s", "(drop (i64.div_s (local.get $a) (local.get $b)))", ""),
-            ("i64.rotl", "(drop (i64.rotl (local.get $a) (local.get $b)))", ""),
+            (
+                "i64.add",
+                "(drop (i64.add (local.get $a) (local.get $b)))",
+                "",
+            ),
+            (
+                "i64.mul",
+                "(drop (i64.mul (local.get $a) (local.get $b)))",
+                "",
+            ),
+            (
+                "i64.div_s",
+                "(drop (i64.div_s (local.get $a) (local.get $b)))",
+                "",
+            ),
+            (
+                "i64.rotl",
+                "(drop (i64.rotl (local.get $a) (local.get $b)))",
+                "",
+            ),
             ("i64.clz", "(drop (i64.clz (local.get $a)))", ""),
             ("i64.popcnt", "(drop (i64.popcnt (local.get $a)))", ""),
             ("i32.load", "(drop (i32.load (i32.const 0)))", ""),
             ("i32.load8_u", "(drop (i32.load8_u (i32.const 0)))", ""),
             ("i64.load", "(drop (i64.load (i32.const 0)))", ""),
             ("i32.store", "(i32.store (i32.const 0) (local.get $x))", ""),
-            ("i32.store8", "(i32.store8 (i32.const 0) (local.get $x))", ""),
+            (
+                "i32.store8",
+                "(i32.store8 (i32.const 0) (local.get $x))",
+                "",
+            ),
             ("i64.store", "(i64.store (i32.const 0) (local.get $a))", ""),
             ("memory.size", "(drop (memory.size))", ""),
             ("memory.grow0", "(drop (memory.grow (i32.const 0)))", ""),
@@ -2409,9 +2906,17 @@ mod tests {
             ("ref.null", "(drop (ref.null func))", ""),
             ("ref.is_null", "(drop (ref.is_null (ref.null func)))", ""),
             ("table.get", "(drop (table.get 0 (i32.const 0)))", ""),
-            ("table.set", "(table.set 0 (i32.const 0) (ref.null func))", ""),
+            (
+                "table.set",
+                "(table.set 0 (i32.const 0) (ref.null func))",
+                "",
+            ),
             ("table.size", "(drop (table.size 0))", ""),
-            ("table.grow0", "(drop (table.grow 0 (ref.null func) (i32.const 0)))", ""),
+            (
+                "table.grow0",
+                "(drop (table.grow 0 (ref.null func) (i32.const 0)))",
+                "",
+            ),
             (
                 "table.fill",
                 "(table.fill 0 (i32.const 0) (ref.null func) (i32.const 1))",

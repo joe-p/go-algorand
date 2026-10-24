@@ -176,6 +176,7 @@ name = "wasm_lsig"
 version = "0.1.0"
 dependencies = [
  "wasmi",
+ "wasmparser 0.228.0",
  "wat",
 ]
 

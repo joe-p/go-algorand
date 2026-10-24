@@ -26,6 +26,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/algorand/go-algorand/config"
+	"github.com/algorand/go-algorand/data/transactions"
+	"github.com/algorand/go-algorand/protocol"
 	"github.com/algorand/go-algorand/test/partitiontest"
 )
 
@@ -88,6 +90,51 @@ func TestWasmUnreadArgIsUnaccounted(t *testing.T) {
 	idx, unaccounted := cx.UnaccountedArg()
 	require.True(t, unaccounted)
 	require.Equal(t, 0, idx)
+}
+
+// TestWasmReadsTxnUint checks the txn_uint host function against a real
+// transaction: the program approves iff FirstValid is 1234.
+func TestWasmReadsTxnUint(t *testing.T) {
+	partitiontest.PartitionTest(t)
+
+	txn := transactions.SignedTxn{Txn: transactions.Transaction{
+		Type:   protocol.PaymentTx,
+		Header: transactions.Header{FirstValid: 1234},
+	}}
+
+	ep := optSigParams(wasmProto, txn)
+	pass, _, err := EvalSignatureProgram(loadWasm(t, "txn_uint.wasm"), nil, 0, ep)
+	require.NoError(t, err)
+	require.True(t, pass)
+
+	// A different field value makes the program reject rather than error.
+	txn.Txn.FirstValid = 1
+	ep = optSigParams(wasmProto, txn)
+	pass, _, err = EvalSignatureProgram(loadWasm(t, "txn_uint.wasm"), nil, 0, ep)
+	require.NoError(t, err)
+	require.False(t, pass)
+}
+
+// TestWasmReadsTxnBytes checks the txn_bytes host function: the program reads
+// the Sender and approves iff it is 32 bytes.
+func TestWasmReadsTxnBytes(t *testing.T) {
+	partitiontest.PartitionTest(t)
+
+	ep := optSigParams(wasmProto, transactions.SignedTxn{Txn: transactions.Transaction{Type: protocol.PaymentTx}})
+	pass, _, err := EvalSignatureProgram(loadWasm(t, "txn_bytes.wasm"), nil, 0, ep)
+	require.NoError(t, err)
+	require.True(t, pass)
+}
+
+// TestWasmTxnFieldTypeError checks that asking for a field with the wrong type
+// traps, just as an invalid field would in the AVM.
+func TestWasmTxnFieldTypeError(t *testing.T) {
+	partitiontest.PartitionTest(t)
+
+	ep := optSigParams(wasmProto, transactions.SignedTxn{Txn: transactions.Transaction{Type: protocol.PaymentTx}})
+	_, _, err := EvalSignatureProgram(loadWasm(t, "txn_bad_type.wasm"), nil, 0, ep)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "not a uint")
 }
 
 func TestWasmFuelExhaustion(t *testing.T) {

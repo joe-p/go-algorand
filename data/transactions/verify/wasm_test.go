@@ -71,6 +71,37 @@ func TestWasmLogicSigTxn(t *testing.T) {
 	require.Error(t, err)
 }
 
+// TestWasmLogicSigReadsTxnField checks that a WASM LogicSig can read a
+// transaction field through the host callback and be verified end to end.
+func TestWasmLogicSigReadsTxnField(t *testing.T) {
+	partitiontest.PartitionTest(t)
+	t.Parallel()
+
+	blkHdr := createDummyBlockHeader(protocol.ConsensusFuture)
+	program := readWasmFixture(t, "txn_uint.wasm")
+
+	fee := config.Consensus[protocol.ConsensusFuture].MinTxnFee
+	var receiver basics.Address
+	receiver[0] = 7
+	sender := basics.Address(logic.HashProgram(program))
+
+	// txn_uint.wasm approves iff FirstValid is 1234.
+	approve := transactions.SignedTxn{
+		Txn:  createPayTransaction(fee, 1234, 1400, 1, sender, receiver),
+		Lsig: transactions.LogicSig{Logic: program},
+	}
+	_, err := TxnGroup([]transactions.SignedTxn{approve}, &blkHdr, nil, &DummyLedgerForSignature{})
+	require.NoError(t, err)
+
+	// A different FirstValid rejects.
+	reject := transactions.SignedTxn{
+		Txn:  createPayTransaction(fee, 1235, 1400, 1, sender, receiver),
+		Lsig: transactions.LogicSig{Logic: program},
+	}
+	_, err = TxnGroup([]transactions.SignedTxn{reject}, &blkHdr, nil, &DummyLedgerForSignature{})
+	require.Error(t, err)
+}
+
 // TestWasmLogicSigArgAccess checks that the arg-access rule applies to WASM
 // LogicSigs too: a program that ignores an argument it carries is rejected.
 func TestWasmLogicSigArgAccess(t *testing.T) {

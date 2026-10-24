@@ -30,13 +30,42 @@ typedef struct {
 	size_t len;
 } WasmLsigArg;
 
+// wasm_txn_field_cb is implemented in Go (see wasm_host.go). Rust calls it to
+// fetch `txn` fields while the guest runs.
+typedef int32_t (*wasm_txn_field_cb)(
+	uintptr_t ctx,
+	uint32_t field,
+	uint8_t *buf,
+	size_t buf_cap,
+	size_t *out_len,
+	uint8_t *is_bytes,
+	uint8_t *err_buf,
+	size_t err_buf_len);
+
+extern int32_t goWasmTxnField(
+	uintptr_t ctx,
+	uint32_t field,
+	uint8_t *buf,
+	size_t buf_cap,
+	size_t *out_len,
+	uint8_t *is_bytes,
+	uint8_t *err_buf,
+	size_t err_buf_len);
+
+// Go cannot take the address of an exported function, so expose it through a
+// C helper that returns the function pointer.
+static wasm_txn_field_cb get_wasm_txn_field_cb(void) {
+	return goWasmTxnField;
+}
+
 int32_t wasm_lsig_run(
 	const uint8_t *code, size_t code_len,
 	const WasmLsigArg *args, size_t args_len,
 	uint64_t fuel,
 	uint64_t *fuel_used,
 	uint64_t *args_read,
-	uint8_t *err_buf, size_t err_buf_len);
+	uint8_t *err_buf, size_t err_buf_len,
+	wasm_txn_field_cb txn_cb, uintptr_t txn_ctx);
 
 int32_t wasm_lsig_validate(
 	const uint8_t *code, size_t code_len,
@@ -53,8 +82,8 @@ import (
 const wasmErrBufLen = 256
 
 // validateWasmProgram checks that program is a structurally valid WASM
-// LogicSig: a well-formed module that links against the args-only host and
-// exports `program`. It does not execute the program.
+// LogicSig: a well-formed module that links against the args and txn host
+// functions and exports `program`. It does not execute the program.
 func validateWasmProgram(program []byte) error {
 	if len(program) == 0 {
 		return errors.New("wasm program is empty")
@@ -74,8 +103,9 @@ func validateWasmProgram(program []byte) error {
 
 // runWasmProgram executes a WASM LogicSig with the given arguments, consuming
 // at most fuel units. It reports whether the program approved, how much fuel
-// was used, and which arguments were read.
-func runWasmProgram(program []byte, args [][]byte, fuel uint64) (bool, uint64, [argsReadWords]uint64, error) {
+// was used, and which arguments were read. The evaluation context answers the
+// program's `txn` field reads for the duration of the call.
+func runWasmProgram(program []byte, args [][]byte, fuel uint64, cx *EvalContext) (bool, uint64, [argsReadWords]uint64, error) {
 	var accessed [argsReadWords]uint64
 	if len(program) == 0 {
 		return false, 0, accessed, errors.New("wasm program is empty")
@@ -86,6 +116,9 @@ func runWasmProgram(program []byte, args [][]byte, fuel uint64) (bool, uint64, [
 		return false, 0, accessed, err
 	}
 	defer freeArgs()
+
+	handle := registerWasmCtx(cx)
+	defer unregisterWasmCtx(handle)
 
 	var fuelUsed C.uint64_t
 	var errBuf [wasmErrBufLen]byte
@@ -100,6 +133,8 @@ func runWasmProgram(program []byte, args [][]byte, fuel uint64) (bool, uint64, [
 		(*C.uint64_t)(unsafe.Pointer(&accessed[0])),
 		(*C.uint8_t)(unsafe.Pointer(&errBuf[0])),
 		C.size_t(len(errBuf)),
+		C.get_wasm_txn_field_cb(),
+		C.uintptr_t(handle),
 	)
 
 	switch ret {

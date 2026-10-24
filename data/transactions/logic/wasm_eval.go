@@ -53,6 +53,9 @@ func evalWasmSignatureProgram(program []byte, args [][]byte, gi int, params *Eva
 		txn:        &params.TxnGroup[gi],
 		sigArgs:    args,
 	}
+	// A WASM module has no AVM version byte. Use the protocol's maximum so the
+	// `txn` field version gates match what the AVM would allow.
+	cx.version = params.Proto.LogicSigVersion
 	// Save scratch, matching the AVM path. WASM cannot access it yet, but
 	// error returns and tracers might.
 	cx.pastScratch[cx.groupIndex] = &cx.Scratch
@@ -82,7 +85,7 @@ func wasmEval(cx *EvalContext, program []byte) (bool, error) {
 		budget = 0
 	}
 
-	pass, fuelUsed, accessed, err := runWasmProgram(program, cx.sigArgs, uint64(budget))
+	pass, fuelUsed, accessed, err := runWasmProgram(program, cx.sigArgs, uint64(budget), cx)
 	if err != nil {
 		return false, err
 	}

@@ -28,6 +28,6 @@ func validateWasmProgram(program []byte) error {
 	return errWasmUnsupported
 }
 
-func runWasmProgram(program []byte, args [][]byte, fuel uint64) (bool, uint64, [argsReadWords]uint64, error) {
+func runWasmProgram(program []byte, args [][]byte, fuel uint64, cx *EvalContext) (bool, uint64, [argsReadWords]uint64, error) {
 	return false, 0, [argsReadWords]uint64{}, errWasmUnsupported
 }

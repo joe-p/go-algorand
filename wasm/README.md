@@ -28,9 +28,20 @@ The module may import, from the `env` module:
   Errors neither write memory nor mark the argument as read. A successful read
   marks the argument as read, which enforces the rule that a LogicSig reads every
   argument it carries.
+- `txn_uint(field: i32) -> i64`: the value of a uint64 transaction field, i.e.
+  the AVM's `txn` for fields that push an integer. Invalid, out-of-version, or
+  byte-string fields trap the guest, as an invalid field would fail the AVM.
+- `txn_bytes(field: i32, out: i32, len: i32) -> i32`: copy a byte-string
+  transaction field into linear memory at `out`, up to `len` bytes. Returns the
+  number of bytes copied. Passing `len == 0` returns the field's length without
+  copying. A negative value reports an ABI error (`-2` buffer too small, `-3`
+  bad pointer or missing `memory` export); invalid, out-of-version, or
+  integer fields trap the guest.
 
-In the future, host functions exposing opcodes, transaction fields, and the
-like will be added to the same `env` module.
+Field values come from the node, so the AVM's field semantics (typing, version
+gating, allowed modes) have a single source of truth. For now only the current
+transaction's non-array fields are exposed (the `txn` opcode, not `txna`,
+`gtxn`, or `itxn`). Later opcodes will be added to the same `env` module.
 
 ## Execution limits
 
@@ -47,7 +58,9 @@ like will be added to the same `env` module.
 ## C ABI
 
 - `wasm_lsig_run(code, code_len, args, args_len, fuel, fuel_used, args_read,
-  err_buf, err_buf_len)`: `1` approved, `0` rejected, `-1` error.
+  err_buf, err_buf_len, txn_cb, txn_ctx)`: `1` approved, `0` rejected, `-1`
+  error. `txn_cb` is the host's transaction-field provider and `txn_ctx` is an
+  opaque handle it receives back.
 - `wasm_lsig_validate(code, code_len, err_buf, err_buf_len)`: `0` valid,
   `-1` invalid.
 

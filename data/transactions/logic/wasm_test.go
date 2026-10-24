@@ -34,7 +34,7 @@ import (
 	"github.com/algorand/go-algorand/test/partitiontest"
 )
 
-func loadWasm(t *testing.T, name string) []byte {
+func loadWasm(t testing.TB, name string) []byte {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join("testdata", "wasm", name))
 	require.NoError(t, err)

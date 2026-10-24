@@ -58,6 +58,43 @@ typedef int32_t (*wasm_ed25519verify_bare_cb)(
 	uint8_t *err_buf,
 	size_t err_buf_len);
 
+// wasm_global_get_cb is implemented in Go (see wasm_host.go). Rust calls it to
+// read a key from the current app's global state. `out_is_bytes` and
+// `out_exists` report the value's type and whether the key exists.
+typedef int32_t (*wasm_global_get_cb)(
+	uintptr_t ctx,
+	const uint8_t *key,
+	size_t key_len,
+	uint8_t *buf,
+	size_t buf_cap,
+	size_t *out_len,
+	uint8_t *out_is_bytes,
+	uint8_t *out_exists,
+	uint8_t *err_buf,
+	size_t err_buf_len);
+
+// wasm_global_put_cb is implemented in Go (see wasm_host.go). Rust calls it to
+// write key/value to the current app's global state. `val_is_uint` selects a
+// uint (8 little-endian bytes) or byte-string value.
+typedef int32_t (*wasm_global_put_cb)(
+	uintptr_t ctx,
+	const uint8_t *key,
+	size_t key_len,
+	const uint8_t *val,
+	size_t val_len,
+	uint32_t val_is_uint,
+	uint8_t *err_buf,
+	size_t err_buf_len);
+
+// wasm_global_del_cb is implemented in Go (see wasm_host.go). Rust calls it to
+// delete a key from the current app's global state.
+typedef int32_t (*wasm_global_del_cb)(
+	uintptr_t ctx,
+	const uint8_t *key,
+	size_t key_len,
+	uint8_t *err_buf,
+	size_t err_buf_len);
+
 extern int32_t goWasmTxnField(
 	uintptr_t ctx,
 	uint32_t field,
@@ -80,6 +117,24 @@ extern int32_t goWasmEd25519VerifyBare(
 	uint8_t *err_buf,
 	size_t err_buf_len);
 
+extern int32_t goWasmGlobalGet(
+	uintptr_t ctx,
+	const uint8_t *key, size_t key_len,
+	uint8_t *buf, size_t buf_cap, size_t *out_len,
+	uint8_t *out_is_bytes, uint8_t *out_exists,
+	uint8_t *err_buf, size_t err_buf_len);
+
+extern int32_t goWasmGlobalPut(
+	uintptr_t ctx,
+	const uint8_t *key, size_t key_len,
+	const uint8_t *val, size_t val_len, uint32_t val_is_uint,
+	uint8_t *err_buf, size_t err_buf_len);
+
+extern int32_t goWasmGlobalDel(
+	uintptr_t ctx,
+	const uint8_t *key, size_t key_len,
+	uint8_t *err_buf, size_t err_buf_len);
+
 // Go cannot take the address of an exported function, so expose it through a
 // C helper that returns the function pointer.
 static wasm_txn_field_cb get_wasm_txn_field_cb(void) {
@@ -88,6 +143,18 @@ static wasm_txn_field_cb get_wasm_txn_field_cb(void) {
 
 static wasm_ed25519verify_bare_cb get_wasm_ed25519verify_bare_cb(void) {
 	return goWasmEd25519VerifyBare;
+}
+
+static wasm_global_get_cb get_wasm_global_get_cb(void) {
+	return goWasmGlobalGet;
+}
+
+static wasm_global_put_cb get_wasm_global_put_cb(void) {
+	return goWasmGlobalPut;
+}
+
+static wasm_global_del_cb get_wasm_global_del_cb(void) {
+	return goWasmGlobalDel;
 }
 
 int32_t wasm_lsig_run(
@@ -99,6 +166,9 @@ int32_t wasm_lsig_run(
 	uint8_t *err_buf, size_t err_buf_len,
 	wasm_txn_field_cb txn_cb,
 	wasm_ed25519verify_bare_cb ed25519verify_bare_cb,
+	wasm_global_get_cb global_get_cb,
+	wasm_global_put_cb global_put_cb,
+	wasm_global_del_cb global_del_cb,
 	uintptr_t ctx,
 	uint32_t is_app);
 
@@ -179,6 +249,9 @@ func runWasmProgram(program []byte, args [][]byte, fuel uint64, cx *EvalContext)
 		C.size_t(len(errBuf)),
 		C.get_wasm_txn_field_cb(),
 		C.get_wasm_ed25519verify_bare_cb(),
+		C.get_wasm_global_get_cb(),
+		C.get_wasm_global_put_cb(),
+		C.get_wasm_global_del_cb(),
 		C.uintptr_t(handle),
 		isApp,
 	)

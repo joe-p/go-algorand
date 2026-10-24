@@ -33,13 +33,19 @@
 //! | `txn_bytes(field, out, len) -> i32` | [`txn_bytes`] |
 //! | `txna_uint(field, index) -> i64` | [`txna_uint`] |
 //! | `txna_bytes(field, index, out, len) -> i32` | [`txna_bytes`] |
+//! | `app_global_get_uint(key, key_len) -> i64` | [`app_global_get_uint`] |
+//! | `app_global_get_bytes(key, key_len, out, len) -> i32` | [`app_global_get_bytes`] |
+//! | `app_global_put_uint(key, key_len, value)` | [`app_global_put_uint`] |
+//! | `app_global_put_bytes(key, key_len, val, val_len)` | [`app_global_put_bytes`] |
+//! | `app_global_del(key, key_len)` | [`app_global_del`] |
 //! | `ed25519verify_bare(d, dl, s, sl, p, pl) -> i32` | [`ed25519_verify_bare`] |
 //!
 //! `arg`/`arg_count` are signature-only, like the AVM's `arg` opcodes: they
 //! trap when the module runs as an application program. An application reads its
 //! arguments from the transaction instead, with [`txna_bytes`] and
 //! [`TxnField::ApplicationArgs`] (or the [`app_args_count`] / [`app_arg_into`]
-//! helpers).
+//! helpers). The `app_global_*` functions are the reverse: application-only,
+//! and they trap when the module runs as a LogicSig.
 //!
 //! Some host functions *trap* rather than return an error (an invalid or
 //! out-of-version transaction field, an integer field read as bytes, or an
@@ -87,6 +93,11 @@ const ARG_ERR_MEMORY: i32 = -3;
 const TXN_ERR_BUFFER: i32 = -2;
 const TXN_ERR_MEMORY: i32 = -3;
 
+// Error sentinels returned by `env.app_global_get_bytes`. Invalid reads (a
+// wrong-typed value) trap the guest instead of returning a sentinel.
+const GLOBAL_ERR_BUFFER: i32 = -2;
+const GLOBAL_ERR_MEMORY: i32 = -3;
+
 #[cfg(target_arch = "wasm32")]
 mod sys {
     //! Raw `env` imports. Only linked when compiling for `wasm32`.
@@ -99,6 +110,11 @@ mod sys {
         pub fn txn_bytes(field: i32, out: i32, len: i32) -> i32;
         pub fn txna_uint(field: i32, index: i32) -> i64;
         pub fn txna_bytes(field: i32, index: i32, out: i32, len: i32) -> i32;
+        pub fn app_global_get_uint(key: i32, key_len: i32) -> i64;
+        pub fn app_global_get_bytes(key: i32, key_len: i32, out: i32, len: i32) -> i32;
+        pub fn app_global_put_uint(key: i32, key_len: i32, value: i64);
+        pub fn app_global_put_bytes(key: i32, key_len: i32, val: i32, val_len: i32);
+        pub fn app_global_del(key: i32, key_len: i32);
         pub fn ed25519verify_bare(
             data: i32,
             data_len: i32,
@@ -143,6 +159,21 @@ mod sys {
     }
     pub unsafe fn txna_bytes(_field: i32, _index: i32, _out: i32, _len: i32) -> i32 {
         unavailable!("txna_bytes")
+    }
+    pub unsafe fn app_global_get_uint(_key: i32, _key_len: i32) -> i64 {
+        unavailable!("app_global_get_uint")
+    }
+    pub unsafe fn app_global_get_bytes(_key: i32, _key_len: i32, _out: i32, _len: i32) -> i32 {
+        unavailable!("app_global_get_bytes")
+    }
+    pub unsafe fn app_global_put_uint(_key: i32, _key_len: i32, _value: i64) {
+        unavailable!("app_global_put_uint")
+    }
+    pub unsafe fn app_global_put_bytes(_key: i32, _key_len: i32, _val: i32, _val_len: i32) {
+        unavailable!("app_global_put_bytes")
+    }
+    pub unsafe fn app_global_del(_key: i32, _key_len: i32) {
+        unavailable!("app_global_del")
     }
     pub unsafe fn ed25519verify_bare(
         _data: i32,
@@ -420,6 +451,76 @@ pub fn app_arg_into<'a>(index: u32, buf: &'a mut [u8]) -> Result<&'a [u8], TxnEr
         return Err(TxnError::BufferTooSmall);
     }
     Ok(&buf[..len])
+}
+
+/// Reads the uint64 global `key` from the current application, the AVM's
+/// `app_global_get`. A missing key reads as 0; a stored byte-string value traps
+/// the guest, as a mismatched AVM value would fail.
+#[inline]
+pub fn app_global_get_uint(key: &[u8]) -> u64 {
+    unsafe { sys::app_global_get_uint(key.as_ptr() as usize as i32, key.len() as i32) as u64 }
+}
+
+/// Copies the byte-string global `key` from the current application, the AVM's
+/// `app_global_get` for a byte value. A missing key reads as empty; a stored
+/// uint value traps the guest. If `buf` is too small nothing is written and
+/// [`TxnError::BufferTooSmall`] is returned.
+#[inline]
+pub fn app_global_get_bytes<'a>(key: &[u8], buf: &'a mut [u8]) -> Result<&'a [u8], TxnError> {
+    let ret = unsafe {
+        sys::app_global_get_bytes(
+            key.as_ptr() as usize as i32,
+            key.len() as i32,
+            buf.as_mut_ptr() as usize as i32,
+            buf.len() as i32,
+        )
+    };
+    if ret >= 0 {
+        let len = ret as usize;
+        if len > buf.len() {
+            return Err(TxnError::BufferTooSmall);
+        }
+        Ok(&buf[..len])
+    } else {
+        Err(match ret {
+            GLOBAL_ERR_BUFFER => TxnError::BufferTooSmall,
+            GLOBAL_ERR_MEMORY => TxnError::Memory,
+            _ => TxnError::Unknown,
+        })
+    }
+}
+
+/// Writes the uint64 `value` to global `key`, the AVM's `app_global_put`. A
+/// limit violation (a too-long key or value) traps the guest, aborting the
+/// application call.
+#[inline]
+pub fn app_global_put_uint(key: &[u8], value: u64) {
+    unsafe {
+        sys::app_global_put_uint(key.as_ptr() as usize as i32, key.len() as i32, value as i64);
+    }
+}
+
+/// Writes the byte-string `value` to global `key`, the AVM's `app_global_put`
+/// for a byte value.
+#[inline]
+pub fn app_global_put_bytes(key: &[u8], value: &[u8]) {
+    unsafe {
+        sys::app_global_put_bytes(
+            key.as_ptr() as usize as i32,
+            key.len() as i32,
+            value.as_ptr() as usize as i32,
+            value.len() as i32,
+        );
+    }
+}
+
+/// Deletes global `key`, the AVM's `app_global_del`. Deleting an absent key is
+/// not an error.
+#[inline]
+pub fn app_global_del(key: &[u8]) {
+    unsafe {
+        sys::app_global_del(key.as_ptr() as usize as i32, key.len() as i32);
+    }
 }
 
 /// Verifies an ed25519 signature, the AVM's `ed25519verify_bare`.

@@ -17,10 +17,11 @@ by wasmi instead of the AVM. Two kinds of program are supported:
   `EnableWasmApp`. An app's two programs must be the same kind: both WASM or
   both AVM, and an existing app cannot be updated from one kind to the other.
 
-Both are currently only honored in the future consensus version. For now a
-guest can only read the current transaction's fields (including the application
-arguments), run `ed25519verify_bare`, and (for a LogicSig) read its arguments;
-it cannot yet read or write application state, boxes, or inner transactions.
+Both are currently only honored in the future consensus version. A guest can
+read the current transaction's fields (including the application arguments), run
+`ed25519verify_bare`, read and write the current application's global state
+(application programs only), and (for a LogicSig) read its arguments. It cannot
+yet touch local state, boxes, or inner transactions.
 
 ## Guest ABI
 
@@ -57,6 +58,21 @@ The module may import, from the `env` module:
   `txn_bytes`, but for an array field element. The application arguments are
   `txna_bytes(ApplicationArgs=26, i, ...)`; the argument count is
   `txn_uint(NumAppArgs=27)`.
+- `app_global_get_uint(key: i32, key_len: i32) -> i64`: the uint64 value at
+  `key` in the current application's global state, the AVM's `app_global_get`. A
+  missing key reads as 0. A stored byte-string value traps the guest.
+- `app_global_get_bytes(key: i32, key_len: i32, out: i32, len: i32) -> i32`:
+  like `app_global_get_uint`, but for a byte-string value. Returns the value's
+  length; passing `len == 0` returns the length without copying. A missing key
+  reads as empty (length 0). A stored uint value traps the guest.
+- `app_global_put_uint(key: i32, key_len: i32, value: i64)`: writes `value` to
+  `key` in the current app's global state, the AVM's `app_global_put`. A
+  too-long key or value traps the guest.
+- `app_global_put_bytes(key: i32, key_len: i32, val: i32, val_len: i32)`: like
+  `app_global_put_uint`, but for a byte-string value.
+- `app_global_del(key: i32, key_len: i32)`: deletes `key` from the current app's
+  global state, the AVM's `app_global_del`. Deleting an absent key is not an
+  error.
 - `ed25519verify_bare(data: i32, data_len: i32, sig: i32, sig_len: i32,
   pk: i32, pk_len: i32) -> i32`: the AVM's `ed25519verify_bare`, verifying the
   ed25519 signature `sig` over `data` under public key `pk`. Returns `1` when
@@ -64,22 +80,28 @@ The module may import, from the `env` module:
   out of linear memory and verified in Go. A negative length, an out-of-bounds
   range, oversized data, or a wrong-length key or signature traps the guest.
 
-Field values come from the node, and `ed25519verify_bare` is verified by the
-node, so the AVM's semantics (typing, version gating, allowed modes, the
-4096-byte value limit, and ed25519 validation) have a single source of truth.
-Each read invokes Go once; length queries do not copy the payload. For now the
-`txn`/`txna` opcodes are limited to the current transaction's fields (not
-`gtxn`, `gtxna`, or `itxn`) and `ed25519verify_bare` is the only crypto opcode.
-More opcodes will be added to the same `env` module.
+The `app_global_*` functions are application-only, mirroring the AVM's
+`only(ModeApp)` restriction: they trap when the module runs as a LogicSig.
+
+Field values come from the node, `ed25519verify_bare` is verified by the node,
+and global-state reads/writes go through the same ledger accessors the AVM
+opcodes use, so the AVM's semantics (typing, version gating, allowed modes, the
+4096-byte value limit, schema and length limits, and ed25519 validation) have a
+single source of truth. Each read invokes Go once; length queries do not copy the
+payload. For now the `txn`/`txna` opcodes are limited to the current
+transaction's fields (not `gtxn`, `gtxna`, or `itxn`), only global (not local)
+application state is exposed, and `ed25519verify_bare` is the only crypto
+opcode. More opcodes will be added to the same `env` module.
 
 ## Execution limits
 
 - Fuel metered; the AVM cost budget is reused as the fuel limit, one fuel unit
   per cost unit. Each `txn_uint`, `txn_bytes`, `txna_uint`, or `txna_bytes`
   invocation costs one additional fuel unit, including length queries and
-  invalid reads, on top of WASM instruction fuel. `ed25519verify_bare` is
-  charged its opcode cost (1900). The charge occurs before host work;
-  insufficient fuel traps. Running out of fuel is an error.
+  invalid reads, on top of WASM instruction fuel. Each `app_global_*` invocation
+  costs the corresponding AVM opcode's cost (1) plus instruction fuel.
+  `ed25519verify_bare` is charged its opcode cost (1900). The charge occurs
+  before host work; insufficient fuel traps. Running out of fuel is an error.
 - Each invocation permits at most one linear memory (4 MiB, matching the AVM's
   bound on live data of `maxStringSize` 4096 by `maxStackDepth` 1000), one table
   (1024 elements), and one instance. Size and count limits bound aggregate
@@ -92,11 +114,13 @@ More opcodes will be added to the same `env` module.
 ## C ABI
 
 - `wasm_lsig_run(code, code_len, args, args_len, fuel, fuel_used, args_read,
-  err_buf, err_buf_len, txn_cb, ed25519verify_bare_cb, ctx, is_app)`: `1`
-  approved, `0` rejected, `-1` error. `txn_cb` is the host's transaction-field
-  provider, `ed25519verify_bare_cb` its ed25519 verifier, `ctx` an opaque handle
-  it receives back, and `is_app` non-zero when the program is an application
-  program (which disables the signature-only `arg`/`arg_count`).
+  err_buf, err_buf_len, txn_cb, ed25519verify_bare_cb, global_get_cb,
+  global_put_cb, global_del_cb, ctx, is_app)`: `1` approved, `0` rejected, `-1`
+  error. `txn_cb` is the host's transaction-field provider,
+  `ed25519verify_bare_cb` its ed25519 verifier, `global_get_cb`/`global_put_cb`/
+  `global_del_cb` its global-state accessors, `ctx` an opaque handle they receive
+  back, and `is_app` non-zero when the program is an application program (which
+  disables the signature-only `arg`/`arg_count` and enables `app_global_*`).
 - `wasm_lsig_validate(code, code_len, err_buf, err_buf_len)`: `0` valid,
   `-1` invalid.
 

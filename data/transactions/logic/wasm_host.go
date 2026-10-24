@@ -42,6 +42,8 @@ import (
 	"fmt"
 	"runtime/cgo"
 	"unsafe"
+
+	"github.com/algorand/go-algorand/data/basics"
 )
 
 // goWasmTxnField answers a `txn` (or `txna`) field read from a WASM guest. It
@@ -180,4 +182,159 @@ func writeWasmErr(errBuf *C.uint8_t, errCap C.size_t, msg string) {
 		n = len(dst) - 1
 	}
 	dst[n] = 0
+}
+
+// goWasmGlobalGet answers a global-state read from a WASM guest. It is called by
+// the Rust executor through C while the guest runs, and must not let a panic
+// cross the FFI boundary.
+//
+// It reports the value in buf (up to bufCap): a uint is 8 little-endian bytes,
+// a byte string is copied verbatim. outLen receives the value's length,
+// outIsBytes whether it is a byte string (0 = uint), and outExists whether the
+// key exists (0/1). It returns 0 on success, -1 on error (with a message in
+// errBuf), or -2 when buf is too small (outLen still receives the required
+// length).
+//
+// The read goes through the same ledger accessor the AVM's global state opcodes
+// use, so the two paths cannot disagree.
+//
+//export goWasmGlobalGet
+func goWasmGlobalGet(ctx C.uintptr_t, keyPtr *C.uint8_t, keyLen C.size_t,
+	buf *C.uint8_t, bufCap C.size_t, outLen *C.size_t, outIsBytes *C.uint8_t,
+	outExists *C.uint8_t, errBuf *C.uint8_t, errCap C.size_t) (ret C.int32_t) {
+	defer func() {
+		if r := recover(); r != nil {
+			writeWasmErr(errBuf, errCap, fmt.Sprintf("panic reading global state: %v", r))
+			ret = -1
+		}
+	}()
+
+	cx := cgo.Handle(ctx).Value().(*EvalContext)
+	key := string(wasmCBytes(keyPtr, keyLen))
+
+	tv, ok, err := cx.Ledger.GetGlobal(cx.appID, key)
+	if err != nil {
+		writeWasmErr(errBuf, errCap, err.Error())
+		return -1
+	}
+	if outExists != nil {
+		if ok {
+			*outExists = 1
+		} else {
+			*outExists = 0
+		}
+	}
+	if !ok {
+		if outIsBytes != nil {
+			*outIsBytes = 0
+		}
+		if outLen != nil {
+			*outLen = 0
+		}
+		return 0
+	}
+
+	if tv.Type == basics.TealBytesType {
+		if outIsBytes != nil {
+			*outIsBytes = 1
+		}
+		n := len(tv.Bytes)
+		if outLen != nil {
+			*outLen = C.size_t(n)
+		}
+		if C.size_t(n) > bufCap {
+			return -2
+		}
+		if n > 0 {
+			copy(unsafe.Slice((*byte)(unsafe.Pointer(buf)), int(bufCap)), tv.Bytes)
+		}
+		return 0
+	}
+
+	// A uint value, encoded as 8 little-endian bytes.
+	if outIsBytes != nil {
+		*outIsBytes = 0
+	}
+	if outLen != nil {
+		*outLen = 8
+	}
+	if bufCap < 8 {
+		return -2
+	}
+	var tmp [8]byte
+	binary.LittleEndian.PutUint64(tmp[:], tv.Uint)
+	copy(unsafe.Slice((*byte)(unsafe.Pointer(buf)), int(bufCap)), tmp[:])
+	return 0
+}
+
+// goWasmGlobalPut answers a global-state write from a WASM guest. It is called
+// by the Rust executor through C while the guest runs, and must not let a panic
+// cross the FFI boundary.
+//
+// valIsUint non-zero means the value is a uint, encoded as 8 little-endian
+// bytes in val; otherwise val is a byte string. It returns 0 on success and -1
+// on error (with a message in errBuf).
+//
+// The write goes through the same helper the AVM's app_global_put opcode uses,
+// so the two paths cannot disagree.
+//
+//export goWasmGlobalPut
+func goWasmGlobalPut(ctx C.uintptr_t, keyPtr *C.uint8_t, keyLen C.size_t,
+	valPtr *C.uint8_t, valLen C.size_t, valIsUint C.uint32_t,
+	errBuf *C.uint8_t, errCap C.size_t) (ret C.int32_t) {
+	defer func() {
+		if r := recover(); r != nil {
+			writeWasmErr(errBuf, errCap, fmt.Sprintf("panic writing global state: %v", r))
+			ret = -1
+		}
+	}()
+
+	cx := cgo.Handle(ctx).Value().(*EvalContext)
+	key := string(wasmCBytes(keyPtr, keyLen))
+
+	var tv basics.TealValue
+	if valIsUint != 0 {
+		if valLen != 8 {
+			writeWasmErr(errBuf, errCap, fmt.Sprintf("uint global value had %d bytes, expected 8", valLen))
+			return -1
+		}
+		var raw [8]byte
+		copy(raw[:], wasmCBytes(valPtr, valLen))
+		tv = basics.TealValue{Type: basics.TealUintType, Uint: binary.LittleEndian.Uint64(raw[:])}
+	} else {
+		tv = basics.TealValue{Type: basics.TealBytesType, Bytes: string(wasmCBytes(valPtr, valLen))}
+	}
+
+	if err := cx.putAppGlobalValue(key, tv); err != nil {
+		writeWasmErr(errBuf, errCap, err.Error())
+		return -1
+	}
+	return 0
+}
+
+// goWasmGlobalDel answers a global-state delete from a WASM guest. It is called
+// by the Rust executor through C while the guest runs, and must not let a panic
+// cross the FFI boundary.
+//
+// It returns 0 on success and -1 on error (with a message in errBuf). The
+// delete goes through the same helper the AVM's app_global_del opcode uses.
+//
+//export goWasmGlobalDel
+func goWasmGlobalDel(ctx C.uintptr_t, keyPtr *C.uint8_t, keyLen C.size_t,
+	errBuf *C.uint8_t, errCap C.size_t) (ret C.int32_t) {
+	defer func() {
+		if r := recover(); r != nil {
+			writeWasmErr(errBuf, errCap, fmt.Sprintf("panic deleting global state: %v", r))
+			ret = -1
+		}
+	}()
+
+	cx := cgo.Handle(ctx).Value().(*EvalContext)
+	key := string(wasmCBytes(keyPtr, keyLen))
+
+	if err := cx.delAppGlobalValue(key); err != nil {
+		writeWasmErr(errBuf, errCap, err.Error())
+		return -1
+	}
+	return 0
 }

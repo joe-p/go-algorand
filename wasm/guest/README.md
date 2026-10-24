@@ -22,12 +22,18 @@ This is a separate Cargo workspace from the host executor so `make wasmlib`
   | `txn_bytes(field, out, len) -> i32` | `txn_bytes(TxnField, &mut [u8]) -> Result<usize, TxnError>` |
   | `txna_uint(field, index) -> i64` | `txna_uint(TxnField, u32) -> i64` |
   | `txna_bytes(field, index, out, len) -> i32` | `txna_bytes(TxnField, u32, &mut [u8]) -> Result<usize, TxnError>` |
+  | `app_global_get_uint(key, key_len) -> i64` | `app_global_get_uint(&[u8]) -> u64` |
+  | `app_global_get_bytes(key, key_len, out, len) -> i32` | `app_global_get_bytes(&[u8], &mut [u8]) -> Result<&[u8], TxnError>` |
+  | `app_global_put_uint(key, key_len, value)` | `app_global_put_uint(&[u8], u64)` |
+  | `app_global_put_bytes(key, key_len, val, val_len)` | `app_global_put_bytes(&[u8], &[u8])` |
+  | `app_global_del(key, key_len)` | `app_global_del(&[u8])` |
   | `ed25519verify_bare(...) -> i32` | `ed25519_verify_bare(&[u8], &[u8; 64], &[u8; 32]) -> bool` |
 
   `arg`/`arg_count` are signature-only, as in the AVM: they trap in an
   application program. An application reads its arguments with
   `txna_bytes(TxnField::ApplicationArgs, i, buf)` (or the `app_args_count` /
-  `app_arg_into` helpers).
+  `app_arg_into` helpers). The `app_global_*` functions are application-only and
+  trap in a LogicSig.
 
   Cases the host *traps* on (an invalid transaction field, an oversized value)
   are not `Result`; a trap ends the guest, as in the AVM.

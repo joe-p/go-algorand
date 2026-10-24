@@ -4969,9 +4969,21 @@ func opAppGlobalPut(cx *EvalContext) error {
 	last := len(cx.Stack) - 1 // value
 	prev := last - 1          // state key
 
-	sv := cx.Stack[last]
-	key := string(cx.Stack[prev].Bytes)
+	err := cx.putAppGlobalValue(string(cx.Stack[prev].Bytes), cx.Stack[last].ToTealValue())
+	if err != nil {
+		return err
+	}
 
+	cx.Stack = cx.Stack[:prev]
+	return nil
+}
+
+// putAppGlobalValue writes tv to key in the current app's global state. It
+// enforces the key and value length limits, records the same EvalDelta entry
+// (skipping a write of the identical value), and performs the same ledger
+// write as the app_global_put opcode. It is shared by that opcode and the WASM
+// host so the two paths cannot disagree.
+func (cx *EvalContext) putAppGlobalValue(key string, tv basics.TealValue) error {
 	// Enforce maximum key length. Currently this is the same as enforced by
 	// ledger. If it were ever to change in proto, we would need to isolate
 	// changes to different program versions. (so a v6 app could not see a
@@ -4986,7 +4998,6 @@ func opAppGlobalPut(cx *EvalContext) error {
 	if err != nil {
 		return err
 	}
-	tv := sv.ToTealValue()
 	if !ok || tv != etv {
 		cx.txn.EvalDelta.GlobalDelta[key] = tv.ToValueDelta()
 	}
@@ -5001,13 +5012,7 @@ func opAppGlobalPut(cx *EvalContext) error {
 		}
 	}
 
-	err = cx.Ledger.SetGlobal(cx.appID, key, tv)
-	if err != nil {
-		return err
-	}
-
-	cx.Stack = cx.Stack[:prev]
-	return nil
+	return cx.Ledger.SetGlobal(cx.appID, key, tv)
 }
 
 func opAppLocalDel(cx *EvalContext) error {
@@ -5052,8 +5057,19 @@ func opAppLocalDel(cx *EvalContext) error {
 func opAppGlobalDel(cx *EvalContext) error {
 	last := len(cx.Stack) - 1 // key
 
-	key := string(cx.Stack[last].Bytes)
+	err := cx.delAppGlobalValue(string(cx.Stack[last].Bytes))
+	if err != nil {
+		return err
+	}
 
+	cx.Stack = cx.Stack[:last]
+	return nil
+}
+
+// delAppGlobalValue deletes key from the current app's global state, recording
+// the same EvalDelta entry as the app_global_del opcode. It is shared by that
+// opcode and the WASM host so the two paths cannot disagree.
+func (cx *EvalContext) delAppGlobalValue(key string) error {
 	// if deleting a non-existent value, don't record in EvalDelta, matching
 	// ledger behavior with previous BuildEvalDelta mechanism
 	if _, ok, err := cx.Ledger.GetGlobal(cx.appID, key); ok {
@@ -5065,12 +5081,7 @@ func opAppGlobalDel(cx *EvalContext) error {
 		}
 	}
 
-	err := cx.Ledger.DelGlobal(cx.appID, key)
-	if err != nil {
-		return err
-	}
-	cx.Stack = cx.Stack[:last]
-	return nil
+	return cx.Ledger.DelGlobal(cx.appID, key)
 }
 
 // We have a difficult naming problem here. Some opcodes allow (and used to

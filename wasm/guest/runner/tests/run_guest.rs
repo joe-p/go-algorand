@@ -96,6 +96,9 @@ fn run(args: &[&[u8]]) -> (i32, String) {
             err.len(),
             None,
             Some(verify_stub),
+            None,
+            None,
+            None,
             0,
             // is_app = 0: the fixture runs as a LogicSig.
             0,

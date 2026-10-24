@@ -26,17 +26,20 @@ Done in the plumbing cut:
       `ExtraProgramPages`); no new size parameters.
 - [x] Treat a WASM app program as the protocol's maximum AVM version in inner
       app-call checks, so an AVM app can create or call a WASM app.
+- [x] Global application state: typed per-op host functions
+      (`app_global_get_uint`, `app_global_get_bytes`, `app_global_put_uint`,
+      `app_global_put_bytes`, `app_global_del`) that share the AVM's ledger
+      accessors and limits, plus host-side fuel equal to the AVM opcode cost.
 - [x] Guest SDK bindings and helpers (`txna_uint`, `txna_bytes`,
-      `app_args_count`, `app_arg_into`).
+      `app_args_count`, `app_arg_into`, `app_global_*`).
 
 Still to do:
 
-- [ ] Expose the stateful opcode surface to WASM apps (typed per-op host
-      functions for `app_global_*`/`app_local_*`, boxes, `log`, inner
-      transactions, foreign access, scratch), wired to shared Go primitives so
-      AVM and WASM can't disagree. Until then a WASM app cannot be stateful.
+- [ ] Extend the stateful surface beyond global state: local state
+      (`app_local_*`), boxes, `log`, inner transactions, foreign access, and
+      scratch, wired to shared Go primitives so AVM and WASM can't disagree.
 - [ ] Emit tracer hooks (`BeforeProgram`/`AfterProgram`) for the WASM app path
-      so `simulate` produces traces.
+      so `simulate` produces traces (and state-change explanations).
 - [ ] Decide the release path for `EnableWasmApp` (which numbered version).
 - [ ] Confirm `WellSizedPrograms` page accounting is the right cap for WASM app
       modules, or add a WASM-specific app program size limit.

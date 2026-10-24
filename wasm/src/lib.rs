@@ -123,6 +123,16 @@ const TXN_FUEL_COST: u64 = 1;
 /// in the Go opcode table (`costly(1900)` for `ed25519verify_bare`).
 const ED25519_VERIFY_BARE_FUEL_COST: u64 = 1900;
 
+// Error sentinels returned by the global-state byte-string read. Invalid
+// operations (a wrong-typed value) trap the guest instead.
+const GLOBAL_ERR_BUFFER: i32 = -2;
+const GLOBAL_ERR_MEMORY: i32 = -3;
+
+/// Fuel charged per global-state host invocation. Must match the AVM opcode cost
+/// in the Go opcode table: `app_global_get`, `app_global_put`, and
+/// `app_global_del` are all `only(ModeApp)`, whose default cost is 1.
+const GLOBAL_FUEL_COST: u64 = 1;
+
 /// A transaction field provider, implemented in Go. `ctx` is an opaque handle
 /// that Go maps back to the evaluation context; Rust never dereferences it.
 ///
@@ -162,6 +172,45 @@ type Ed25519VerifyCb = unsafe extern "C" fn(
     err_cap: usize,
 ) -> i32;
 
+/// A global-state provider, implemented in Go. `ctx` is the opaque evaluation
+/// context handle. `key` is the state key. The callback writes the value into
+/// `buf` (up to `buf_cap`): a uint is 8 little-endian bytes, a byte string is
+/// copied verbatim. It reports the value's length in `out_len`, whether it is a
+/// byte string in `out_is_bytes` (0 = uint), and whether the key exists in
+/// `out_exists`. It returns `0` on success, `-1` on error, and `-2` when `buf`
+/// is too small (the required length is still written to `out_len`).
+type GlobalGetCb = unsafe extern "C" fn(
+    ctx: usize,
+    key: *const u8,
+    key_len: usize,
+    buf: *mut u8,
+    buf_cap: usize,
+    out_len: *mut usize,
+    out_is_bytes: *mut u8,
+    out_exists: *mut u8,
+    err: *mut u8,
+    err_cap: usize,
+) -> i32;
+
+/// A global-state writer, implemented in Go. `val_is_uint` non-zero selects a
+/// uint value (8 little-endian bytes in `val`); otherwise `val` is a byte
+/// string. It returns `0` on success and `-1` on error.
+type GlobalPutCb = unsafe extern "C" fn(
+    ctx: usize,
+    key: *const u8,
+    key_len: usize,
+    val: *const u8,
+    val_len: usize,
+    val_is_uint: u32,
+    err: *mut u8,
+    err_cap: usize,
+) -> i32;
+
+/// A global-state deleter, implemented in Go. It returns `0` on success and `-1`
+/// on error.
+type GlobalDelCb =
+    unsafe extern "C" fn(ctx: usize, key: *const u8, key_len: usize, err: *mut u8, err_cap: usize) -> i32;
+
 /// A single LogicSig argument passed across the C ABI as a pointer/length pair.
 #[repr(C)]
 pub struct WasmLsigArg {
@@ -180,6 +229,12 @@ struct HostCallbacks {
     /// Provider for `ed25519verify_bare`. `None` in tests, or if a guest is run
     /// without a host.
     ed25519_verify_bare: Option<Ed25519VerifyCb>,
+    /// Provider for global-state reads.
+    global_get: Option<GlobalGetCb>,
+    /// Provider for global-state writes.
+    global_put: Option<GlobalPutCb>,
+    /// Provider for global-state deletes.
+    global_del: Option<GlobalDelCb>,
     /// Opaque handle passed back to `txn_field`.
     ctx: usize,
     /// Whether the guest is an application program rather than a LogicSig. In
@@ -462,6 +517,247 @@ fn read_guest_bytes(
     Ok(buf)
 }
 
+/// Charges `cost` fuel before host work, trapping if there is not enough.
+fn charge_fuel(caller: &mut Caller<'_, HostState>, cost: u64) -> Result<(), wasmi::Error> {
+    let remaining = caller.get_fuel()?;
+    let remaining = remaining
+        .checked_sub(cost)
+        .ok_or_else(|| wasmi::Error::from(TrapCode::OutOfFuel))?;
+    caller.set_fuel(remaining)
+}
+
+/// Rejects global-state access outside application mode, mirroring the AVM's
+/// `only(ModeApp)` restriction.
+fn require_app(caller: &Caller<'_, HostState>) -> Result<(), wasmi::Error> {
+    if caller.data().host.is_app {
+        Ok(())
+    } else {
+        Err(wasmi::Error::new(
+            "global state is not available in signature mode",
+        ))
+    }
+}
+
+/// Calls the host's global-state reader, returning `(exists, len, is_bytes)`.
+/// `buf` receives the value (a uint as 8 little-endian bytes, or a byte string).
+fn host_global_get(
+    caller: &mut Caller<'_, HostState>,
+    key: &[u8],
+    buf: &mut [u8],
+) -> Result<(bool, usize, bool), wasmi::Error> {
+    let cb = caller.data().host.global_get;
+    let ctx = caller.data().host.ctx;
+    let Some(cb) = cb else {
+        return Err(wasmi::Error::new(
+            "global state host functions are not available in this build",
+        ));
+    };
+    let mut err = [0u8; ERR_BUF_LEN];
+    let mut out_len = 0usize;
+    let mut out_is_bytes = 0u8;
+    let mut out_exists = 0u8;
+    let ret = unsafe {
+        cb(
+            ctx,
+            key.as_ptr(),
+            key.len(),
+            buf.as_mut_ptr(),
+            buf.len(),
+            &mut out_len,
+            &mut out_is_bytes,
+            &mut out_exists,
+            err.as_mut_ptr(),
+            err.len(),
+        )
+    };
+    if ret != 0 && ret != GLOBAL_ERR_BUFFER {
+        return Err(wasmi::Error::new(format!(
+            "global state read error: {}",
+            cstr(&err)
+        )));
+    }
+    if out_is_bytes != 0 && out_len > MAX_AVM_BYTES {
+        return Err(wasmi::Error::new(
+            "global state byte value exceeds AVM size limit",
+        ));
+    }
+    Ok((out_exists != 0, out_len, out_is_bytes != 0))
+}
+
+/// Implements the AVM's `app_global_get` for a uint value. A missing key reads
+/// as 0; a stored byte-string value traps the guest.
+fn app_global_get_uint(
+    mut caller: Caller<'_, HostState>,
+    key_ptr: i32,
+    key_len: i32,
+) -> Result<i64, wasmi::Error> {
+    require_app(&caller)?;
+    charge_fuel(&mut caller, GLOBAL_FUEL_COST)?;
+    let key = read_guest_bytes(&mut caller, key_ptr, key_len)?;
+    let mut buf = [0u8; 8];
+    let (exists, len, is_bytes) = host_global_get(&mut caller, &key, &mut buf)?;
+    if !exists {
+        return Ok(0);
+    }
+    if is_bytes {
+        return Err(wasmi::Error::new(
+            "global state value is a byte string, not a uint",
+        ));
+    }
+    if len != 8 {
+        return Err(wasmi::Error::new(format!(
+            "uint global state value had {len} bytes"
+        )));
+    }
+    Ok(i64::from_le_bytes(buf))
+}
+
+/// Implements the AVM's `app_global_get` for a byte-string value. A missing key
+/// reads as an empty (length 0) value; a stored uint value traps the guest.
+fn app_global_get_bytes(
+    mut caller: Caller<'_, HostState>,
+    key_ptr: i32,
+    key_len: i32,
+    out_ptr: i32,
+    out_len: i32,
+) -> Result<i32, wasmi::Error> {
+    require_app(&caller)?;
+    charge_fuel(&mut caller, GLOBAL_FUEL_COST)?;
+    let key = read_guest_bytes(&mut caller, key_ptr, key_len)?;
+    let mut buf = [0u8; MAX_AVM_BYTES];
+    // Length queries don't fetch or copy the value payload.
+    let capacity = if out_len <= 0 {
+        0
+    } else {
+        (out_len as usize).min(buf.len())
+    };
+    let (exists, len, is_bytes) = host_global_get(&mut caller, &key, &mut buf[..capacity])?;
+    if !exists {
+        return Ok(0);
+    }
+    if !is_bytes {
+        return Err(wasmi::Error::new(
+            "global state value is a uint, not a byte string",
+        ));
+    }
+    if out_len < 0 {
+        return Ok(GLOBAL_ERR_MEMORY);
+    }
+    // A zero-length buffer queries the required length without touching memory.
+    if out_len == 0 {
+        return Ok(len as i32);
+    }
+    if out_ptr < 0 {
+        return Ok(GLOBAL_ERR_MEMORY);
+    }
+    if len > out_len as usize {
+        return Ok(GLOBAL_ERR_BUFFER);
+    }
+
+    let memory: Option<wasmi::Memory> = caller.get_export("memory").and_then(|e| e.into_memory());
+    let Some(memory) = memory else {
+        return Ok(GLOBAL_ERR_MEMORY);
+    };
+    if memory
+        .write(&mut caller, out_ptr as usize, &buf[..len])
+        .is_err()
+    {
+        return Ok(GLOBAL_ERR_MEMORY);
+    }
+    Ok(len as i32)
+}
+
+/// Shared implementation of the global-state writes.
+fn host_global_put(
+    caller: &mut Caller<'_, HostState>,
+    key: &[u8],
+    val: &[u8],
+    is_uint: bool,
+) -> Result<(), wasmi::Error> {
+    let cb = caller.data().host.global_put;
+    let ctx = caller.data().host.ctx;
+    let Some(cb) = cb else {
+        return Err(wasmi::Error::new(
+            "global state host functions are not available in this build",
+        ));
+    };
+    let mut err = [0u8; ERR_BUF_LEN];
+    let ret = unsafe {
+        cb(
+            ctx,
+            key.as_ptr(),
+            key.len(),
+            val.as_ptr(),
+            val.len(),
+            is_uint as u32,
+            err.as_mut_ptr(),
+            err.len(),
+        )
+    };
+    if ret != 0 {
+        return Err(wasmi::Error::new(format!(
+            "global state write error: {}",
+            cstr(&err)
+        )));
+    }
+    Ok(())
+}
+
+/// Implements the AVM's `app_global_put` for a uint value.
+fn app_global_put_uint(
+    mut caller: Caller<'_, HostState>,
+    key_ptr: i32,
+    key_len: i32,
+    value: i64,
+) -> Result<(), wasmi::Error> {
+    require_app(&caller)?;
+    charge_fuel(&mut caller, GLOBAL_FUEL_COST)?;
+    let key = read_guest_bytes(&mut caller, key_ptr, key_len)?;
+    host_global_put(&mut caller, &key, &value.to_le_bytes(), true)
+}
+
+/// Implements the AVM's `app_global_put` for a byte-string value.
+fn app_global_put_bytes(
+    mut caller: Caller<'_, HostState>,
+    key_ptr: i32,
+    key_len: i32,
+    val_ptr: i32,
+    val_len: i32,
+) -> Result<(), wasmi::Error> {
+    require_app(&caller)?;
+    charge_fuel(&mut caller, GLOBAL_FUEL_COST)?;
+    let key = read_guest_bytes(&mut caller, key_ptr, key_len)?;
+    let val = read_guest_bytes(&mut caller, val_ptr, val_len)?;
+    host_global_put(&mut caller, &key, &val, false)
+}
+
+/// Implements the AVM's `app_global_del`.
+fn app_global_del(
+    mut caller: Caller<'_, HostState>,
+    key_ptr: i32,
+    key_len: i32,
+) -> Result<(), wasmi::Error> {
+    require_app(&caller)?;
+    charge_fuel(&mut caller, GLOBAL_FUEL_COST)?;
+    let key = read_guest_bytes(&mut caller, key_ptr, key_len)?;
+    let cb = caller.data().host.global_del;
+    let ctx = caller.data().host.ctx;
+    let Some(cb) = cb else {
+        return Err(wasmi::Error::new(
+            "global state host functions are not available in this build",
+        ));
+    };
+    let mut err = [0u8; ERR_BUF_LEN];
+    let ret = unsafe { cb(ctx, key.as_ptr(), key.len(), err.as_mut_ptr(), err.len()) };
+    if ret != 0 {
+        return Err(wasmi::Error::new(format!(
+            "global state delete error: {}",
+            cstr(&err)
+        )));
+    }
+    Ok(())
+}
+
 /// Implements the AVM's `ed25519verify_bare`. The three operands are copied out
 /// of guest memory and handed to Go, which performs the verification, so the
 /// opcode matches the AVM exactly.
@@ -579,6 +875,21 @@ fn instantiate(
         .func_wrap("env", "txna_bytes", txna_bytes)
         .map_err(|err| format!("could not link env.txna_bytes: {err}"))?;
     linker
+        .func_wrap("env", "app_global_get_uint", app_global_get_uint)
+        .map_err(|err| format!("could not link env.app_global_get_uint: {err}"))?;
+    linker
+        .func_wrap("env", "app_global_get_bytes", app_global_get_bytes)
+        .map_err(|err| format!("could not link env.app_global_get_bytes: {err}"))?;
+    linker
+        .func_wrap("env", "app_global_put_uint", app_global_put_uint)
+        .map_err(|err| format!("could not link env.app_global_put_uint: {err}"))?;
+    linker
+        .func_wrap("env", "app_global_put_bytes", app_global_put_bytes)
+        .map_err(|err| format!("could not link env.app_global_put_bytes: {err}"))?;
+    linker
+        .func_wrap("env", "app_global_del", app_global_del)
+        .map_err(|err| format!("could not link env.app_global_del: {err}"))?;
+    linker
         .func_wrap("env", "ed25519verify_bare", ed25519verify_bare)
         .map_err(|err| format!("could not link env.ed25519verify_bare: {err}"))?;
 
@@ -629,6 +940,21 @@ fn validate_inner(wasm: &[u8]) -> Result<(), String> {
                 "txn_bytes" => func_type_is(import.ty(), &[ValType::I32; 3], &[ValType::I32]),
                 "txna_uint" => func_type_is(import.ty(), &[ValType::I32; 2], &[ValType::I64]),
                 "txna_bytes" => func_type_is(import.ty(), &[ValType::I32; 4], &[ValType::I32]),
+                "app_global_get_uint" => {
+                    func_type_is(import.ty(), &[ValType::I32; 2], &[ValType::I64])
+                }
+                "app_global_get_bytes" => {
+                    func_type_is(import.ty(), &[ValType::I32; 4], &[ValType::I32])
+                }
+                "app_global_put_uint" => func_type_is(
+                    import.ty(),
+                    &[ValType::I32, ValType::I32, ValType::I64],
+                    &[],
+                ),
+                "app_global_put_bytes" => {
+                    func_type_is(import.ty(), &[ValType::I32; 4], &[])
+                }
+                "app_global_del" => func_type_is(import.ty(), &[ValType::I32; 2], &[]),
                 "ed25519verify_bare" => {
                     func_type_is(import.ty(), &[ValType::I32; 6], &[ValType::I32])
                 }
@@ -737,8 +1063,9 @@ unsafe fn args_from_raw(args: *const WasmLsigArg, args_len: usize) -> Result<Vec
 /// `err_buf`. `fuel_used` receives the fuel consumed and `args_read` receives
 /// `ARGS_READ_WORDS` words recording which arguments were read.
 ///
-/// `txn_cb`, if non-null, is the host's provider for `txn` field reads and
-/// `ed25519verify_bare_cb` its verifier; `ctx` is passed back to `txn_cb`
+/// `txn_cb`, if non-null, is the host's provider for `txn` field reads,
+/// `ed25519verify_bare_cb` its verifier, and `global_get_cb`/`global_put_cb`/
+/// `global_del_cb` its global-state accessors; `ctx` is passed back to them
 /// unchanged. `is_app` is non-zero for an application program, which disables
 /// the `arg`/`arg_count` host functions (they are signature-only, as in the
 /// AVM).
@@ -760,12 +1087,18 @@ pub unsafe extern "C" fn wasm_lsig_run(
     err_buf_len: usize,
     txn_cb: Option<TxnFieldCb>,
     ed25519verify_bare_cb: Option<Ed25519VerifyCb>,
+    global_get_cb: Option<GlobalGetCb>,
+    global_put_cb: Option<GlobalPutCb>,
+    global_del_cb: Option<GlobalDelCb>,
     ctx: usize,
     is_app: u32,
 ) -> i32 {
     let host = HostCallbacks {
         txn_field: txn_cb,
         ed25519_verify_bare: ed25519verify_bare_cb,
+        global_get: global_get_cb,
+        global_put: global_put_cb,
+        global_del: global_del_cb,
         ctx,
         is_app: is_app != 0,
     };
@@ -1623,5 +1956,177 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.contains("application mode"), "{err}");
+    }
+
+    // A stand-in for the Go global-state reader: key "k" is the uint 42, and any
+    // other key is absent.
+    unsafe extern "C" fn fake_global_get(
+        _ctx: usize,
+        key: *const u8,
+        key_len: usize,
+        buf: *mut u8,
+        buf_cap: usize,
+        out_len: *mut usize,
+        out_is_bytes: *mut u8,
+        out_exists: *mut u8,
+        _err: *mut u8,
+        _err_cap: usize,
+    ) -> i32 {
+        let key = std::slice::from_raw_parts(key, key_len);
+        if key == b"k" {
+            *out_is_bytes = 0;
+            *out_len = 8;
+            *out_exists = 1;
+            if buf_cap < 8 {
+                return -2;
+            }
+            std::ptr::copy_nonoverlapping(42u64.to_le_bytes().as_ptr(), buf, 8);
+        } else {
+            *out_is_bytes = 0;
+            *out_len = 0;
+            *out_exists = 0;
+        }
+        0
+    }
+
+    fn run_wat_with_global_get(wat: &str) -> Result<Outcome, String> {
+        let wasm = wat::parse_str(wat).expect("valid wat");
+        run_inner(
+            &wasm,
+            vec![],
+            1000,
+            HostCallbacks {
+                global_get: Some(fake_global_get),
+                is_app: true,
+                ..Default::default()
+            },
+        )
+    }
+
+    #[test]
+    fn global_get_uint_reads_value() {
+        let out = run_wat_with_global_get(
+            r#"
+            (module
+                (import "env" "app_global_get_uint" (func $get (param i32 i32) (result i64)))
+                (memory (export "memory") 1)
+                (data (i32.const 0) "k")
+                (func (export "program") (result i32)
+                    (i64.eq (call $get (i32.const 0) (i32.const 1)) (i64.const 42))))
+            "#,
+        )
+        .unwrap();
+        assert!(out.pass);
+    }
+
+    #[test]
+    fn global_get_uint_absent_is_zero() {
+        let out = run_wat_with_global_get(
+            r#"
+            (module
+                (import "env" "app_global_get_uint" (func $get (param i32 i32) (result i64)))
+                (memory (export "memory") 1)
+                (data (i32.const 0) "other")
+                (func (export "program") (result i32)
+                    (i64.eqz (call $get (i32.const 0) (i32.const 5)))))
+            "#,
+        )
+        .unwrap();
+        assert!(out.pass);
+    }
+
+    #[test]
+    fn global_state_traps_in_signature_mode() {
+        let wasm = wat::parse_str(
+            r#"
+            (module
+                (import "env" "app_global_get_uint" (func $get (param i32 i32) (result i64)))
+                (memory (export "memory") 1)
+                (data (i32.const 0) "k")
+                (func (export "program") (result i32)
+                    (i64.eqz (call $get (i32.const 0) (i32.const 1)))))
+            "#,
+        )
+        .unwrap();
+        let err = run_inner(&wasm, vec![], 1000, HostCallbacks::default()).unwrap_err();
+        assert!(err.contains("signature mode"), "{err}");
+    }
+
+    // A stand-in for the Go global-state writer: records `(val_is_uint, value)`.
+    unsafe extern "C" fn fake_global_put(
+        ctx: usize,
+        _key: *const u8,
+        _key_len: usize,
+        val: *const u8,
+        val_len: usize,
+        val_is_uint: u32,
+        _err: *mut u8,
+        _err_cap: usize,
+    ) -> i32 {
+        let rec = &mut *(ctx as *mut (u32, u64));
+        let bytes: [u8; 8] = std::slice::from_raw_parts(val, val_len).try_into().unwrap();
+        *rec = (val_is_uint, u64::from_le_bytes(bytes));
+        0
+    }
+
+    #[test]
+    fn global_put_uint_passes_value() {
+        let wasm = wat::parse_str(
+            r#"
+            (module
+                (import "env" "app_global_put_uint" (func $put (param i32 i32 i64)))
+                (memory (export "memory") 1)
+                (data (i32.const 0) "k")
+                (func (export "program") (result i32)
+                    (call $put (i32.const 0) (i32.const 1) (i64.const 7))
+                    (i32.const 1)))
+            "#,
+        )
+        .unwrap();
+        let mut rec = (0u32, 0u64);
+        let out = run_inner(
+            &wasm,
+            vec![],
+            1000,
+            HostCallbacks {
+                global_put: Some(fake_global_put),
+                ctx: (&mut rec as *mut (u32, u64)) as usize,
+                is_app: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(out.pass);
+        assert_eq!(rec, (1, 7));
+    }
+
+    #[test]
+    fn validation_accepts_global_state() {
+        let wasm = wat::parse_str(
+            r#"
+            (module
+                (import "env" "app_global_get_uint" (func (param i32 i32) (result i64)))
+                (import "env" "app_global_get_bytes" (func (param i32 i32 i32 i32) (result i32)))
+                (import "env" "app_global_put_uint" (func (param i32 i32 i64)))
+                (import "env" "app_global_put_bytes" (func (param i32 i32 i32 i32)))
+                (import "env" "app_global_del" (func (param i32 i32)))
+                (func (export "program") (result i32) i32.const 1))
+            "#,
+        )
+        .unwrap();
+        assert!(validate_inner(&wasm).is_ok());
+    }
+
+    #[test]
+    fn validation_rejects_bad_global_signature() {
+        let wasm = wat::parse_str(
+            r#"
+            (module
+                (import "env" "app_global_get_uint" (func (param i32) (result i64)))
+                (func (export "program") (result i32) i32.const 1))
+            "#,
+        )
+        .unwrap();
+        assert!(validate_inner(&wasm).is_err());
     }
 }

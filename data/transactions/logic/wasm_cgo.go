@@ -31,10 +31,14 @@ typedef struct {
 } WasmLsigArg;
 
 // wasm_txn_field_cb is implemented in Go (see wasm_host.go). Rust calls it to
-// fetch `txn` fields while the guest runs.
+// fetch `txn` fields while the guest runs. `index` selects the element for an
+// array field (`txna`), and `expect_array` says whether an array field is
+// expected.
 typedef int32_t (*wasm_txn_field_cb)(
 	uintptr_t ctx,
 	uint32_t field,
+	uint32_t index,
+	uint32_t expect_array,
 	uint8_t *buf,
 	size_t buf_cap,
 	size_t *out_len,
@@ -57,6 +61,8 @@ typedef int32_t (*wasm_ed25519verify_bare_cb)(
 extern int32_t goWasmTxnField(
 	uintptr_t ctx,
 	uint32_t field,
+	uint32_t index,
+	uint32_t expect_array,
 	uint8_t *buf,
 	size_t buf_cap,
 	size_t *out_len,
@@ -93,7 +99,8 @@ int32_t wasm_lsig_run(
 	uint8_t *err_buf, size_t err_buf_len,
 	wasm_txn_field_cb txn_cb,
 	wasm_ed25519verify_bare_cb ed25519verify_bare_cb,
-	uintptr_t ctx);
+	uintptr_t ctx,
+	uint32_t is_app);
 
 int32_t wasm_lsig_validate(
 	const uint8_t *code, size_t code_len,
@@ -125,7 +132,7 @@ func validateWasmProgram(program []byte) error {
 		C.size_t(len(errBuf)),
 	)
 	if ret != 0 {
-		return fmt.Errorf("invalid wasm LogicSig: %s", cString(errBuf))
+		return fmt.Errorf("invalid wasm program: %s", cString(errBuf))
 	}
 	return nil
 }
@@ -155,6 +162,11 @@ func runWasmProgram(program []byte, args [][]byte, fuel uint64, cx *EvalContext)
 	var fuelUsed C.uint64_t
 	var errBuf [wasmErrBufLen]byte
 
+	isApp := C.uint32_t(0)
+	if cx != nil && cx.runMode == ModeApp {
+		isApp = 1
+	}
+
 	ret := C.wasm_lsig_run(
 		(*C.uint8_t)(unsafe.Pointer(&program[0])),
 		C.size_t(len(program)),
@@ -168,6 +180,7 @@ func runWasmProgram(program []byte, args [][]byte, fuel uint64, cx *EvalContext)
 		C.get_wasm_txn_field_cb(),
 		C.get_wasm_ed25519verify_bare_cb(),
 		C.uintptr_t(handle),
+		isApp,
 	)
 
 	switch ret {
@@ -176,7 +189,7 @@ func runWasmProgram(program []byte, args [][]byte, fuel uint64, cx *EvalContext)
 	case 0:
 		return false, uint64(fuelUsed), accessed, nil
 	default:
-		return false, uint64(fuelUsed), accessed, fmt.Errorf("wasm LogicSig error: %s", cString(errBuf[:]))
+		return false, uint64(fuelUsed), accessed, fmt.Errorf("wasm program error: %s", cString(errBuf[:]))
 	}
 }
 

@@ -17,21 +17,15 @@
 package logic
 
 import (
-	"bytes"
-
 	"github.com/algorand/go-algorand/data/transactions"
 )
 
-// wasmMagic is the WebAssembly module magic number. A LogicSig whose Logic
-// begins with these bytes is a WASM program rather than an AVM/TEAL one. This
-// cannot collide with a valid AVM program: AVM bytecode begins with a uvarint
-// program version, so the first byte 0x00 would be version 0, and `a`, `s`, `m`
-// do not form a valid instruction stream.
-var wasmMagic = []byte{0x00, 0x61, 0x73, 0x6d}
-
-// IsWasmProgram reports whether program is a WASM LogicSig.
+// IsWasmProgram reports whether program is a WASM program (a LogicSig's Logic or
+// an application's approval/clear-state program). It is a thin wrapper over
+// transactions.IsWasmProgram, which lives in the transactions package so the
+// version checks there can recognize WASM without an import cycle.
 func IsWasmProgram(program []byte) bool {
-	return bytes.HasPrefix(program, wasmMagic)
+	return transactions.IsWasmProgram(program)
 }
 
 // argsReadWords is the number of uint64 words needed to record which LogicSig

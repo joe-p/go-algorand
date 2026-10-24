@@ -570,6 +570,27 @@ const syncProgramsVersion = 6
 // matched, and that they are not a downgrade.  If either program version is
 // >= proto.MinInnerApplVersion, downgrade of that program is not allowed.
 func CheckContractVersions(approval []byte, clear []byte, previous basics.AppParams, proto *config.ConsensusParams) error {
+	// WASM programs carry no AVM version byte, so the version rules below do not
+	// apply to them. They are recognized by the WASM magic number, and an app's
+	// programs must not change kind (AVM <-> WASM) over its life.
+	awasm := IsWasmProgram(approval)
+	cwasm := IsWasmProgram(clear)
+	if awasm || cwasm {
+		if !proto.EnableWasmApp {
+			return fmt.Errorf("WASM app programs are not enabled")
+		}
+		if awasm != cwasm {
+			return fmt.Errorf("ApprovalProgram and ClearStateProgram must both be WASM or both be AVM")
+		}
+		if len(previous.ApprovalProgram) != 0 || len(previous.ClearStateProgram) != 0 {
+			previousWasm := IsWasmProgram(previous.ApprovalProgram) || IsWasmProgram(previous.ClearStateProgram)
+			if previousWasm != awasm {
+				return fmt.Errorf("cannot change app program between WASM and AVM")
+			}
+		}
+		return nil
+	}
+
 	av, _, err := ProgramVersion(approval)
 	if err != nil {
 		return fmt.Errorf("bad ApprovalProgram: %v", err)

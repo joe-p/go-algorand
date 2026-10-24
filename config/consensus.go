@@ -644,6 +644,14 @@ type ConsensusParams struct {
 	// the LogicSig arguments.
 	EnableWasmLogicSig bool
 
+	// EnableWasmApp enables application approval and clear-state programs whose
+	// bytes are WebAssembly rather than AVM/TEAL bytecode. Such a program is
+	// recognized by the WASM magic number (`\0asm`), and is executed by the
+	// wasmi interpreter rather than the AVM. For now the guest program can only
+	// read transaction fields (including the application arguments) and the
+	// ed25519verify_bare opcode; it cannot yet read or write application state.
+	EnableWasmApp bool
+
 	// CloseRequiresBaseMinBalance allows an account to be closed only if its
 	// minimum balance requirement is exactly the base MinBalance. Before this,
 	// closing was guarded by checks of specific resource counters, which
@@ -1590,6 +1598,7 @@ func initConsensusProtocols() {
 	vFuture.EnablePQSchemeLogicSig = true
 
 	vFuture.EnableWasmLogicSig = true
+	vFuture.EnableWasmApp = true
 
 	Consensus[protocol.ConsensusFuture] = vFuture
 

@@ -19,12 +19,30 @@ package logic
 import (
 	"errors"
 
+	"github.com/algorand/go-algorand/data/basics"
 	"github.com/algorand/go-algorand/data/transactions"
 )
 
 // wasmEnabled reports whether the protocol runs WASM LogicSigs.
 func wasmEnabled(params *EvalParams) bool {
 	return params != nil && params.Proto != nil && params.Proto.EnableWasmLogicSig
+}
+
+// wasmAppEnabled reports whether the protocol runs WASM application programs.
+func wasmAppEnabled(params *EvalParams) bool {
+	return params != nil && params.Proto != nil && params.Proto.EnableWasmApp
+}
+
+// innerProgramVersion returns the effective AVM version to use in inner
+// app-call checks. A WASM program carries no AVM version byte, so it is treated
+// as the protocol's maximum AVM version, matching how WASM programs are gated on
+// the direct evaluation path. Otherwise it is the program's own version byte.
+func innerProgramVersion(cx *EvalContext, program []byte) (uint64, error) {
+	if wasmAppEnabled(cx.EvalParams) && IsWasmProgram(program) {
+		return cx.Proto.LogicSigVersion, nil
+	}
+	version, _, err := transactions.ProgramVersion(program)
+	return version, err
 }
 
 // checkWasmSignature statically checks a WASM LogicSig. It does not run it.
@@ -34,6 +52,21 @@ func checkWasmSignature(program []byte, params *EvalParams) error {
 	}
 	if !params.Proto.EnableWasmLogicSig {
 		return errors.New("WASM LogicSigs not enabled")
+	}
+	if err := validateWasmProgram(program); err != nil {
+		return err
+	}
+	return nil
+}
+
+// checkWasmContract statically checks a WASM application program. It does not
+// run it. It mirrors checkWasmSignature, but is gated on EnableWasmApp.
+func checkWasmContract(program []byte, params *EvalParams) error {
+	if params == nil || params.Proto == nil || params.Proto.LogicSigVersion == 0 {
+		return errLogicSigNotSupported
+	}
+	if !params.Proto.EnableWasmApp {
+		return errors.New("WASM app programs not enabled")
 	}
 	if err := validateWasmProgram(program); err != nil {
 		return err
@@ -67,16 +100,37 @@ func evalWasmSignatureProgram(program []byte, args [][]byte, gi int, params *Eva
 	return pass, &cx, err
 }
 
-// wasmEval runs program in cx, charging the fuel it consumes as AVM cost and
-// recording which arguments it read.
+// wasmEvalContract runs a WASM application program (approval or clear-state) in
+// cx. It sets up the same context state that eval() would for the AVM before
+// running: the version gates and the EvalDelta maps. It is called by
+// EvalContract in place of eval().
+func wasmEvalContract(program []byte, cx *EvalContext) (bool, error) {
+	// A WASM module has no AVM version byte. Use the protocol's maximum so the
+	// txn field version gates match what the AVM would allow.
+	cx.version = cx.Proto.LogicSigVersion
+	// eval() resets the delta maps at the start of every run. Mirror that so the
+	// app call leaves a consistent (empty) delta even though WASM cannot touch
+	// state yet.
+	cx.txn.EvalDelta.GlobalDelta = basics.StateDelta{}
+	cx.txn.EvalDelta.LocalDeltas = make(map[uint64]basics.StateDelta)
+
+	return wasmEval(cx, program)
+}
+
+// wasmEval runs program in cx, charging the fuel it consumes as AVM cost. In
+// signature mode it validates the LogicSig argument bounds and records which
+// arguments were read; in application mode the guest reads arguments through
+// `txna` instead, so those signature-only rules do not apply.
 func wasmEval(cx *EvalContext, program []byte) (bool, error) {
-	// The same argument bounds the AVM path enforces.
-	if len(cx.sigArgs) > transactions.EvalMaxArgs {
-		return false, errTooManyArgs
-	}
-	for _, arg := range cx.sigArgs {
-		if len(arg) > transactions.MaxLogicSigArgSize {
-			return false, errLogicSigArgTooLarge
+	if cx.runMode == ModeSig {
+		// The same argument bounds the AVM path enforces.
+		if len(cx.sigArgs) > transactions.EvalMaxArgs {
+			return false, errTooManyArgs
+		}
+		for _, arg := range cx.sigArgs {
+			if len(arg) > transactions.MaxLogicSigArgSize {
+				return false, errLogicSigArgTooLarge
+			}
 		}
 	}
 
@@ -95,13 +149,19 @@ func wasmEval(cx *EvalContext, program []byte) (bool, error) {
 		cost = budget
 	}
 	cx.cost += cost
-	if cx.PooledLogicSigBudget != nil {
+	// At most one of these pooled budgets is non-nil, matching the AVM's step().
+	switch {
+	case cx.PooledApplicationBudget != nil:
+		*cx.PooledApplicationBudget -= cost
+	case cx.PooledLogicSigBudget != nil:
 		*cx.PooledLogicSigBudget -= cost
 	}
 
-	for i, word := range accessed {
-		if i < len(cx.argsRead) {
-			cx.argsRead[i] = word
+	if cx.runMode == ModeSig {
+		for i, word := range accessed {
+			if i < len(cx.argsRead) {
+				cx.argsRead[i] = word
+			}
 		}
 	}
 

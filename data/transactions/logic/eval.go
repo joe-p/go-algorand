@@ -1359,7 +1359,13 @@ func EvalContract(program []byte, gi int, aid basics.AppIndex, params *EvalParam
 	if cx.Trace != nil && cx.caller != nil {
 		fmt.Fprintf(cx.Trace, "--- enter %d %s %v\n", aid, cx.txn.Txn.OnCompletion, cx.txn.Txn.ApplicationArgs)
 	}
-	pass, err := eval(program, &cx)
+	var pass bool
+	var err error
+	if wasmAppEnabled(params) && IsWasmProgram(program) {
+		pass, err = wasmEvalContract(program, &cx)
+	} else {
+		pass, err = eval(program, &cx)
+	}
 	if err != nil {
 		err = cx.evalError(err)
 	}
@@ -1548,6 +1554,9 @@ func eval(program []byte, cx *EvalContext) (pass bool, err error) {
 // these static checks include a cost estimate that must be low enough
 // (controlled by params.Proto).
 func CheckContract(program []byte, gi int, params *EvalParams) error {
+	if wasmAppEnabled(params) && IsWasmProgram(program) {
+		return checkWasmContract(program, params)
+	}
 	return check(program, &params.TxnGroup[gi], params, ModeApp)
 }
 
@@ -6058,7 +6067,7 @@ func opItxnSubmit(cx *EvalContext) (err error) {
 			}
 
 			// Can't call old versions in inner apps.
-			calledVersion, _, err = transactions.ProgramVersion(program)
+			calledVersion, err = innerProgramVersion(cx, program)
 			if err != nil {
 				return err
 			}
@@ -6079,7 +6088,7 @@ func opItxnSubmit(cx *EvalContext) (err error) {
 					}
 					csp = app.ClearStateProgram
 				}
-				csv, _, verErr := transactions.ProgramVersion(csp)
+				csv, verErr := innerProgramVersion(cx, csp)
 				if verErr != nil {
 					return verErr
 				}

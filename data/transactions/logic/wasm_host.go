@@ -26,6 +26,8 @@ package logic
 extern int32_t goWasmTxnField(
 	uintptr_t ctx,
 	uint32_t field,
+	uint32_t index,
+	uint32_t expect_array,
 	uint8_t *buf,
 	size_t buf_cap,
 	size_t *out_len,
@@ -42,21 +44,25 @@ import (
 	"unsafe"
 )
 
-// goWasmTxnField answers a `txn` field read from a WASM guest. It is called by
-// the Rust executor through C while the guest runs, and must not let a panic
-// cross the FFI boundary.
+// goWasmTxnField answers a `txn` (or `txna`) field read from a WASM guest. It
+// is called by the Rust executor through C while the guest runs, and must not
+// let a panic cross the FFI boundary.
 //
 // It writes the field's bytes into buf (up to buf_cap), reports the required
 // length in out_len and whether the field is a byte string in is_bytes (0 =
 // uint, non-zero = bytes), and returns 0 on success, -1 on error (with a
 // message in err_buf), or -2 when buf is too small.
 //
+// field selects the field; index selects the element for an array field and is
+// meaningful only when expectArray is non-zero.
+//
 // Field selection and semantics are delegated to opTxnImpl, so the wasm and AVM
-// code paths cannot disagree about what a `txn` field is.
+// code paths cannot disagree about what a `txn`/`txna` field is.
 //
 //export goWasmTxnField
-func goWasmTxnField(ctx C.uintptr_t, field C.uint32_t, buf *C.uint8_t, bufCap C.size_t,
-	outLen *C.size_t, isBytes *C.uint8_t, errBuf *C.uint8_t, errCap C.size_t) (ret C.int32_t) {
+func goWasmTxnField(ctx C.uintptr_t, field C.uint32_t, index C.uint32_t, expectArray C.uint32_t,
+	buf *C.uint8_t, bufCap C.size_t, outLen *C.size_t, isBytes *C.uint8_t,
+	errBuf *C.uint8_t, errCap C.size_t) (ret C.int32_t) {
 	defer func() {
 		if r := recover(); r != nil {
 			writeWasmErr(errBuf, errCap, fmt.Sprintf("panic reading txn field: %v", r))
@@ -66,7 +72,7 @@ func goWasmTxnField(ctx C.uintptr_t, field C.uint32_t, buf *C.uint8_t, bufCap C.
 
 	cx := cgo.Handle(ctx).Value().(*EvalContext)
 
-	sv, err := cx.opTxnImpl(uint64(cx.groupIndex), srcGroup, TxnField(field), 0, false)
+	sv, err := cx.opTxnImpl(uint64(cx.groupIndex), srcGroup, TxnField(field), uint64(index), expectArray != 0)
 	if err != nil {
 		writeWasmErr(errBuf, errCap, err.Error())
 		return -1

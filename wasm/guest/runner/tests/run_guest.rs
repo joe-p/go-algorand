@@ -97,6 +97,8 @@ fn run(args: &[&[u8]]) -> (i32, String) {
             None,
             Some(verify_stub),
             0,
+            // is_app = 0: the fixture runs as a LogicSig.
+            0,
         )
     };
     let end = err.iter().position(|&b| b == 0).unwrap_or(err.len());

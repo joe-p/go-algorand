@@ -14,12 +14,14 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with go-algorand.  If not, see <https://www.gnu.org/licenses/>.
 
-//! Idiomatic, safe Rust bindings for the WASM LogicSig `env` host functions.
+//! Idiomatic, safe Rust bindings for the WASM `env` host functions.
 //!
-//! A WASM LogicSig is a WebAssembly module whose `Logic` bytes begin with the
-//! `\0asm` magic. The module must export `program`, and may import a small set
-//! of functions from the `env` module. This crate wraps those imports in typed,
-//! safe Rust so a guest never has to touch raw pointers or error sentinels.
+//! A WASM program is a WebAssembly module whose bytes begin with the `\0asm`
+//! magic. It can be a LogicSig's `Logic` or an application's approval /
+//! clear-state program. The module must export `program`, and may import a small
+//! set of functions from the `env` module. This crate wraps those imports in
+//! typed, safe Rust so a guest never has to touch raw pointers or error
+//! sentinels.
 //!
 //! The guest ABI (see `wasm/README.md`) is:
 //!
@@ -29,7 +31,15 @@
 //! | `arg(i, out, len) -> i32` | [`arg_into`] |
 //! | `txn_uint(field) -> i64` | [`txn_uint`] |
 //! | `txn_bytes(field, out, len) -> i32` | [`txn_bytes`] |
+//! | `txna_uint(field, index) -> i64` | [`txna_uint`] |
+//! | `txna_bytes(field, index, out, len) -> i32` | [`txna_bytes`] |
 //! | `ed25519verify_bare(d, dl, s, sl, p, pl) -> i32` | [`ed25519_verify_bare`] |
+//!
+//! `arg`/`arg_count` are signature-only, like the AVM's `arg` opcodes: they
+//! trap when the module runs as an application program. An application reads its
+//! arguments from the transaction instead, with [`txna_bytes`] and
+//! [`TxnField::ApplicationArgs`] (or the [`app_args_count`] / [`app_arg_into`]
+//! helpers).
 //!
 //! Some host functions *trap* rather than return an error (an invalid or
 //! out-of-version transaction field, an integer field read as bytes, or an
@@ -87,6 +97,8 @@ mod sys {
         pub fn arg(index: i32, out: i32, len: i32) -> i32;
         pub fn txn_uint(field: i32) -> i64;
         pub fn txn_bytes(field: i32, out: i32, len: i32) -> i32;
+        pub fn txna_uint(field: i32, index: i32) -> i64;
+        pub fn txna_bytes(field: i32, index: i32, out: i32, len: i32) -> i32;
         pub fn ed25519verify_bare(
             data: i32,
             data_len: i32,
@@ -125,6 +137,12 @@ mod sys {
     }
     pub unsafe fn txn_bytes(_field: i32, _out: i32, _len: i32) -> i32 {
         unavailable!("txn_bytes")
+    }
+    pub unsafe fn txna_uint(_field: i32, _index: i32) -> i64 {
+        unavailable!("txna_uint")
+    }
+    pub unsafe fn txna_bytes(_field: i32, _index: i32, _out: i32, _len: i32) -> i32 {
+        unavailable!("txna_bytes")
     }
     pub unsafe fn ed25519verify_bare(
         _data: i32,
@@ -187,12 +205,14 @@ impl core::fmt::Display for TxnError {
     }
 }
 
-/// A transaction field for [`txn_uint`] and [`txn_bytes`].
+/// A transaction field for [`txn_uint`], [`txn_bytes`], [`txna_uint`], and
+/// [`txna_bytes`].
 ///
 /// The discriminants match Go's `logic.TxnField` exactly; the host validates
 /// the field against the current protocol. All fields are listed so the enum
-/// stays in lockstep with Go, even though WASM LogicSigs currently support only
-/// the current transaction's non-array fields.
+/// stays in lockstep with Go. Reads are limited to the current transaction:
+/// array fields are read one element at a time with the `txna_*` functions, and
+/// `gtxn`/`gtxna`/`itxn` are not yet exposed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(i32)]
 #[allow(missing_docs)]
@@ -339,6 +359,67 @@ pub fn txn_bytes(field: TxnField, buf: &mut [u8]) -> Result<usize, TxnError> {
             _ => TxnError::Unknown,
         })
     }
+}
+
+/// Reads a uint64 array transaction field element, like the AVM's `txna`.
+///
+/// An invalid or out-of-version field, a field that is not an array field, an
+/// out-of-range index, or a byte-string element traps the guest.
+#[inline]
+pub fn txna_uint(field: TxnField, index: u32) -> i64 {
+    unsafe { sys::txna_uint(field as i32, index as i32) }
+}
+
+/// Reads a byte-string array transaction field element, like the AVM's `txna`.
+///
+/// Returns the element's length, which may exceed `buf.len()` if the buffer was
+/// too small; in that case nothing is written and callers can retry. Passing an
+/// empty `buf` returns the length without copying. An invalid or out-of-version
+/// field, a field that is not an array field, an out-of-range index, or an
+/// integer element traps the guest.
+#[inline]
+pub fn txna_bytes(field: TxnField, index: u32, buf: &mut [u8]) -> Result<usize, TxnError> {
+    let ret = unsafe {
+        sys::txna_bytes(
+            field as i32,
+            index as i32,
+            buf.as_mut_ptr() as usize as i32,
+            buf.len() as i32,
+        )
+    };
+    if ret >= 0 {
+        Ok(ret as usize)
+    } else {
+        Err(match ret {
+            TXN_ERR_BUFFER => TxnError::BufferTooSmall,
+            TXN_ERR_MEMORY => TxnError::Memory,
+            _ => TxnError::Unknown,
+        })
+    }
+}
+
+/// The number of application arguments, for an application program.
+///
+/// Equivalent to the AVM's `txn NumAppArgs`.
+#[inline]
+pub fn app_args_count() -> u32 {
+    txn_uint(TxnField::NumAppArgs) as u32
+}
+
+/// Copies application argument `index` into `buf`, returning the bytes written.
+///
+/// An application reads its arguments here: `arg`/`arg_into` are signature-only
+/// and trap in an application. The index is resolved by the host, so an
+/// out-of-range index traps the guest; check [`app_args_count`] first when the
+/// index is untrusted. If `buf` is too small the call returns
+/// [`TxnError::BufferTooSmall`] and nothing is written.
+#[inline]
+pub fn app_arg_into<'a>(index: u32, buf: &'a mut [u8]) -> Result<&'a [u8], TxnError> {
+    let len = txna_bytes(TxnField::ApplicationArgs, index, buf)?;
+    if len > buf.len() {
+        return Err(TxnError::BufferTooSmall);
+    }
+    Ok(&buf[..len])
 }
 
 /// Verifies an ed25519 signature, the AVM's `ed25519verify_bare`.

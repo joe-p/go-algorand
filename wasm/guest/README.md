@@ -1,8 +1,8 @@
-# WASM LogicSig guest SDK
+# WASM guest SDK
 
-Guest-side Rust crates for authoring WebAssembly LogicSigs. They are compiled to
-`wasm32-unknown-unknown`; the host executor that runs them is the sibling
-`wasmi` crate in `../` (see `../README.md`).
+Guest-side Rust crates for authoring WASM programs (LogicSigs and application
+programs). They are compiled to `wasm32-unknown-unknown`; the host executor that
+runs them is the sibling `wasmi` crate in `../` (see `../README.md`).
 
 This is a separate Cargo workspace from the host executor so `make wasmlib`
 (`cargo build --manifest-path wasm/Cargo.toml`) is unaffected.
@@ -20,7 +20,14 @@ This is a separate Cargo workspace from the host executor so `make wasmlib`
   | `arg(i, out, len) -> i32` | `arg_into(i, &mut [u8]) -> Result<&[u8], ArgError>` |
   | `txn_uint(field) -> i64` | `txn_uint(TxnField) -> i64` |
   | `txn_bytes(field, out, len) -> i32` | `txn_bytes(TxnField, &mut [u8]) -> Result<usize, TxnError>` |
+  | `txna_uint(field, index) -> i64` | `txna_uint(TxnField, u32) -> i64` |
+  | `txna_bytes(field, index, out, len) -> i32` | `txna_bytes(TxnField, u32, &mut [u8]) -> Result<usize, TxnError>` |
   | `ed25519verify_bare(...) -> i32` | `ed25519_verify_bare(&[u8], &[u8; 64], &[u8; 32]) -> bool` |
+
+  `arg`/`arg_count` are signature-only, as in the AVM: they trap in an
+  application program. An application reads its arguments with
+  `txna_bytes(TxnField::ApplicationArgs, i, buf)` (or the `app_args_count` /
+  `app_arg_into` helpers).
 
   Cases the host *traps* on (an invalid transaction field, an oversized value)
   are not `Result`; a trap ends the guest, as in the AVM.

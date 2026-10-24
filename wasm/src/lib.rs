@@ -126,14 +126,19 @@ const ED25519_VERIFY_BARE_FUEL_COST: u64 = 1900;
 /// A transaction field provider, implemented in Go. `ctx` is an opaque handle
 /// that Go maps back to the evaluation context; Rust never dereferences it.
 ///
-/// The callback writes the field's bytes into `buf` (up to `buf_cap`),
-/// reporting the required length in `out_len` and whether the field is a byte
-/// string in `is_bytes` (0 = uint, non-zero = bytes). It returns `0` on
-/// success, `-1` on error (a message is written to `err`), and `-2` when `buf`
-/// is too small (the required length is still written to `out_len`).
+/// `field` selects the field, `index` the element for an array field (ignored
+/// when `expect_array` is 0), and `expect_array` whether the field is expected
+/// to be an array field (`txna`-style) rather than a scalar one. The callback
+/// writes the field's bytes into `buf` (up to `buf_cap`), reporting the required
+/// length in `out_len` and whether the field is a byte string in `is_bytes`
+/// (0 = uint, non-zero = bytes). It returns `0` on success, `-1` on error (a
+/// message is written to `err`), and `-2` when `buf` is too small (the required
+/// length is still written to `out_len`).
 type TxnFieldCb = unsafe extern "C" fn(
     ctx: usize,
     field: u32,
+    index: u32,
+    expect_array: u32,
     buf: *mut u8,
     buf_cap: usize,
     out_len: *mut usize,
@@ -177,6 +182,10 @@ struct HostCallbacks {
     ed25519_verify_bare: Option<Ed25519VerifyCb>,
     /// Opaque handle passed back to `txn_field`.
     ctx: usize,
+    /// Whether the guest is an application program rather than a LogicSig. In
+    /// application mode the `arg`/`arg_count` host functions are unavailable,
+    /// matching the AVM, where the `arg` opcodes are signature-only.
+    is_app: bool,
 }
 
 /// Store-level state visible to host functions.
@@ -193,13 +202,26 @@ impl HostState {
     }
 }
 
-fn arg_count(caller: Caller<'_, HostState>) -> i32 {
-    caller.data().args.len() as i32
+fn arg_count(caller: Caller<'_, HostState>) -> Result<i32, wasmi::Error> {
+    if caller.data().host.is_app {
+        return Err(wasmi::Error::new(
+            "arg_count is not available in application mode",
+        ));
+    }
+    Ok(caller.data().args.len() as i32)
 }
 
-fn arg(mut caller: Caller<'_, HostState>, index: i32, out_ptr: i32, out_len: i32) -> i32 {
+fn arg(
+    mut caller: Caller<'_, HostState>,
+    index: i32,
+    out_ptr: i32,
+    out_len: i32,
+) -> Result<i32, wasmi::Error> {
+    if caller.data().host.is_app {
+        return Err(wasmi::Error::new("arg is not available in application mode"));
+    }
     if index < 0 {
-        return ARG_ERR_INDEX;
+        return Ok(ARG_ERR_INDEX);
     }
     let index = index as usize;
 
@@ -207,26 +229,26 @@ fn arg(mut caller: Caller<'_, HostState>, index: i32, out_ptr: i32, out_len: i32
     // need a mutable one to write into linear memory.
     let bytes = match caller.data().args.get(index) {
         Some(arg) => arg.clone(),
-        None => return ARG_ERR_INDEX,
+        None => return Ok(ARG_ERR_INDEX),
     };
 
     if out_len < 0 || bytes.len() > out_len as usize {
-        return ARG_ERR_BUFFER;
+        return Ok(ARG_ERR_BUFFER);
     }
     if out_ptr < 0 {
-        return ARG_ERR_MEMORY;
+        return Ok(ARG_ERR_MEMORY);
     }
 
     let memory: Option<wasmi::Memory> = caller.get_export("memory").and_then(|e| e.into_memory());
     let Some(memory) = memory else {
-        return ARG_ERR_MEMORY;
+        return Ok(ARG_ERR_MEMORY);
     };
     if memory.write(&mut caller, out_ptr as usize, &bytes).is_err() {
-        return ARG_ERR_MEMORY;
+        return Ok(ARG_ERR_MEMORY);
     }
 
     caller.data_mut().mark_read(index);
-    bytes.len() as i32
+    Ok(bytes.len() as i32)
 }
 
 /// Reads a NUL-terminated message from a fixed error buffer.
@@ -237,9 +259,13 @@ fn cstr(buf: &[u8]) -> String {
 
 /// Fetches a field once into a caller-owned buffer. A short buffer still
 /// reports the type and required length. Invalid or unavailable fields trap.
+/// `index` selects the element for an array field and is meaningful only when
+/// `expect_array` is true.
 fn fetch_txn_field(
     caller: &mut Caller<'_, HostState>,
     field: i32,
+    index: i32,
+    expect_array: bool,
     buf: &mut [u8],
 ) -> Result<(bool, usize), wasmi::Error> {
     // Charge before doing any host work, including validation and callbacks.
@@ -259,6 +285,12 @@ fn fetch_txn_field(
     if field < 0 {
         return Err(wasmi::Error::new(format!("invalid txn field {field}")));
     }
+    if expect_array && index < 0 {
+        return Err(wasmi::Error::new(format!(
+            "invalid txn array index {index}"
+        )));
+    }
+    let index = if index < 0 { 0 } else { index as u32 };
 
     let mut err = [0u8; ERR_BUF_LEN];
     let mut len = 0usize;
@@ -268,6 +300,8 @@ fn fetch_txn_field(
         cb(
             ctx,
             field as u32,
+            index,
+            expect_array as u32,
             buf.as_mut_ptr(),
             buf.len(),
             &mut len,
@@ -290,9 +324,16 @@ fn fetch_txn_field(
     Ok((is_bytes != 0, len))
 }
 
-fn txn_uint(mut caller: Caller<'_, HostState>, field: i32) -> Result<i64, wasmi::Error> {
+/// Shared implementation of the scalar (`txn`) and array (`txna`) uint field
+/// reads.
+fn read_txn_uint(
+    caller: &mut Caller<'_, HostState>,
+    field: i32,
+    index: i32,
+    expect_array: bool,
+) -> Result<i64, wasmi::Error> {
     let mut bytes = [0u8; 8];
-    let (is_bytes, len) = fetch_txn_field(&mut caller, field, &mut bytes)?;
+    let (is_bytes, len) = fetch_txn_field(caller, field, index, expect_array, &mut bytes)?;
     if is_bytes {
         return Err(wasmi::Error::new(format!(
             "txn field {field} is not a uint"
@@ -306,9 +347,25 @@ fn txn_uint(mut caller: Caller<'_, HostState>, field: i32) -> Result<i64, wasmi:
     Ok(i64::from_le_bytes(bytes))
 }
 
-fn txn_bytes(
+fn txn_uint(mut caller: Caller<'_, HostState>, field: i32) -> Result<i64, wasmi::Error> {
+    read_txn_uint(&mut caller, field, 0, false)
+}
+
+fn txna_uint(
     mut caller: Caller<'_, HostState>,
     field: i32,
+    index: i32,
+) -> Result<i64, wasmi::Error> {
+    read_txn_uint(&mut caller, field, index, true)
+}
+
+/// Shared implementation of the scalar (`txn`) and array (`txna`) byte-string
+/// field reads.
+fn read_txn_bytes(
+    mut caller: &mut Caller<'_, HostState>,
+    field: i32,
+    index: i32,
+    expect_array: bool,
     out_ptr: i32,
     out_len: i32,
 ) -> Result<i32, wasmi::Error> {
@@ -319,7 +376,8 @@ fn txn_bytes(
     } else {
         (out_len as usize).min(buf.len())
     };
-    let (is_bytes, len) = fetch_txn_field(&mut caller, field, &mut buf[..capacity])?;
+    let (is_bytes, len) =
+        fetch_txn_field(caller, field, index, expect_array, &mut buf[..capacity])?;
     if !is_bytes {
         return Err(wasmi::Error::new(format!(
             "txn field {field} is not a byte string"
@@ -350,6 +408,25 @@ fn txn_bytes(
         return Ok(TXN_ERR_MEMORY);
     }
     Ok(len as i32)
+}
+
+fn txn_bytes(
+    mut caller: Caller<'_, HostState>,
+    field: i32,
+    out_ptr: i32,
+    out_len: i32,
+) -> Result<i32, wasmi::Error> {
+    read_txn_bytes(&mut caller, field, 0, false, out_ptr, out_len)
+}
+
+fn txna_bytes(
+    mut caller: Caller<'_, HostState>,
+    field: i32,
+    index: i32,
+    out_ptr: i32,
+    out_len: i32,
+) -> Result<i32, wasmi::Error> {
+    read_txn_bytes(&mut caller, field, index, true, out_ptr, out_len)
 }
 
 /// Copies a byte range out of a guest's linear memory into a fresh buffer. The
@@ -496,6 +573,12 @@ fn instantiate(
         .func_wrap("env", "txn_bytes", txn_bytes)
         .map_err(|err| format!("could not link env.txn_bytes: {err}"))?;
     linker
+        .func_wrap("env", "txna_uint", txna_uint)
+        .map_err(|err| format!("could not link env.txna_uint: {err}"))?;
+    linker
+        .func_wrap("env", "txna_bytes", txna_bytes)
+        .map_err(|err| format!("could not link env.txna_bytes: {err}"))?;
+    linker
         .func_wrap("env", "ed25519verify_bare", ed25519verify_bare)
         .map_err(|err| format!("could not link env.ed25519verify_bare: {err}"))?;
 
@@ -530,7 +613,7 @@ fn func_type_is(ty: &ExternType, params: &[ValType], results: &[ValType]) -> boo
     }
 }
 
-/// Validates a WASM LogicSig's structure without executing it: the module must
+/// Validates a WASM program's structure without executing it: the module must
 /// import only the host functions available in `env`, and must export `program`
 /// with type `() -> i32`.
 fn validate_inner(wasm: &[u8]) -> Result<(), String> {
@@ -544,6 +627,8 @@ fn validate_inner(wasm: &[u8]) -> Result<(), String> {
                 "arg" => func_type_is(import.ty(), &[ValType::I32; 3], &[ValType::I32]),
                 "txn_uint" => func_type_is(import.ty(), &[ValType::I32], &[ValType::I64]),
                 "txn_bytes" => func_type_is(import.ty(), &[ValType::I32; 3], &[ValType::I32]),
+                "txna_uint" => func_type_is(import.ty(), &[ValType::I32; 2], &[ValType::I64]),
+                "txna_bytes" => func_type_is(import.ty(), &[ValType::I32; 4], &[ValType::I32]),
                 "ed25519verify_bare" => {
                     func_type_is(import.ty(), &[ValType::I32; 6], &[ValType::I32])
                 }
@@ -592,9 +677,9 @@ fn run_inner(
         Ok(value) => value != 0,
         Err(err) => {
             if err.as_trap_code() == Some(TrapCode::OutOfFuel) {
-                return Err("wasm LogicSig ran out of fuel".to_string());
+                return Err("wasm program ran out of fuel".to_string());
             }
-            return Err(format!("wasm LogicSig trapped: {err}"));
+            return Err(format!("wasm program trapped: {err}"));
         }
     };
 
@@ -654,7 +739,9 @@ unsafe fn args_from_raw(args: *const WasmLsigArg, args_len: usize) -> Result<Vec
 ///
 /// `txn_cb`, if non-null, is the host's provider for `txn` field reads and
 /// `ed25519verify_bare_cb` its verifier; `ctx` is passed back to `txn_cb`
-/// unchanged.
+/// unchanged. `is_app` is non-zero for an application program, which disables
+/// the `arg`/`arg_count` host functions (they are signature-only, as in the
+/// AVM).
 ///
 /// # Safety
 ///
@@ -674,11 +761,13 @@ pub unsafe extern "C" fn wasm_lsig_run(
     txn_cb: Option<TxnFieldCb>,
     ed25519verify_bare_cb: Option<Ed25519VerifyCb>,
     ctx: usize,
+    is_app: u32,
 ) -> i32 {
     let host = HostCallbacks {
         txn_field: txn_cb,
         ed25519_verify_bare: ed25519verify_bare_cb,
         ctx,
+        is_app: is_app != 0,
     };
     let result = catch_unwind(AssertUnwindSafe(|| {
         if code.is_null() && code_len != 0 {
@@ -773,6 +862,8 @@ mod tests {
     unsafe extern "C" fn fake_txn_field(
         ctx: usize,
         field: u32,
+        _index: u32,
+        _expect_array: u32,
         buf: *mut u8,
         buf_cap: usize,
         out_len: *mut usize,
@@ -1427,5 +1518,110 @@ mod tests {
         )
         .unwrap();
         assert!(validate_inner(&wasm).is_err());
+    }
+
+    #[test]
+    fn validation_accepts_txna() {
+        let wasm = wat::parse_str(
+            r#"
+            (module
+                (import "env" "txna_uint" (func (param i32 i32) (result i64)))
+                (import "env" "txna_bytes" (func (param i32 i32 i32 i32) (result i32)))
+                (func (export "program") (result i32) i32.const 1))
+            "#,
+        )
+        .unwrap();
+        assert!(validate_inner(&wasm).is_ok());
+    }
+
+    #[test]
+    fn validation_rejects_bad_txna_signature() {
+        let wasm = wat::parse_str(
+            r#"
+            (module
+                (import "env" "txna_uint" (func (param i32) (result i64)))
+                (func (export "program") (result i32) i32.const 1))
+            "#,
+        )
+        .unwrap();
+        assert!(validate_inner(&wasm).is_err());
+    }
+
+    #[test]
+    fn txna_bytes_passes_index_and_array_flag() {
+        // A callback that records the call's field/index/array flag and returns
+        // a four-byte value.
+        unsafe extern "C" fn cb(
+            ctx: usize,
+            field: u32,
+            index: u32,
+            expect_array: u32,
+            buf: *mut u8,
+            buf_cap: usize,
+            out_len: *mut usize,
+            is_bytes: *mut u8,
+            _err: *mut u8,
+            _err_cap: usize,
+        ) -> i32 {
+            let rec = &mut *(ctx as *mut (u32, u32, u32));
+            *rec = (field, index, expect_array);
+            *is_bytes = 1;
+            *out_len = 4;
+            if buf_cap < 4 {
+                return -2;
+            }
+            std::ptr::copy_nonoverlapping([9u8; 4].as_ptr(), buf, 4);
+            0
+        }
+
+        let wasm = wat::parse_str(
+            r#"
+            (module
+                (import "env" "txna_bytes" (func $txna (param i32 i32 i32 i32) (result i32)))
+                (memory (export "memory") 1)
+                (func (export "program") (result i32)
+                    (i32.eq (call $txna (i32.const 5) (i32.const 3) (i32.const 0) (i32.const 4))
+                            (i32.const 4))))
+            "#,
+        )
+        .unwrap();
+
+        let mut rec = (0u32, 0u32, 0u32);
+        let outcome = run_inner(
+            &wasm,
+            vec![],
+            1000,
+            HostCallbacks {
+                txn_field: Some(cb),
+                ctx: (&mut rec as *mut (u32, u32, u32)) as usize,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(outcome.pass);
+        assert_eq!(rec, (5, 3, 1));
+    }
+
+    #[test]
+    fn arg_is_unavailable_in_app_mode() {
+        let wasm = wat::parse_str(
+            r#"
+            (module
+                (import "env" "arg_count" (func $arg_count (result i32)))
+                (func (export "program") (result i32) (call $arg_count)))
+            "#,
+        )
+        .unwrap();
+        let err = run_inner(
+            &wasm,
+            vec![vec![1, 2, 3]],
+            1000,
+            HostCallbacks {
+                is_app: true,
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert!(err.contains("application mode"), "{err}");
     }
 }

@@ -3,7 +3,46 @@
 Status: an initial implementation is in place. WASM LogicSigs (recognized by the
 `\0asm` magic in `LogicSig.Logic`) run under wasmi with access to arguments only,
 gated by the `EnableWasmLogicSig` consensus parameter (currently set only in
-`vFuture`). This file tracks what is left.
+`vFuture`). A first cut of WASM **application** programs is also in place: a WASM
+module may be an app's approval or clear-state program (both must be the same
+kind), gated by `EnableWasmApp`, in `vFuture`. That cut is plumbing only — the
+guest reads transaction fields (including the application arguments via a
+`txna`-style accessor) and runs `ed25519verify_bare`, but cannot yet touch app
+state. This file tracks what is left.
+
+## WASM stateful apps (plumbing cut, in progress)
+
+Done in the plumbing cut:
+
+- [x] Recognize WASM app programs by the `\0asm` magic, dispatched from
+      `EvalContract`/`CheckContract` (`data/transactions/logic/eval.go`) and
+      gated by the new `EnableWasmApp` consensus parameter (`vFuture`).
+- [x] Reject mixed approval/clear-state kinds (both WASM or both AVM) and reject
+      changing an app between AVM and WASM, in `CheckContractVersions`.
+- [x] Read application arguments through a `txna`-style host accessor
+      (`txna_uint`/`txna_bytes`), matching the AVM, where `arg` is
+      signature-only. `arg`/`arg_count` now trap in application mode.
+- [x] Reuse the app page limits (`MaxAppProgramLen`, `MaxAppTotalProgramLen`,
+      `ExtraProgramPages`); no new size parameters.
+- [x] Treat a WASM app program as the protocol's maximum AVM version in inner
+      app-call checks, so an AVM app can create or call a WASM app.
+- [x] Guest SDK bindings and helpers (`txna_uint`, `txna_bytes`,
+      `app_args_count`, `app_arg_into`).
+
+Still to do:
+
+- [ ] Expose the stateful opcode surface to WASM apps (typed per-op host
+      functions for `app_global_*`/`app_local_*`, boxes, `log`, inner
+      transactions, foreign access, scratch), wired to shared Go primitives so
+      AVM and WASM can't disagree. Until then a WASM app cannot be stateful.
+- [ ] Emit tracer hooks (`BeforeProgram`/`AfterProgram`) for the WASM app path
+      so `simulate` produces traces.
+- [ ] Decide the release path for `EnableWasmApp` (which numbered version).
+- [ ] Confirm `WellSizedPrograms` page accounting is the right cap for WASM app
+      modules, or add a WASM-specific app program size limit.
+- [ ] e2e test creating and calling a WASM app through algod/goal (raw
+      `--approval-prog-raw`/`--clear-prog-raw` already accept the bytes).
+- [ ] Determinism and fuel-boundary tests for WASM apps.
 
 ## Consensus / protocol
 
@@ -59,7 +98,9 @@ gated by the `EnableWasmLogicSig` consensus parameter (currently set only in
 
 - [ ] Expose opcodes, transaction fields, and other data to guest programs via
       additional `env` host functions (design the ABI and add Go↔Rust callbacks
-      as needed; the args-only host was built to extend this way).
+      as needed; the args-only host was built to extend this way). Array
+      transaction-field reads (`txna_uint`/`txna_bytes`) are in place; `gtxn`,
+      `gtxna`, `itxn`, `global`, and the remaining crypto/state opcodes are not.
 - [ ] Add `goal`/clerk tooling to create, compile-to-WASM, and submit WASM
       LogicSigs, mirroring the existing TEAL lsig flow.
 - [x] Provide a small guest-authoring SDK / ABI doc and example contracts.

@@ -1,148 +1,23 @@
 # WASM program performance
 
-This file covers AVM-vs-wasmi comparisons:
+wasmi versus the AVM. The trade-off has two regimes, and these two tables are the
+point:
 
-- **LogicSigs** (below): a block of fibonacci TEAL LogicSigs against the same
-  under the wasmi executor.
-- **Host-call-bound applications**: a TEAL and a WASM application program that
-  each increment a uint64 global the same number of times (see "Stateful
-  application" below). Here the AVM stays ahead at every N.
-- **Compute-bound applications**: a TEAL and a WASM application program that
-  compute fib(N), which locates the wall-clock **crossover** where WASM
-  overtakes the AVM (see "Compute-bound crossover" below).
+- **Compute-bound**: wasmi runs guest instructions much faster than the AVM
+  interprets opcodes, so past a small loop count WASM wins outright.
+- **Host-call-bound**: each state/transaction host call crosses Rust→C→Go, so
+  WASM pays more per unit than the AVM and never catches up.
 
-The LogicSig benchmarks live in `ledger/lsigbench_test.go`; the application
-benchmarks live in `data/transactions/logic/wasm_app_bench_test.go`.
-
-## LogicSig fibonacci
-
-Benchmarks comparing the cost of executing a block of **fibonacci TEAL
-LogicSigs** against a block of **fibonacci WASM LogicSigs**. The WASM side runs
-under the wasmi executor added in this branch (see `wasm/` and
-`data/transactions/logic/wasm*.go`).
-
-The benchmarks live in `ledger/lsigbench_test.go`:
-
-- `BenchmarkBlockEvaluatorLsigs` — **execution only**: the block eval /
-  verification pass (`eval.Eval(validate=true)`), which is where the LogicSigs
-  actually run.
-- `BenchmarkBlockEvaluatorLsigsFull` — **in-memory validate + apply + commit**:
-  `Ledger.Validate` (executes
-  the LogicSigs and computes the state delta) followed by `AddValidatedBlock`
-  and a wait for the block to be committed to an in-memory database. It does not
-  measure durable disk persistence.
-
-## Setup
-
-- Both blocks contain 100 contract-account LogicSig payments. The sender is the
-  hash of the program, so each lsig is the sole authorization (no per-txn
-  ed25519 signature).
-- Both programs compute the same `fib(N)`, where `N` is read from LogicSig
-  argument 0 (4-byte big-endian). The TEAL program is assembled at test time;
-  the WASM program is the `fib.wasm` fixture.
-- `N` is the largest input that fits the shared `LogicSigMaxCost` budget
-  (20000) in **both** engines. wasmi spends more of the budget per iteration
-  than the AVM costs, so `N` is limited by WASM:
-
-  | | max N | budget used at N=1012 |
-  | --- | --- | --- |
-  | TEAL | 1332 | 15193 / 20000 (~76%) |
-  | WASM | 1012 | 19998 / 20000 (~100%) |
-
-- Fibonacci values are masked to 2^62 so the AVM `+` (which fails on uint64
-  overflow) cannot trap; `fib.wasm` applies the same mask.
-
-## Results
-
-Measured on linux/arm64 (8 cores), Go 1.25.3, with
-`go test ./ledger/ -run '^$' -bench '^BenchmarkBlockEvaluatorLsigs' -benchtime=2s -count=3`.
-
-| benchmark | teal-fib | wasm-fib | wasm speedup |
-| --- | --- | --- | --- |
-| execution only | ~6.38 ms/block (~63.8 µs/tx) | ~2.15 ms/block (~21.4 µs/tx) | ~3.0x |
-| in-memory validate + apply + commit | ~6.73 ms/block (~67.3 µs/tx) | ~2.46 ms/block (~24.6 µs/tx) | ~2.7x |
-
-The non-execution block work (state-delta apply, tracker notification, in-memory
-commit) adds only ~5–15% on top of execution for these blocks, so the wasm-vs-TEAL
-gap survives this in-memory processing path. This does not establish the speedup
-for a disk-backed node.
-
-Note this is a **wall-clock** comparison. On the metered axis, WASM is the more
-expensive engine: it burns more fuel per iteration and pays a fixed startup cost
-per lsig.
-
-## How to run
-
-```
-go test ./ledger/ -run '^$' -bench '^BenchmarkBlockEvaluatorLsigs' -benchtime=2s
-```
-
-Requires cgo and the prebuilt `wasm/target/release/libwasm_lsig.a`
-(`make wasmlib`).
-
-## Stateful application: global increment
-
-`BenchmarkAppGlobalLoop` (`data/transactions/logic/wasm_app_bench_test.go`)
-compares a TEAL and a WASM application program that each increment the same
-uint64 global `counter` N times, driven through `EvalContract` on the in-memory
-test ledger. It isolates engine execution (no block/ledger persistence).
-
-- The TEAL program (assembled at test time) reads N from `ApplicationArgs[0]`
-  with `btoi` and loops on `app_global_get` / `app_global_put`.
-- The WASM program is `app_global_loop.wasm`, which reads N from
-  `ApplicationArgs[0]` and loops on the `app_global_get_uint` /
-  `app_global_put_uint` host functions (see `wasm/README.md`).
-- N is the largest value that fits the app budget (`MaxAppProgramCost`, 700) in
-  **both** engines. WASM is limited by a large **fixed** fuel charge per
-  evaluation, not by a higher per-increment cost, so N is limited by WASM:
-
-  | | max N | budget at max N |
-  | --- | --- | --- |
-  | TEAL | 42 | 173 / 700 (~25%) |
-  | WASM | 10 | 696 / 700 (~100%) |
-
-- Both engines then run at N=10 (the shared maximum), so "same number of loops".
-
-Measured on linux/arm64 (8 cores), Go 1.25.3, with
-`go test ./data/transactions/logic/ -run '^$' -bench '^BenchmarkAppGlobalLoop$' -benchtime=2s -count=3`.
-
-| benchmark | ns/op (10 increments) | cost |
-| --- | --- | --- |
-| teal-global-loop | ~11.4 µs | 173 / 700 |
-| wasm-global-loop | ~20.6 µs | 696 / 700 |
-
-WASM is about 1.8x slower in wall-clock terms at N=10, but this is almost
-entirely fixed per-evaluation startup: WASM compiles and instantiates the module
-on every evaluation (no module cache or engine reuse yet — see `TODO.md`). Even
-at N=0 it costs ~15 us vs TEAL's ~7 us, while the per-increment wall-clock cost
-is close (TEAL ~410 ns vs WASM ~425 ns). The metered budget agrees: WASM's fixed
-charge is ~516 fuel per evaluation (TEAL's is ~13), with ~18 vs ~16 per
-increment, so most of the 700 budget is spent before many loops run. The
-in-memory test ledger also clones its global-state map on every put, a fixed cost
-paid by both engines. This does not establish the speedup for a disk-backed node.
-
-### How to run
-
-```
-go test ./data/transactions/logic/ -run '^$' -bench '^BenchmarkAppGlobalLoop$' -benchtime=2s -v
-```
-
-Requires cgo and the prebuilt `wasm/target/release/libwasm_lsig.a`
-(`make wasmlib`).
+These are microbenchmarks, not a projection of mainnet block validation; see
+Caveats.
 
 ## Compute-bound crossover: where WASM overtakes the AVM
 
-The stateful benchmark above is **host-call-bound** (one state access per
-iteration), so the AVM stays ahead at every N. A compute-bound program behaves
-the opposite way: wasmi runs guest instructions much faster than the AVM
-interprets opcodes, so past a small threshold WASM overtakes it despite the fixed
-startup cost.
-
 `BenchmarkAppFibCrossover` (`data/transactions/logic/wasm_app_bench_test.go`)
-compares a TEAL and a WASM application program that compute fib(N) in a loop, at
-several N. It deliberately lifts `MaxAppProgramCost` so N is not budget-capped;
-these N are not all reachable within one group, so it is a microbenchmark of
-engine cost, not a valid-transaction projection.
+compares a TEAL and a WASM application program that compute `fib(N)` in a loop.
+It deliberately lifts `MaxAppProgramCost` so N is not budget-capped; these N are
+not all reachable within one group, so it measures engine cost, not valid
+transactions.
 
 Measured on linux/arm64 (8 cores), Go 1.25.3, with
 `go test ./data/transactions/logic/ -run '^$' -bench '^BenchmarkAppFibCrossover$' -benchtime=2s -count=3`.
@@ -155,50 +30,126 @@ Measured on linux/arm64 (8 cores), Go 1.25.3, with
 | 300 | ~51.0 us | 4,513 | ~18.7 us | 6,924 | WASM 2.7x |
 | 1000 | ~155 us | 15,013 | ~30.9 us | 21,624 | WASM 5.0x |
 
-The slopes are the point: **TEAL ~150 ns/iteration vs WASM ~15 ns/iteration**
-(wasmi is ~10x faster per iteration). WASM pays a fixed \~7 us per evaluation
-(module compile + instantiate), so it wins once the loop is long enough to
-amortize it: `150N + 6500 = 15N + 13700` gives **N ~= 56**. Below ~56 iterations
-the AVM is faster; above it WASM is faster, and the margin keeps growing. This is
-the same effect the fibonacci LogicSig benchmark above shows.
+The slopes are the point: **TEAL ~150 ns/iteration vs WASM ~15 ns/iteration**.
+WASM pays a fixed ~7 us per evaluation (module compile + instantiate, no cache
+yet), so `150N + 6500 = 15N + 13700` gives the **crossover at N ≈ 56**: below it
+the AVM is faster, above it WASM is faster and the margin grows.
 
-Note the metered axis cuts the *other* way from wall clock: per iteration fib
-costs TEAL ~15 cost units and WASM ~21 fuel, so WASM burns more budget while
-running faster. wasmi's fuel units are not proportional to wall-clock cost.
+The metered axis runs the other way: fib costs TEAL ~15 cost/iteration vs WASM
+~21 fuel/iteration, so WASM burns more budget while running faster. wasmi's fuel
+units are not proportional to wall-clock cost.
 
-Together the two application benchmarks frame the tradeoff: WASM wins when a
-program is **compute-dominated** (many guest instructions per host call) and
-loses when it is **host-call-dominated** (a state/txn access per iteration).
+## Host-call cost: the AVM wins
 
-### How to run
+`TestWasmHostCallCost` (`data/transactions/logic/wasm_hostcost_test.go`, gated on
+`WASM_OPCOST`) measures every host function through the real Go/cgo path, in app
+and signature mode. For each fixture the per-call cost is the difference between
+running the loop N times and not at all, so setup and loop scaffolding cancel:
+
+| host call | fuel/call | ns/call | ns/fuel | AVM equivalent |
+| --- | --- | --- | --- | --- |
+| `txn_uint` | 13 | 131 | 10.1 | `txn` (1) |
+| `txn_bytes` | 14 | 202 | 14.4 | `txn` (1) |
+| `txna_bytes` | 15 | 203 | 13.5 | `txna` (1) |
+| `app_global_get_uint` | 14 | 141 | 10.1 | `app_global_get` (1) |
+| `app_global_get_bytes` | 15 | 182 | 12.1 | `app_global_get` (1) |
+| `app_global_put_uint` | 18 | 424 | 23.5 | `app_global_put` (1) |
+| `app_global_put_bytes` | 15 | 373 | 24.8 | `app_global_put` (1) |
+| `app_global_del` | 13 | 145 | 11.1 | `app_global_del` (1) |
+| `ed25519verify_bare` | 1916 | 29,177 | 15.2 | `ed25519verify_bare` (1900) |
+| `arg` (sig) | 13 | 34 | 2.6 | `arg` (1) |
+| `arg_count` (sig) | 10 | 13 | 1.3 | `args` (1) |
+
+Host calls are ~2-25x more expensive per fuel than guest instructions (\~1 ns/fuel
+from the instruction harness below): the cgo crossing plus Go-side work. But they
+land in the AVM's own per-op band — the AVM's state ops are also \~25 ns/cost for
+a `1`-cost opcode, and `ed25519verify_bare` (both engines charge 1900) is ~15
+ns/fuel. So at a 1:1 fuel:cost mapping the worst case is the same order as the
+AVM, and `LogicSigMaxCost` = 20,000 fuel is a defensible first-cut budget. For
+headroom, raise the `app_global_put_*` fuel cost a few units rather than
+rescaling.
+
+A whole-app host-call-bound comparison (`BenchmarkAppGlobalLoop`,
+`app_global_loop.wasm`) shows the same result end to end.
+
+## Instruction opcodes
+
+`opcode_cost_table` (`wasm/src/lib.rs`, an `#[ignore]`d test) runs each allowed
+instruction in a tight loop; `make wasm-opcost` prints it. Release build on
+linux/arm64, 100k iterations; module compile and instantiate are excluded from
+both columns. The point is that the table is **flat** — ~0.6-1.3 ns/fuel across
+every family, with `call_indirect`, `table.fill`, and `table.copy` the only rows
+above the `nop` baseline (1.12), and `memory.copy`/`memory.fill` of 4096 bytes
+metered in line with their speed. No single-instruction outlier.
+
+| op | fuel/iter | ns/iter | ns/fuel |
+| --- | --- | --- | --- |
+| nop | 9.0 | 10.1 | 1.12 |
+| i32.const | 10.0 | 7.7 | 0.77 |
+| i64.const | 10.0 | 5.9 | 0.59 |
+| local.get | 10.0 | 9.3 | 0.93 |
+| local.set | 11.0 | 7.4 | 0.67 |
+| local.tee | 11.0 | 8.7 | 0.79 |
+| global.get | 10.0 | 8.5 | 0.85 |
+| global.set | 11.0 | 10.5 | 0.95 |
+| i32.add | 12.0 | 9.0 | 0.75 |
+| i32.mul | 12.0 | 10.3 | 0.85 |
+| i32.div_s | 12.0 | 8.7 | 0.73 |
+| i32.rem_s | 12.0 | 9.0 | 0.75 |
+| i32.rotl | 12.0 | 8.8 | 0.73 |
+| i32.shl | 12.0 | 8.5 | 0.71 |
+| i32.eq | 12.0 | 11.3 | 0.94 |
+| i32.lt_s | 12.0 | 10.3 | 0.86 |
+| i32.clz | 11.0 | 8.4 | 0.76 |
+| i32.ctz | 11.0 | 10.1 | 0.91 |
+| i32.popcnt | 11.0 | 9.7 | 0.88 |
+| i32.eqz | 11.0 | 10.0 | 0.91 |
+| i64.add | 12.0 | 9.2 | 0.77 |
+| i64.mul | 12.0 | 10.1 | 0.84 |
+| i64.div_s | 12.0 | 9.7 | 0.81 |
+| i64.rotl | 12.0 | 9.9 | 0.83 |
+| i64.clz | 11.0 | 10.2 | 0.93 |
+| i64.popcnt | 11.0 | 10.6 | 0.96 |
+| i32.load | 11.0 | 9.8 | 0.89 |
+| i32.load8_u | 11.0 | 10.4 | 0.94 |
+| i64.load | 11.0 | 9.2 | 0.83 |
+| i32.store | 12.0 | 10.8 | 0.90 |
+| i32.store8 | 12.0 | 10.3 | 0.86 |
+| i64.store | 12.0 | 10.1 | 0.84 |
+| memory.size | 10.0 | 9.7 | 0.97 |
+| memory.grow0 | 11.0 | 8.5 | 0.77 |
+| memory.copy (4096B) | 77.0 | 53.4 | 0.69 |
+| memory.fill (4096B) | 77.0 | 87.8 | 1.14 |
+| select | 13.0 | 10.6 | 0.81 |
+| call | 12.0 | 10.2 | 0.85 |
+| call_indirect | 13.0 | 16.5 | 1.27 |
+| br_table | 13.0 | 12.7 | 0.97 |
+| ref.null | 10.0 | 8.3 | 0.83 |
+| ref.is_null | 11.0 | 8.7 | 0.79 |
+| table.get | 11.0 | 10.3 | 0.94 |
+| table.set | 12.0 | 11.7 | 0.97 |
+| table.size | 10.0 | 9.0 | 0.90 |
+| table.grow0 | 12.0 | 9.8 | 0.81 |
+| table.fill | 13.0 | 16.4 | 1.26 |
+| table.copy | 13.0 | 16.4 | 1.26 |
+
+## How to run
 
 ```
-go test ./data/transactions/logic/ -run '^$' -bench '^BenchmarkAppFibCrossover$' -benchtime=2s -v
+make wasmlib                                        # required by all of the below
+make wasm-opcost                                    # instruction ns/fuel table
+WASM_OPCOST=1 go test ./data/transactions/logic/ -run TestWasmHostCallCost -v
+go test ./data/transactions/logic/ -run '^$' -bench '^BenchmarkAppFibCrossover$' -benchtime=2s
+go test ./ledger/ -run '^$' -bench '^BenchmarkBlockEvaluatorLsigs' -benchtime=2s
 ```
-
-Requires cgo and the prebuilt `wasm/target/release/libwasm_lsig.a`
-(`make wasmlib`).
 
 ## Caveats
 
-These are microbenchmarks, not a projection of mainnet block-validation
-performance:
-
-- Synthetic block shape: 100 txns, all the same program, contract-account lsigs
-  with no per-txn signature. Real blocks are byte-limited (up to 5 MB,
-  thousands of txns) and mix payment/asset/app transactions.
-- The execution-only benchmark bypasses the verified-transaction cache to force
-  the LogicSigs to run every iteration. On a node, txns already accepted into
-  the pool are cached, so their lsigs are not re-run when the block arrives.
-- WASM pays module compile + instantiate per lsig: there is no module cache or
-  engine reuse yet (see `TODO.md`). The WASM numbers are therefore the current,
-  unoptimized implementation.
-- The `Full` benchmark uses an in-memory ledger database: it includes `Validate`
-  - `AddValidatedBlock` + in-memory block-DB commit, not disk I/O, fsync, or every
-  background tracker commit (the account tracker lags by `MaxAcctLookback`).
-- Single machine, warm in-memory ledger caches, and core-count dependent
-  (`PaysetGroups` verifies concurrently).
-
-For a more production-like picture, use a disk-backed ledger and measure a
-realistic byte-limited block with a mixed transaction set and delegated lsigs,
-and land module caching / engine reuse in the WASM path before drawing conclusions.
+- Microbenchmarks on a single machine (linux/arm64, 8 cores), warm in-memory
+  ledger caches, core-count dependent.
+- No module cache or engine reuse yet (see `TODO.md`), so the WASM wall-clock
+  numbers are the current, unoptimized implementation.
+- The application benchmarks drive `EvalContract` on the in-memory test ledger
+- Bulk-memory copies are measured at 4096 bytes only, and module size /
+  instantiation is not metered at all (a large module with a trivial hot path
+  pays ~0 fuel but real compile cost).

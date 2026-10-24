@@ -2129,4 +2129,176 @@ mod tests {
         .unwrap();
         assert!(validate_inner(&wasm).is_err());
     }
+
+    // ---- per-opcode cost table -------------------------------------------
+    //
+    // A prototype harness for calibrating the fuel model: it runs each allowed
+    // instruction in a tight loop and reports metered fuel and wall-clock time
+    // per iteration. The interesting number is ns/fuel: an instruction whose
+    // wall-clock cost is high relative to the fuel it is charged is a metering
+    // hole (an attacker could pack many into a block within budget). Run with:
+    //
+    //   cargo test --release -- --ignored --nocapture opcode_cost_table
+    //
+    // The loop scaffolding (indices, branches) is included in every row, so
+    // compare each row against the `nop` baseline rather than reading ns/fuel
+    // as a pure per-instruction number.
+
+    /// Builds a module whose `program` runs `body` in a loop `n` times. `extra`
+    /// adds module-level items the body may need (none of the cases do today).
+    fn op_module(body: &str, extra: &str, n: u32) -> String {
+        format!(
+            r#"
+            (module
+              (memory (export "memory") 1)
+              (global $g (mut i32) (i32.const 1))
+              (type $tf (func (result i32)))
+              (func $f (result i32) (i32.const 7))
+              (table 2 funcref)
+              (elem (i32.const 0) $f $f)
+              {extra}
+              (func (export "program") (result i32)
+                (local $i i32) (local $x i32) (local $y i32)
+                (local $a i64) (local $b i64)
+                (local.set $x (i32.const 3))
+                (local.set $y (i32.const 2))
+                (local.set $a (i64.const 0x1122334455667788))
+                (local.set $b (i64.const 2))
+                (local.set $i (i32.const {n}))
+                (block $done
+                  (loop $l
+                    (br_if $done (i32.eqz (local.get $i)))
+                    {body}
+                    (local.set $i (i32.sub (local.get $i) (i32.const 1)))
+                    (br $l)))
+                (i32.const 1)))
+            "#
+        )
+    }
+
+    /// Runs one body `n` times, returning (fuel used, seconds spent in the call).
+    /// Module compilation and instantiation are excluded from both.
+    fn op_measure(body: &str, extra: &str, n: u32) -> (u64, f64) {
+        let src = op_module(body, extra, n);
+        let wasm = wat::parse_str(&src).unwrap_or_else(|err| panic!("invalid wat: {err}\n{src}"));
+        let fuel = 1u64 << 50;
+        let (mut store, _instance, program) = instantiate(
+            &wasm,
+            vec![],
+            DEFAULT_MEMORY_LIMIT,
+            fuel,
+            HostCallbacks::default(),
+        )
+        .unwrap();
+        let start = std::time::Instant::now();
+        let result = program.call(&mut store, ()).unwrap();
+        let elapsed = start.elapsed().as_secs_f64();
+        assert_eq!(result, 1);
+        let used = fuel - store.get_fuel().unwrap();
+        (used, elapsed)
+    }
+
+    #[test]
+    #[ignore = "perf table; run with --release --ignored --nocapture"]
+    fn opcode_cost_table() {
+        let n = 100_000u32;
+        // (name, loop body, extra module items)
+        let cases: &[(&str, &str, &str)] = &[
+            ("nop", "(nop)", ""),
+            ("i32.const", "(drop (i32.const 7))", ""),
+            ("i64.const", "(drop (i64.const 7))", ""),
+            ("local.get", "(drop (local.get $x))", ""),
+            ("local.set", "(local.set $x (local.get $x))", ""),
+            ("local.tee", "(drop (local.tee $x (local.get $x)))", ""),
+            ("global.get", "(drop (global.get $g))", ""),
+            ("global.set", "(global.set $g (local.get $x))", ""),
+            ("i32.add", "(drop (i32.add (local.get $x) (local.get $y)))", ""),
+            ("i32.mul", "(drop (i32.mul (local.get $x) (local.get $y)))", ""),
+            ("i32.div_s", "(drop (i32.div_s (local.get $x) (local.get $y)))", ""),
+            ("i32.rem_s", "(drop (i32.rem_s (local.get $x) (local.get $y)))", ""),
+            ("i32.rotl", "(drop (i32.rotl (local.get $x) (local.get $y)))", ""),
+            ("i32.shl", "(drop (i32.shl (local.get $x) (local.get $y)))", ""),
+            ("i32.eq", "(drop (i32.eq (local.get $x) (local.get $y)))", ""),
+            ("i32.lt_s", "(drop (i32.lt_s (local.get $x) (local.get $y)))", ""),
+            ("i32.clz", "(drop (i32.clz (local.get $x)))", ""),
+            ("i32.ctz", "(drop (i32.ctz (local.get $x)))", ""),
+            ("i32.popcnt", "(drop (i32.popcnt (local.get $x)))", ""),
+            ("i32.eqz", "(drop (i32.eqz (local.get $x)))", ""),
+            ("i64.add", "(drop (i64.add (local.get $a) (local.get $b)))", ""),
+            ("i64.mul", "(drop (i64.mul (local.get $a) (local.get $b)))", ""),
+            ("i64.div_s", "(drop (i64.div_s (local.get $a) (local.get $b)))", ""),
+            ("i64.rotl", "(drop (i64.rotl (local.get $a) (local.get $b)))", ""),
+            ("i64.clz", "(drop (i64.clz (local.get $a)))", ""),
+            ("i64.popcnt", "(drop (i64.popcnt (local.get $a)))", ""),
+            ("i32.load", "(drop (i32.load (i32.const 0)))", ""),
+            ("i32.load8_u", "(drop (i32.load8_u (i32.const 0)))", ""),
+            ("i64.load", "(drop (i64.load (i32.const 0)))", ""),
+            ("i32.store", "(i32.store (i32.const 0) (local.get $x))", ""),
+            ("i32.store8", "(i32.store8 (i32.const 0) (local.get $x))", ""),
+            ("i64.store", "(i64.store (i32.const 0) (local.get $a))", ""),
+            ("memory.size", "(drop (memory.size))", ""),
+            ("memory.grow0", "(drop (memory.grow (i32.const 0)))", ""),
+            (
+                "memory.copy",
+                "(memory.copy (i32.const 0) (i32.const 16) (i32.const 4096))",
+                "",
+            ),
+            (
+                "memory.fill",
+                "(memory.fill (i32.const 0) (i32.const 0) (i32.const 4096))",
+                "",
+            ),
+            (
+                "select",
+                "(drop (select (local.get $x) (local.get $y) (local.get $x)))",
+                "",
+            ),
+            ("call", "(drop (call $f))", ""),
+            (
+                "call_indirect",
+                "(drop (call_indirect (type $tf) (i32.const 0)))",
+                "",
+            ),
+            (
+                "br_table",
+                "(block $b (block $a (br_table $a $b (i32.and (local.get $x) (i32.const 1)))))",
+                "",
+            ),
+            ("ref.null", "(drop (ref.null func))", ""),
+            ("ref.is_null", "(drop (ref.is_null (ref.null func)))", ""),
+            ("table.get", "(drop (table.get 0 (i32.const 0)))", ""),
+            ("table.set", "(table.set 0 (i32.const 0) (ref.null func))", ""),
+            ("table.size", "(drop (table.size 0))", ""),
+            ("table.grow0", "(drop (table.grow 0 (ref.null func) (i32.const 0)))", ""),
+            (
+                "table.fill",
+                "(table.fill 0 (i32.const 0) (ref.null func) (i32.const 1))",
+                "",
+            ),
+            (
+                "table.copy",
+                "(table.copy 0 0 (i32.const 0) (i32.const 1) (i32.const 1))",
+                "",
+            ),
+        ];
+
+        println!(
+            "\n{:<16} {:>12} {:>12} {:>12}",
+            "op", "fuel/iter", "ns/iter", "ns/fuel"
+        );
+        for (name, body, extra) in cases {
+            let (fuel, secs) = op_measure(body, extra, n);
+            let per_iter_fuel = fuel as f64 / n as f64;
+            let per_iter_ns = secs / n as f64 * 1e9;
+            let ratio = if per_iter_fuel > 0.0 {
+                per_iter_ns / per_iter_fuel
+            } else {
+                0.0
+            };
+            println!(
+                "{:<16} {:>12.3} {:>12.3} {:>12.4}",
+                name, per_iter_fuel, per_iter_ns, ratio
+            );
+        }
+    }
 }

@@ -237,20 +237,33 @@ func benchmarkAppFib(b *testing.B, program []byte, n int, isWasm bool, proto *co
 // appLoopParams builds ModeApp EvalParams for an app 888 with room for one
 // uint global, carrying the loop count N as ApplicationArgs[0].
 func appLoopParams(proto *config.ConsensusParams, n int, isWasm bool) *EvalParams {
+	return appLoopParamsSchema(proto, n, isWasm, basics.StateSchema{NumUint: 1})
+}
+
+// appLoopParamsSchema is appLoopParams with a caller-chosen global schema.
+func appLoopParamsSchema(proto *config.ConsensusParams, n int, isWasm bool, schema basics.StateSchema) *EvalParams {
+	var args [][]byte
+	if isWasm {
+		args = [][]byte{le32(n)}
+	} else {
+		args = [][]byte{be32(n)}
+	}
+	return appParamsSchema(proto, args, schema)
+}
+
+// appParamsSchema builds ModeApp EvalParams for app 888 with a caller-chosen
+// global schema and ApplicationArgs.
+func appParamsSchema(proto *config.ConsensusParams, args [][]byte, schema basics.StateSchema) *EvalParams {
 	txn := makeSampleTxn()
 	txn.Txn.Type = protocol.ApplicationCallTx
 	txn.Txn.ApplicationID = 888
-	if isWasm {
-		txn.Txn.ApplicationArgs = [][]byte{le32(n)}
-	} else {
-		txn.Txn.ApplicationArgs = [][]byte{be32(n)}
-	}
+	txn.Txn.ApplicationArgs = args
 	ep := NewAppEvalParams(transactions.WrapSignedTxnsWithAD([]transactions.SignedTxn{txn}), proto, &transactions.SpecialAddresses{})
 	ledger := NewLedger(nil)
 	// The creator is not consulted by global state access, so a zero address is
 	// fine here.
 	ledger.NewApp(basics.Address{}, 888, basics.AppParams{StateSchemas: basics.StateSchemas{
-		GlobalStateSchema: basics.StateSchema{NumUint: 1},
+		GlobalStateSchema: schema,
 	}})
 	ep.Ledger = ledger
 	ep.SigLedger = ledger

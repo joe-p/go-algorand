@@ -177,6 +177,13 @@ wasm-guest-fixtures:
 	cargo build --release --locked --manifest-path wasm/guest/Cargo.toml -p ed25519-verify --target wasm32-unknown-unknown
 	cp wasm/guest/target/wasm32-unknown-unknown/release/ed25519_verify.wasm data/transactions/logic/testdata/wasm/ed25519_dalek.wasm
 
+# Print the per-opcode wall-clock/fuel table (metering calibration harness).
+# The host-function table is the gated Go test:
+#   WASM_OPCOST=1 go test ./data/transactions/logic/ -run TestWasmHostCallCost -v
+wasm-opcost:
+	@command -v cargo >/dev/null 2>&1 || { echo "cargo (Rust toolchain) is required: https://rustup.rs"; exit 1; }
+	cargo test --release --locked --manifest-path wasm/Cargo.toml -- --ignored --nocapture opcode_cost_table
+
 MSGP := go run github.com/algorand/msgp@v1.1.66
 %/msgp_gen.go: ALWAYS
 		@set +e; \
@@ -449,7 +456,7 @@ dump: $(addprefix gen/,$(addsuffix /genesis.dump, $(NETWORKS)))
 install: build
 	scripts/dev_install.sh -p $(GOBIN)
 
-.PHONY: default fmt lint check_shell sanity cover prof build build-race build-e2e test fulltest shorttest x-repo-types clean cleango deploy node_exporter install %gen gen NONGO_BIN check-go-version rebuild_kmd_swagger universal libsodium modernize wasmlib wasm-guest-fixtures
+.PHONY: default fmt lint check_shell sanity cover prof build build-race build-e2e test fulltest shorttest x-repo-types clean cleango deploy node_exporter install %gen gen NONGO_BIN check-go-version rebuild_kmd_swagger universal libsodium modernize wasmlib wasm-guest-fixtures wasm-opcost
 
 ###### TARGETS FOR CICD PROCESS ######
 include ./scripts/release/mule/Makefile.mule

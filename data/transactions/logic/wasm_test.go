@@ -19,6 +19,8 @@
 package logic
 
 import (
+	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -124,6 +126,17 @@ func TestWasmReadsTxnBytes(t *testing.T) {
 	pass, _, err := EvalSignatureProgram(loadWasm(t, "txn_bytes.wasm"), nil, 0, ep)
 	require.NoError(t, err)
 	require.True(t, pass)
+
+	txn := transactions.SignedTxn{Txn: transactions.Transaction{Type: protocol.PaymentTx}}
+	copy(txn.Txn.Sender[:], bytes.Repeat([]byte{7}, len(txn.Txn.Sender)))
+	program := loadWasm(t, "txn_bytes_field.wasm")
+	pass, _, err = EvalSignatureProgram(program, [][]byte{{byte(Sender)}}, 0, optSigParams(wasmProto, txn))
+	require.NoError(t, err)
+	require.True(t, pass)
+	txn.Txn.Sender[0] = 8
+	pass, _, err = EvalSignatureProgram(program, [][]byte{{byte(Sender)}}, 0, optSigParams(wasmProto, txn))
+	require.NoError(t, err)
+	require.False(t, pass)
 }
 
 // TestWasmTxnFieldTypeError checks that asking for a field with the wrong type
@@ -135,6 +148,60 @@ func TestWasmTxnFieldTypeError(t *testing.T) {
 	_, _, err := EvalSignatureProgram(loadWasm(t, "txn_bad_type.wasm"), nil, 0, ep)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "not a uint")
+}
+
+func TestWasmTxnBytesLimits(t *testing.T) {
+	partitiontest.PartitionTest(t)
+	program := loadWasm(t, "txn_bytes_field.wasm")
+	for _, size := range []int{0, 32, maxStringSize, maxStringSize + 1} {
+		t.Run(fmt.Sprint(size), func(t *testing.T) {
+			txn := transactions.SignedTxn{Txn: transactions.Transaction{Type: protocol.ApplicationCallTx}}
+			txn.Txn.ApprovalProgram = bytes.Repeat([]byte{7}, size)
+			ep := optSigParams(wasmProto, txn)
+			pass, _, err := EvalSignatureProgram(program, [][]byte{{byte(ApprovalProgram)}}, 0, ep)
+			if size > maxStringSize {
+				require.ErrorContains(t, err, "too big")
+			} else {
+				require.NoError(t, err)
+				require.True(t, pass)
+			}
+		})
+	}
+}
+
+func TestWasmTxnFieldRestrictions(t *testing.T) {
+	partitiontest.PartitionTest(t)
+	for _, field := range []TxnField{ApplicationArgs, Accounts, NumLogs, LastLog, invalidTxnField} {
+		t.Run(field.String(), func(t *testing.T) {
+			ep := optSigParams(wasmProto)
+			_, _, err := EvalSignatureProgram(loadWasm(t, "txn_bytes_field.wasm"), [][]byte{{byte(field)}}, 0, ep)
+			require.Error(t, err)
+		})
+	}
+	ep := optSigParams(func(p *config.ConsensusParams) {
+		wasmProto(p)
+		p.LogicSigVersion = 1
+	})
+	_, _, err := EvalSignatureProgram(loadWasm(t, "txn_bytes_field.wasm"), [][]byte{{byte(RekeyTo)}}, 0, ep)
+	require.ErrorContains(t, err, "invalid txn field RekeyTo")
+}
+
+func TestWasmTxnConcurrentContexts(t *testing.T) {
+	partitiontest.PartitionTest(t)
+	program := loadWasm(t, "txn_uint.wasm")
+	for i := range 32 {
+		t.Run(fmt.Sprint(i), func(t *testing.T) {
+			t.Parallel()
+			txn := transactions.SignedTxn{Txn: transactions.Transaction{Type: protocol.PaymentTx}}
+			txn.Txn.FirstValid = 1234
+			if i%2 != 0 {
+				txn.Txn.FirstValid++
+			}
+			pass, _, err := EvalSignatureProgram(program, nil, 0, optSigParams(wasmProto, txn))
+			require.NoError(t, err)
+			require.Equal(t, i%2 == 0, pass)
+		})
+	}
 }
 
 func TestWasmFuelExhaustion(t *testing.T) {

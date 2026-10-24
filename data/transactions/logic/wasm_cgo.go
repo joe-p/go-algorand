@@ -76,6 +76,7 @@ import "C"
 import (
 	"errors"
 	"fmt"
+	"runtime/cgo"
 	"unsafe"
 )
 
@@ -117,8 +118,10 @@ func runWasmProgram(program []byte, args [][]byte, fuel uint64, cx *EvalContext)
 	}
 	defer freeArgs()
 
-	handle := registerWasmCtx(cx)
-	defer unregisterWasmCtx(handle)
+	// Keep the Go context alive without passing Go memory containing pointers
+	// through C. Rust may use the handle only during this synchronous call.
+	handle := cgo.NewHandle(cx)
+	defer handle.Delete()
 
 	var fuelUsed C.uint64_t
 	var errBuf [wasmErrBufLen]byte

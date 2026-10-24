@@ -38,29 +38,9 @@ import "C"
 import (
 	"encoding/binary"
 	"fmt"
-	"sync"
-	"sync/atomic"
+	"runtime/cgo"
 	"unsafe"
 )
-
-// wasmCtxs maps an opaque handle to the evaluation context of an in-flight WASM
-// execution. A raw *EvalContext cannot be handed to C directly: it is Go
-// memory containing Go pointers. A handle is valid only for the duration of one
-// runWasmProgram call.
-var (
-	wasmCtxs   sync.Map // uintptr -> *EvalContext
-	wasmCtxSeq atomic.Uintptr
-)
-
-func registerWasmCtx(cx *EvalContext) uintptr {
-	handle := wasmCtxSeq.Add(1)
-	wasmCtxs.Store(handle, cx)
-	return handle
-}
-
-func unregisterWasmCtx(handle uintptr) {
-	wasmCtxs.Delete(handle)
-}
 
 // goWasmTxnField answers a `txn` field read from a WASM guest. It is called by
 // the Rust executor through C while the guest runs, and must not let a panic
@@ -84,16 +64,17 @@ func goWasmTxnField(ctx C.uintptr_t, field C.uint32_t, buf *C.uint8_t, bufCap C.
 		}
 	}()
 
-	val, ok := wasmCtxs.Load(uintptr(ctx))
-	if !ok {
-		writeWasmErr(errBuf, errCap, "unknown wasm evaluation context")
-		return -1
-	}
-	cx := val.(*EvalContext)
+	cx := cgo.Handle(ctx).Value().(*EvalContext)
 
 	sv, err := cx.opTxnImpl(uint64(cx.groupIndex), srcGroup, TxnField(field), 0, false)
 	if err != nil {
 		writeWasmErr(errBuf, errCap, err.Error())
+		return -1
+	}
+	// The AVM normally checks this after the opcode returns. WASM bypasses
+	// that stack check, so enforce the same limit at the host boundary.
+	if len(sv.Bytes) > maxStringSize {
+		writeWasmErr(errBuf, errCap, fmt.Sprintf("txn produced a too big (%d) byte-array", len(sv.Bytes)))
 		return -1
 	}
 

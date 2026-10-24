@@ -39,14 +39,19 @@ The module may import, from the `env` module:
   integer fields trap the guest.
 
 Field values come from the node, so the AVM's field semantics (typing, version
-gating, allowed modes) have a single source of truth. For now only the current
+gating, allowed modes, and the 4096-byte value limit) have a single source of
+truth. Each read invokes Go once; length queries do not copy the payload.
+For now only the current
 transaction's non-array fields are exposed (the `txn` opcode, not `txna`,
 `gtxn`, or `itxn`). Later opcodes will be added to the same `env` module.
 
 ## Execution limits
 
 - Fuel metered; the AVM cost budget is reused as the fuel limit, one fuel unit
-  per cost unit. Running out of fuel is an error.
+  per cost unit. Each `txn_uint` or `txn_bytes` invocation costs one additional
+  fuel unit, including length queries and invalid reads, on top of WASM
+  instruction fuel. The charge occurs before host work; insufficient fuel
+  traps. Running out of fuel is an error.
 - Each invocation permits at most one linear memory (64 KiB), one table
   (1024 elements), and one instance. Size and count limits bound aggregate
   guest memory/table allocation, including initial allocation before `start`.

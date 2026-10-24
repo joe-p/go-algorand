@@ -47,7 +47,8 @@
 //!
 //! The transaction fields come from the host through `TxnFieldCb`, so the AVM's
 //! field semantics (typing, version gating, allowed modes) have a single
-//! source of truth in Go.
+//! source of truth in Go. Byte fields have the AVM's 4096-byte limit. Each txn
+//! host invocation costs one additional fuel unit before performing host work.
 //!
 //! Execution is deterministic (no floats, no auto-dispatch), fuel metered, and
 //! linear memory is capped. The engine is rebuilt per call; this is simple and
@@ -86,6 +87,12 @@ const TXN_ERR_MEMORY: i32 = -3;
 
 /// Size of the error-message buffer shared with the host callback.
 const TXN_ERR_BUF_LEN: usize = 256;
+
+/// Must match Go's config.MaxAVMBytesSize. Go also enforces this limit.
+const MAX_TXN_BYTES: usize = 4096;
+
+/// Additional fuel charged per txn host invocation, including length queries.
+const TXN_FUEL_COST: u64 = 1;
 
 /// A transaction field provider, implemented in Go. `ctx` is an opaque handle
 /// that Go maps back to the evaluation context; Rust never dereferences it.
@@ -173,13 +180,20 @@ fn cstr(buf: &[u8]) -> String {
     String::from_utf8_lossy(&buf[..end]).into_owned()
 }
 
-/// Fetches transaction field `field` from the host. On success, returns whether
-/// the field is a byte string and its bytes (uints are 8 little-endian bytes).
-/// Invalid or unavailable fields become traps.
+/// Fetches a field once into a caller-owned buffer. A short buffer still
+/// reports the type and required length. Invalid or unavailable fields trap.
 fn fetch_txn_field(
     caller: &mut Caller<'_, HostState>,
     field: i32,
-) -> Result<(bool, Vec<u8>), wasmi::Error> {
+    buf: &mut [u8],
+) -> Result<(bool, usize), wasmi::Error> {
+    // Charge before doing any host work, including validation and callbacks.
+    let remaining = caller.get_fuel()?;
+    let remaining = remaining
+        .checked_sub(TXN_FUEL_COST)
+        .ok_or_else(|| wasmi::Error::from(TrapCode::OutOfFuel))?;
+    caller.set_fuel(remaining)?;
+
     let cb = caller.data().txn_cb;
     let ctx = caller.data().txn_ctx;
     let Some(cb) = cb else {
@@ -195,13 +209,12 @@ fn fetch_txn_field(
     let mut len = 0usize;
     let mut is_bytes = 0u8;
 
-    // A zero-capacity buffer learns the length and type without copying.
     let ret = unsafe {
         cb(
             ctx,
             field as u32,
-            std::ptr::null_mut(),
-            0,
+            buf.as_mut_ptr(),
+            buf.len(),
             &mut len,
             &mut is_bytes,
             err.as_mut_ptr(),
@@ -209,53 +222,33 @@ fn fetch_txn_field(
         )
     };
 
-    if ret == 0 {
-        // Field is empty; nothing to copy.
-        return Ok((is_bytes != 0, Vec::new()));
-    }
-    if ret != TXN_ERR_BUFFER {
+    if ret != 0 && ret != TXN_ERR_BUFFER {
         return Err(wasmi::Error::new(format!(
             "txn field {field} error: {}",
             cstr(&err)
         )));
     }
 
-    let mut buf = vec![0u8; len];
-    let mut len2 = len;
-    let mut is_bytes2 = is_bytes;
-    let ret2 = unsafe {
-        cb(
-            ctx,
-            field as u32,
-            buf.as_mut_ptr(),
-            buf.len(),
-            &mut len2,
-            &mut is_bytes2,
-            err.as_mut_ptr(),
-            err.len(),
-        )
-    };
-    if ret2 != 0 {
-        return Err(wasmi::Error::new(format!(
-            "txn field {field} error: {}",
-            cstr(&err)
-        )));
+    if is_bytes != 0 && len > MAX_TXN_BYTES {
+        return Err(wasmi::Error::new("txn byte field exceeds AVM size limit"));
     }
-    buf.truncate(len2);
-    Ok((is_bytes2 != 0, buf))
+    Ok((is_bytes != 0, len))
 }
 
 fn txn_uint(mut caller: Caller<'_, HostState>, field: i32) -> Result<i64, wasmi::Error> {
-    let (is_bytes, bytes) = fetch_txn_field(&mut caller, field)?;
+    let mut bytes = [0u8; 8];
+    let (is_bytes, len) = fetch_txn_field(&mut caller, field, &mut bytes)?;
     if is_bytes {
         return Err(wasmi::Error::new(format!(
             "txn field {field} is not a uint"
         )));
     }
-    let arr: [u8; 8] = bytes.as_slice().try_into().map_err(|_| {
-        wasmi::Error::new(format!("txn uint field {field} had {} bytes", bytes.len()))
-    })?;
-    Ok(i64::from_le_bytes(arr))
+    if len != bytes.len() {
+        return Err(wasmi::Error::new(format!(
+            "txn uint field {field} had {len} bytes"
+        )));
+    }
+    Ok(i64::from_le_bytes(bytes))
 }
 
 fn txn_bytes(
@@ -264,7 +257,14 @@ fn txn_bytes(
     out_ptr: i32,
     out_len: i32,
 ) -> Result<i32, wasmi::Error> {
-    let (is_bytes, bytes) = fetch_txn_field(&mut caller, field)?;
+    let mut buf = [0u8; MAX_TXN_BYTES];
+    // Length queries don't fetch or copy the field payload.
+    let capacity = if out_len <= 0 {
+        0
+    } else {
+        (out_len as usize).min(buf.len())
+    };
+    let (is_bytes, len) = fetch_txn_field(&mut caller, field, &mut buf[..capacity])?;
     if !is_bytes {
         return Err(wasmi::Error::new(format!(
             "txn field {field} is not a byte string"
@@ -275,12 +275,12 @@ fn txn_bytes(
     }
     // A zero-length buffer queries the required length without touching memory.
     if out_len == 0 {
-        return Ok(bytes.len() as i32);
+        return Ok(len as i32);
     }
     if out_ptr < 0 {
         return Ok(TXN_ERR_MEMORY);
     }
-    if bytes.len() > out_len as usize {
+    if len > out_len as usize {
         return Ok(TXN_ERR_BUFFER);
     }
 
@@ -288,10 +288,13 @@ fn txn_bytes(
     let Some(memory) = memory else {
         return Ok(TXN_ERR_MEMORY);
     };
-    if memory.write(&mut caller, out_ptr as usize, &bytes).is_err() {
+    if memory
+        .write(&mut caller, out_ptr as usize, &buf[..len])
+        .is_err()
+    {
         return Ok(TXN_ERR_MEMORY);
     }
-    Ok(bytes.len() as i32)
+    Ok(len as i32)
 }
 
 /// Result of a single guest invocation.
@@ -615,9 +618,9 @@ mod tests {
     const TXN_FIELD_FEE: u32 = 1;
 
     // fake_txn_field stands in for the Go callback: Sender is 32 bytes of 7,
-    // Fee is the uint 42, and everything else is an error.
+    // Fee is the uint 42, Note is empty, and everything else is an error.
     unsafe extern "C" fn fake_txn_field(
-        _ctx: usize,
+        ctx: usize,
         field: u32,
         buf: *mut u8,
         buf_cap: usize,
@@ -626,6 +629,10 @@ mod tests {
         err: *mut u8,
         err_cap: usize,
     ) -> i32 {
+        if ctx != 0 {
+            // Tests can supply a per-execution callback counter.
+            *(ctx as *mut usize) += 1;
+        }
         match field {
             TXN_FIELD_FEE => {
                 *is_bytes = 0;
@@ -644,6 +651,12 @@ mod tests {
                     return -2;
                 }
                 std::ptr::write_bytes(buf, 7, 32);
+                0
+            }
+            5 => {
+                // Empty Note, including its byte-string type.
+                *is_bytes = 1;
+                *out_len = 0;
                 0
             }
             _ => {
@@ -837,8 +850,12 @@ mod tests {
                 (import "env" "txn_bytes" (func $txn_bytes (param i32 i32 i32) (result i32)))
                 (memory (export "memory") 1)
                 (func (export "program") (result i32)
-                    (i32.eq (call $txn_bytes (i32.const 0) (i32.const 0) (i32.const 32))
-                            (i32.const 32))))
+                    (i32.and
+                        (i32.eq (call $txn_bytes (i32.const 0) (i32.const 65504) (i32.const 32))
+                                (i32.const 32))
+                        (i32.and
+                            (i32.eq (i32.load8_u (i32.const 65504)) (i32.const 7))
+                            (i32.eq (i32.load8_u (i32.const 65535)) (i32.const 7))))))
         "#;
         let out = run_wat_with_txn(wat, 1000).unwrap();
         assert!(out.pass);
@@ -919,6 +936,129 @@ mod tests {
         "#;
         let err = run_wat(wat, vec![], 1000).unwrap_err();
         assert!(err.contains("not available"), "{err}");
+    }
+
+    #[test]
+    fn txn_calls_host_once() {
+        for body in [
+            "(drop (call $uint (i32.const 1)))",
+            "(drop (call $bytes (i32.const 0) (i32.const 0) (i32.const 32)))",
+            "(drop (call $bytes (i32.const 0) (i32.const -1) (i32.const 0)))",
+            "(drop (call $bytes (i32.const 5) (i32.const 0) (i32.const 32)))",
+        ] {
+            let wasm = wat::parse_str(format!(
+                r#"
+                (module
+                    (import "env" "txn_uint" (func $uint (param i32) (result i64)))
+                    (import "env" "txn_bytes" (func $bytes (param i32 i32 i32) (result i32)))
+                    (memory (export "memory") 1)
+                    (func (export "program") (result i32) {body} (i32.const 1)))
+            "#
+            ))
+            .unwrap();
+            let mut calls = 0usize;
+            let (mut store, _, program) = instantiate(
+                &wasm,
+                vec![],
+                DEFAULT_MEMORY_LIMIT,
+                1000,
+                Some(fake_txn_field),
+                (&mut calls as *mut usize) as usize,
+            )
+            .unwrap();
+            assert_eq!(program.call(&mut store, ()).unwrap(), 1);
+            assert_eq!(calls, 1);
+        }
+    }
+
+    #[test]
+    fn txn_charges_one_host_fuel_before_work() {
+        let wasm = wat::parse_str(r#"(module (func (export "program") (result i32) i32.const 1))"#)
+            .unwrap();
+        let mut calls = 0usize;
+        let (mut store, _, _) = instantiate(
+            &wasm,
+            vec![],
+            DEFAULT_MEMORY_LIMIT,
+            1000,
+            Some(fake_txn_field),
+            (&mut calls as *mut usize) as usize,
+        )
+        .unwrap();
+
+        // Direct host calls isolate the charge from Wasm instruction fuel.
+        let uint = wasmi::Func::wrap(&mut store, txn_uint)
+            .typed::<i32, i64>(&store)
+            .unwrap();
+        store.set_fuel(1).unwrap();
+        assert_eq!(uint.call(&mut store, 1).unwrap(), 42);
+        assert_eq!(store.get_fuel().unwrap(), 0);
+        assert_eq!(calls, 1);
+        let err = uint.call(&mut store, 1).unwrap_err();
+        assert_eq!(err.as_trap_code(), Some(TrapCode::OutOfFuel));
+        assert_eq!(calls, 1);
+
+        let bytes = wasmi::Func::wrap(&mut store, txn_bytes)
+            .typed::<(i32, i32, i32), i32>(&store)
+            .unwrap();
+        for (len, expected) in [(0, 32), (-1, TXN_ERR_MEMORY)] {
+            store.set_fuel(1).unwrap();
+            let before = calls;
+            assert_eq!(bytes.call(&mut store, (0, 0, len)).unwrap(), expected);
+            assert_eq!(store.get_fuel().unwrap(), 0);
+            assert_eq!(calls, before + 1);
+            let err = bytes.call(&mut store, (0, 0, len)).unwrap_err();
+            assert_eq!(err.as_trap_code(), Some(TrapCode::OutOfFuel));
+            assert_eq!(calls, before + 1);
+        }
+        // Even a field rejected before invoking Go pays the host cost.
+        store.set_fuel(1).unwrap();
+        let before = calls;
+        assert!(uint.call(&mut store, -1).is_err());
+        assert_eq!(store.get_fuel().unwrap(), 0);
+        assert_eq!(calls, before);
+    }
+
+    #[test]
+    fn txn_bytes_empty_and_invalid_buffers() {
+        for (field, ptr, len, expected, memory) in [
+            (5, 0, 32, 0, true),
+            (5, -1, 0, 0, false),
+            (0, -1, 32, TXN_ERR_MEMORY, true),
+            (0, 0, -1, TXN_ERR_MEMORY, true),
+            (0, 65505, 32, TXN_ERR_MEMORY, true),
+            (0, 0, 32, TXN_ERR_MEMORY, false),
+            (0, 0, 31, TXN_ERR_BUFFER, true),
+        ] {
+            let memory = if memory {
+                r#"(memory (export "memory") 1)
+                   (data (i32.const 0) "\09")
+                   (data (i32.const 65535) "\09")"#
+            } else {
+                ""
+            };
+            // Invalid writes and empty values must leave guest memory intact,
+            // including an out-of-bounds write's in-bounds prefix.
+            let unchanged = if memory.is_empty() {
+                "(i32.const 1)"
+            } else {
+                "(i32.and (i32.eq (i32.load8_u (i32.const 0)) (i32.const 9))
+                          (i32.eq (i32.load8_u (i32.const 65535)) (i32.const 9)))"
+            };
+            let wat = format!(
+                r#"
+                (module
+                    (import "env" "txn_bytes" (func $bytes (param i32 i32 i32) (result i32)))
+                    {memory}
+                    (func (export "program") (result i32)
+                        (i32.and
+                            (i32.eq (call $bytes (i32.const {field}) (i32.const {ptr}) (i32.const {len}))
+                                (i32.const {expected}))
+                            {unchanged})))
+            "#
+            );
+            assert!(run_wat_with_txn(&wat, 1000).unwrap().pass);
+        }
     }
 
     #[test]

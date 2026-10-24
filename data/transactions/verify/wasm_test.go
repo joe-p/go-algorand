@@ -26,6 +26,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/algorand/go-algorand/config"
+	"github.com/algorand/go-algorand/crypto"
 	"github.com/algorand/go-algorand/data/basics"
 	"github.com/algorand/go-algorand/data/transactions"
 	"github.com/algorand/go-algorand/data/transactions/logic"
@@ -98,6 +99,33 @@ func TestWasmLogicSigReadsTxnField(t *testing.T) {
 		Txn:  createPayTransaction(fee, 1235, 1400, 1, sender, receiver),
 		Lsig: transactions.LogicSig{Logic: program},
 	}
+	_, err = TxnGroup([]transactions.SignedTxn{reject}, &blkHdr, nil, &DummyLedgerForSignature{})
+	require.Error(t, err)
+}
+
+// TestWasmLogicSigEd25519VerifyBare checks that a WASM LogicSig can verify an
+// ed25519 signature through the host callback and be verified end to end.
+func TestWasmLogicSigEd25519VerifyBare(t *testing.T) {
+	partitiontest.PartitionTest(t)
+	t.Parallel()
+
+	blkHdr := createDummyBlockHeader(protocol.ConsensusFuture)
+	program := readWasmFixture(t, "ed25519verify_bare.wasm")
+
+	var seed crypto.Seed
+	seed[0] = 1
+	secrets := crypto.GenerateSignatureSecrets(seed)
+	data := []byte("verify ed25519verify_bare end to end")
+	sig := secrets.SignBytes(data)
+
+	approve := wasmContractTxn(program, [][]byte{data, sig[:], secrets.SignatureVerifier[:]})
+	_, err := TxnGroup([]transactions.SignedTxn{approve}, &blkHdr, nil, &DummyLedgerForSignature{})
+	require.NoError(t, err)
+
+	// A tampered message rejects.
+	badData := append([]byte(nil), data...)
+	badData[0] ^= 0xff
+	reject := wasmContractTxn(program, [][]byte{badData, sig[:], secrets.SignatureVerifier[:]})
 	_, err = TxnGroup([]transactions.SignedTxn{reject}, &blkHdr, nil, &DummyLedgerForSignature{})
 	require.Error(t, err)
 }

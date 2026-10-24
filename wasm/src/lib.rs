@@ -44,11 +44,21 @@
 //!             negative sentinel reports an ABI error (buffer too small, bad
 //!             pointer); an invalid field, or a field whose value is an
 //!             integer, traps the guest.
+//!       - `ed25519verify_bare(data: i32, data_len: i32, sig: i32, sig_len: i32,
+//!                            pk: i32, pk_len: i32) -> i32`
+//!             verify the ed25519 signature `sig` over `data` with public key
+//!             `pk`, the AVM's `ed25519verify_bare` opcode. Returns `1` when the
+//!             signature is valid and `0` when it is not. The three byte ranges
+//!             are copied out of linear memory and verified in Go, so the opcode
+//!             matches the AVM. A negative length, an out-of-bounds range, a
+//!             wrong-length key or signature, or oversized data traps.
 //!
 //! The transaction fields come from the host through `TxnFieldCb`, so the AVM's
 //! field semantics (typing, version gating, allowed modes) have a single
 //! source of truth in Go. Byte fields have the AVM's 4096-byte limit. Each txn
 //! host invocation costs one additional fuel unit before performing host work.
+//! `ed25519verify_bare` similarly delegates verification to Go and is charged
+//! the opcode's AVM cost.
 //!
 //! Execution is deterministic (no floats, no auto-dispatch), fuel metered, and
 //! linear memory is capped. The engine is rebuilt per call; this is simple and
@@ -85,14 +95,20 @@ const ARG_ERR_MEMORY: i32 = -3;
 const TXN_ERR_BUFFER: i32 = -2;
 const TXN_ERR_MEMORY: i32 = -3;
 
-/// Size of the error-message buffer shared with the host callback.
-const TXN_ERR_BUF_LEN: usize = 256;
+/// Size of the error-message buffer shared with the host callbacks.
+const ERR_BUF_LEN: usize = 256;
 
-/// Must match Go's config.MaxAVMBytesSize. Go also enforces this limit.
-const MAX_TXN_BYTES: usize = 4096;
+/// Must match Go's config.MaxAVMBytesSize. Go also enforces this limit. It
+/// bounds any byte value crossing the boundary: transaction fields, and the
+/// operands of byte-string opcodes.
+const MAX_AVM_BYTES: usize = 4096;
 
 /// Additional fuel charged per txn host invocation, including length queries.
 const TXN_FUEL_COST: u64 = 1;
+
+/// Fuel charged for one `ed25519verify_bare` call. Must match the opcode's cost
+/// in the Go opcode table (`costly(1900)` for `ed25519verify_bare`).
+const ED25519_VERIFY_BARE_FUEL_COST: u64 = 1900;
 
 /// A transaction field provider, implemented in Go. `ctx` is an opaque handle
 /// that Go maps back to the evaluation context; Rust never dereferences it.
@@ -113,6 +129,21 @@ type TxnFieldCb = unsafe extern "C" fn(
     err_cap: usize,
 ) -> i32;
 
+/// A verifier for `ed25519verify_bare`, implemented in Go so the opcode has the
+/// AVM's exact semantics. The three byte ranges are read out of guest memory
+/// before the call. It returns `1` when the signature verifies, `0` when it does
+/// not, and `-1` on error (a message is written to `err`).
+type Ed25519VerifyCb = unsafe extern "C" fn(
+    data: *const u8,
+    data_len: usize,
+    sig: *const u8,
+    sig_len: usize,
+    pk: *const u8,
+    pk_len: usize,
+    err: *mut u8,
+    err_cap: usize,
+) -> i32;
+
 /// A single LogicSig argument passed across the C ABI as a pointer/length pair.
 #[repr(C)]
 pub struct WasmLsigArg {
@@ -120,16 +151,27 @@ pub struct WasmLsigArg {
     pub len: usize,
 }
 
+/// The host callbacks available to a guest, implemented in Go. `ctx` is an
+/// opaque handle passed to callbacks that need it; Rust never dereferences it. A
+/// missing callback makes the corresponding opcode trap.
+#[derive(Clone, Copy, Default)]
+struct HostCallbacks {
+    /// Provider for `txn` field reads. `None` in tests, or if a guest is run
+    /// without a transaction.
+    txn_field: Option<TxnFieldCb>,
+    /// Provider for `ed25519verify_bare`. `None` in tests, or if a guest is run
+    /// without a host.
+    ed25519_verify_bare: Option<Ed25519VerifyCb>,
+    /// Opaque handle passed back to `txn_field`.
+    ctx: usize,
+}
+
 /// Store-level state visible to host functions.
 struct HostState {
     args: Vec<Vec<u8>>,
     accessed: [u64; ARGS_READ_WORDS],
     limits: StoreLimits,
-    /// Provider for `txn` field reads. `None` in tests, or if a guest is run
-    /// without a transaction; calling a txn host function then traps.
-    txn_cb: Option<TxnFieldCb>,
-    /// Opaque handle passed back to `txn_cb`.
-    txn_ctx: usize,
+    host: HostCallbacks,
 }
 
 impl HostState {
@@ -194,8 +236,8 @@ fn fetch_txn_field(
         .ok_or_else(|| wasmi::Error::from(TrapCode::OutOfFuel))?;
     caller.set_fuel(remaining)?;
 
-    let cb = caller.data().txn_cb;
-    let ctx = caller.data().txn_ctx;
+    let cb = caller.data().host.txn_field;
+    let ctx = caller.data().host.ctx;
     let Some(cb) = cb else {
         return Err(wasmi::Error::new(
             "txn host functions are not available in this build",
@@ -205,7 +247,7 @@ fn fetch_txn_field(
         return Err(wasmi::Error::new(format!("invalid txn field {field}")));
     }
 
-    let mut err = [0u8; TXN_ERR_BUF_LEN];
+    let mut err = [0u8; ERR_BUF_LEN];
     let mut len = 0usize;
     let mut is_bytes = 0u8;
 
@@ -229,7 +271,7 @@ fn fetch_txn_field(
         )));
     }
 
-    if is_bytes != 0 && len > MAX_TXN_BYTES {
+    if is_bytes != 0 && len > MAX_AVM_BYTES {
         return Err(wasmi::Error::new("txn byte field exceeds AVM size limit"));
     }
     Ok((is_bytes != 0, len))
@@ -257,7 +299,7 @@ fn txn_bytes(
     out_ptr: i32,
     out_len: i32,
 ) -> Result<i32, wasmi::Error> {
-    let mut buf = [0u8; MAX_TXN_BYTES];
+    let mut buf = [0u8; MAX_AVM_BYTES];
     // Length queries don't fetch or copy the field payload.
     let capacity = if out_len <= 0 {
         0
@@ -295,6 +337,92 @@ fn txn_bytes(
         return Ok(TXN_ERR_MEMORY);
     }
     Ok(len as i32)
+}
+
+/// Copies a byte range out of a guest's linear memory into a fresh buffer. The
+/// range must fit within `MAX_AVM_BYTES` so a guest cannot force an oversized
+/// allocation; a negative length or pointer, a missing `memory` export, or a
+/// range outside linear memory traps.
+fn read_guest_bytes(
+    caller: &mut Caller<'_, HostState>,
+    ptr: i32,
+    len: i32,
+) -> Result<Vec<u8>, wasmi::Error> {
+    if len < 0 {
+        return Err(wasmi::Error::new("negative byte length"));
+    }
+    if ptr < 0 {
+        return Err(wasmi::Error::new("negative byte pointer"));
+    }
+    let len = len as usize;
+    if len > MAX_AVM_BYTES {
+        return Err(wasmi::Error::new("byte value exceeds AVM size limit"));
+    }
+    let mut buf = vec![0u8; len];
+    if buf.is_empty() {
+        return Ok(buf);
+    }
+    let memory: Option<wasmi::Memory> = caller.get_export("memory").and_then(|e| e.into_memory());
+    let Some(memory) = memory else {
+        return Err(wasmi::Error::new("missing memory export"));
+    };
+    memory
+        .read(&*caller, ptr as usize, &mut buf)
+        .map_err(|_| wasmi::Error::new("byte range outside linear memory"))?;
+    Ok(buf)
+}
+
+/// Implements the AVM's `ed25519verify_bare`. The three operands are copied out
+/// of guest memory and handed to Go, which performs the verification, so the
+/// opcode matches the AVM exactly.
+fn ed25519verify_bare(
+    mut caller: Caller<'_, HostState>,
+    data_ptr: i32,
+    data_len: i32,
+    sig_ptr: i32,
+    sig_len: i32,
+    pk_ptr: i32,
+    pk_len: i32,
+) -> Result<i32, wasmi::Error> {
+    // Charge the opcode's cost before doing any host work, including the reads.
+    let remaining = caller.get_fuel()?;
+    let remaining = remaining
+        .checked_sub(ED25519_VERIFY_BARE_FUEL_COST)
+        .ok_or_else(|| wasmi::Error::from(TrapCode::OutOfFuel))?;
+    caller.set_fuel(remaining)?;
+
+    let cb = caller.data().host.ed25519_verify_bare;
+    let Some(cb) = cb else {
+        return Err(wasmi::Error::new(
+            "ed25519verify_bare is not available in this build",
+        ));
+    };
+
+    let data = read_guest_bytes(&mut caller, data_ptr, data_len)?;
+    let sig = read_guest_bytes(&mut caller, sig_ptr, sig_len)?;
+    let pk = read_guest_bytes(&mut caller, pk_ptr, pk_len)?;
+
+    let mut err = [0u8; ERR_BUF_LEN];
+    let ret = unsafe {
+        cb(
+            data.as_ptr(),
+            data.len(),
+            sig.as_ptr(),
+            sig.len(),
+            pk.as_ptr(),
+            pk.len(),
+            err.as_mut_ptr(),
+            err.len(),
+        )
+    };
+    match ret {
+        1 => Ok(1),
+        0 => Ok(0),
+        _ => Err(wasmi::Error::new(format!(
+            "ed25519verify_bare error: {}",
+            cstr(&err)
+        ))),
+    }
 }
 
 /// Result of a single guest invocation.
@@ -336,8 +464,7 @@ fn instantiate(
     args: Vec<Vec<u8>>,
     memory_limit_bytes: usize,
     fuel: u64,
-    txn_cb: Option<TxnFieldCb>,
-    txn_ctx: usize,
+    host: HostCallbacks,
 ) -> Result<(Store<HostState>, Instance, TypedFunc<(), i32>), String> {
     let engine = new_engine();
     let module = Module::new(&engine, wasm).map_err(|err| format!("invalid wasm module: {err}"))?;
@@ -355,6 +482,9 @@ fn instantiate(
     linker
         .func_wrap("env", "txn_bytes", txn_bytes)
         .map_err(|err| format!("could not link env.txn_bytes: {err}"))?;
+    linker
+        .func_wrap("env", "ed25519verify_bare", ed25519verify_bare)
+        .map_err(|err| format!("could not link env.ed25519verify_bare: {err}"))?;
 
     let mut store = Store::new(
         &engine,
@@ -362,8 +492,7 @@ fn instantiate(
             args,
             accessed: [0; ARGS_READ_WORDS],
             limits: store_limits(memory_limit_bytes),
-            txn_cb,
-            txn_ctx,
+            host,
         },
     );
     store.limiter(|state| &mut state.limits);
@@ -402,6 +531,9 @@ fn validate_inner(wasm: &[u8]) -> Result<(), String> {
                 "arg" => func_type_is(import.ty(), &[ValType::I32; 3], &[ValType::I32]),
                 "txn_uint" => func_type_is(import.ty(), &[ValType::I32], &[ValType::I64]),
                 "txn_bytes" => func_type_is(import.ty(), &[ValType::I32; 3], &[ValType::I32]),
+                "ed25519verify_bare" => {
+                    func_type_is(import.ty(), &[ValType::I32; 6], &[ValType::I32])
+                }
                 _ => false,
             };
         if !ok {
@@ -433,15 +565,14 @@ fn run_inner(
     wasm: &[u8],
     args: Vec<Vec<u8>>,
     fuel: u64,
-    txn_cb: Option<TxnFieldCb>,
-    txn_ctx: usize,
+    host: HostCallbacks,
 ) -> Result<Outcome, String> {
     if args.len() > MAX_ARGS {
         return Err(format!("too many LogicSig args: {}", args.len()));
     }
 
     let (mut store, _instance, program) =
-        instantiate(wasm, args, DEFAULT_MEMORY_LIMIT, fuel, txn_cb, txn_ctx)?;
+        instantiate(wasm, args, DEFAULT_MEMORY_LIMIT, fuel, host)?;
 
     let result = program.call(&mut store, ());
     let pass = match result {
@@ -508,8 +639,9 @@ unsafe fn args_from_raw(args: *const WasmLsigArg, args_len: usize) -> Result<Vec
 /// `err_buf`. `fuel_used` receives the fuel consumed and `args_read` receives
 /// `ARGS_READ_WORDS` words recording which arguments were read.
 ///
-/// `txn_cb`, if non-null, is the host's provider for `txn` field reads; `txn_ctx`
-/// is passed back to it unchanged.
+/// `txn_cb`, if non-null, is the host's provider for `txn` field reads and
+/// `ed25519verify_bare_cb` its verifier; `ctx` is passed back to `txn_cb`
+/// unchanged.
 ///
 /// # Safety
 ///
@@ -527,15 +659,21 @@ pub unsafe extern "C" fn wasm_lsig_run(
     err_buf: *mut u8,
     err_buf_len: usize,
     txn_cb: Option<TxnFieldCb>,
-    txn_ctx: usize,
+    ed25519verify_bare_cb: Option<Ed25519VerifyCb>,
+    ctx: usize,
 ) -> i32 {
+    let host = HostCallbacks {
+        txn_field: txn_cb,
+        ed25519_verify_bare: ed25519verify_bare_cb,
+        ctx,
+    };
     let result = catch_unwind(AssertUnwindSafe(|| {
         if code.is_null() && code_len != 0 {
             return Err("null program pointer".to_string());
         }
         let wasm = std::slice::from_raw_parts(code, code_len);
         let args = args_from_raw(args, args_len)?;
-        run_inner(wasm, args, fuel, txn_cb, txn_ctx)
+        run_inner(wasm, args, fuel, host)
     }));
 
     match result {
@@ -610,7 +748,7 @@ mod tests {
 
     fn run_wat(wat: &str, args: Vec<Vec<u8>>, fuel: u64) -> Result<Outcome, String> {
         let wasm = wat::parse_str(wat).expect("valid wat");
-        run_inner(&wasm, args, fuel, None, 0)
+        run_inner(&wasm, args, fuel, HostCallbacks::default())
     }
 
     // Field indices used by `fake_txn_field`, matching the Go `TxnField` enum.
@@ -670,7 +808,86 @@ mod tests {
 
     fn run_wat_with_txn(wat: &str, fuel: u64) -> Result<Outcome, String> {
         let wasm = wat::parse_str(wat).expect("valid wat");
-        run_inner(&wasm, vec![], fuel, Some(fake_txn_field), 0)
+        run_inner(
+            &wasm,
+            vec![],
+            fuel,
+            HostCallbacks {
+                txn_field: Some(fake_txn_field),
+                ..Default::default()
+            },
+        )
+    }
+
+    // fake_ed25519_verify_bare stands in for the Go verifier: it approves iff
+    // data is `DATA`, the signature is 64 bytes of 3, and the key is 32 bytes of
+    // 4. Any other length reports the same errors as the AVM.
+    const ED25519_DATA: &[u8] = b"message";
+
+    unsafe extern "C" fn fake_ed25519_verify_bare(
+        data: *const u8,
+        data_len: usize,
+        sig: *const u8,
+        sig_len: usize,
+        pk: *const u8,
+        pk_len: usize,
+        err: *mut u8,
+        err_cap: usize,
+    ) -> i32 {
+        let data = std::slice::from_raw_parts(data, data_len);
+        if sig_len != 64 {
+            let msg = b"invalid signature\0";
+            if !err.is_null() {
+                std::ptr::copy_nonoverlapping(msg.as_ptr(), err, msg.len().min(err_cap));
+            }
+            return -1;
+        }
+        if pk_len != 32 {
+            let msg = b"invalid public key\0";
+            if !err.is_null() {
+                std::ptr::copy_nonoverlapping(msg.as_ptr(), err, msg.len().min(err_cap));
+            }
+            return -1;
+        }
+        let sig = std::slice::from_raw_parts(sig, sig_len);
+        let pk = std::slice::from_raw_parts(pk, pk_len);
+        if data == ED25519_DATA && sig.iter().all(|&b| b == 3) && pk.iter().all(|&b| b == 4) {
+            1
+        } else {
+            0
+        }
+    }
+
+    fn run_wat_with_ed25519(wat: &str, fuel: u64) -> Result<Outcome, String> {
+        let wasm = wat::parse_str(wat).expect("valid wat");
+        run_inner(
+            &wasm,
+            vec![],
+            fuel,
+            HostCallbacks {
+                ed25519_verify_bare: Some(fake_ed25519_verify_bare),
+                ..Default::default()
+            },
+        )
+    }
+
+    /// Builds a program that calls `ed25519verify_bare` over `data`, a 64-byte
+    /// signature, and a 32-byte public key built from the given fill bytes.
+    fn ed25519_wat(sig_byte: u8, pk_byte: u8) -> String {
+        let sig = format!("\\{sig_byte:02x}").repeat(64);
+        let pk = format!("\\{pk_byte:02x}").repeat(32);
+        format!(
+            r#"(module
+                (import "env" "ed25519verify_bare" (func $verify (param i32 i32 i32 i32 i32 i32) (result i32)))
+                (memory (export "memory") 1)
+                (data (i32.const 0) "message")
+                (data (i32.const 100) "{sig}")
+                (data (i32.const 200) "{pk}")
+                (func (export "program") (result i32)
+                    (call $verify (i32.const 0) (i32.const 7)
+                                  (i32.const 100) (i32.const 64)
+                                  (i32.const 200) (i32.const 32))))"#
+        )
     }
 
     #[test]
@@ -962,8 +1179,11 @@ mod tests {
                 vec![],
                 DEFAULT_MEMORY_LIMIT,
                 1000,
-                Some(fake_txn_field),
-                (&mut calls as *mut usize) as usize,
+                HostCallbacks {
+                    txn_field: Some(fake_txn_field),
+                    ctx: (&mut calls as *mut usize) as usize,
+                    ..Default::default()
+                },
             )
             .unwrap();
             assert_eq!(program.call(&mut store, ()).unwrap(), 1);
@@ -981,8 +1201,11 @@ mod tests {
             vec![],
             DEFAULT_MEMORY_LIMIT,
             1000,
-            Some(fake_txn_field),
-            (&mut calls as *mut usize) as usize,
+            HostCallbacks {
+                txn_field: Some(fake_txn_field),
+                ctx: (&mut calls as *mut usize) as usize,
+                ..Default::default()
+            },
         )
         .unwrap();
 
@@ -1062,6 +1285,61 @@ mod tests {
     }
 
     #[test]
+    fn ed25519verify_bare_approves_and_rejects() {
+        assert!(
+            run_wat_with_ed25519(&ed25519_wat(3, 4), 100000)
+                .unwrap()
+                .pass
+        );
+        // The verifier returns 0 for a signature that does not match, which the
+        // program reports as a rejection rather than an error.
+        assert!(
+            !run_wat_with_ed25519(&ed25519_wat(9, 4), 100000)
+                .unwrap()
+                .pass
+        );
+    }
+
+    #[test]
+    fn ed25519verify_bare_charges_opcode_cost() {
+        // Just enough fuel for the call itself, not for the preceding
+        // instructions, so the program must run out.
+        let err = run_wat_with_ed25519(&ed25519_wat(3, 4), ED25519_VERIFY_BARE_FUEL_COST);
+        assert!(err.is_err());
+        assert!(err.unwrap_err().contains("fuel"));
+    }
+
+    #[test]
+    fn ed25519verify_bare_bad_signature_length_traps() {
+        let wat = r#"(module
+            (import "env" "ed25519verify_bare" (func $verify (param i32 i32 i32 i32 i32 i32) (result i32)))
+            (memory (export "memory") 1)
+            (func (export "program") (result i32)
+                (call $verify (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 63)
+                              (i32.const 0) (i32.const 32))))"#;
+        let err = run_wat_with_ed25519(wat, 100000).unwrap_err();
+        assert!(err.contains("invalid signature"), "{err}");
+    }
+
+    #[test]
+    fn ed25519verify_bare_out_of_bounds_read_traps() {
+        let wat = r#"(module
+            (import "env" "ed25519verify_bare" (func $verify (param i32 i32 i32 i32 i32 i32) (result i32)))
+            (memory (export "memory") 1)
+            (func (export "program") (result i32)
+                (call $verify (i32.const 65530) (i32.const 10) (i32.const 0) (i32.const 64)
+                              (i32.const 0) (i32.const 32))))"#;
+        let err = run_wat_with_ed25519(wat, 100000).unwrap_err();
+        assert!(err.contains("outside linear memory"), "{err}");
+    }
+
+    #[test]
+    fn ed25519verify_bare_without_host_traps() {
+        let err = run_wat(&ed25519_wat(3, 4), vec![], 100000).unwrap_err();
+        assert!(err.contains("not available"), "{err}");
+    }
+
+    #[test]
     fn invalid_module_is_rejected() {
         assert!(validate_inner(b"not wasm").is_err());
     }
@@ -1102,6 +1380,7 @@ mod tests {
                 (import "env" "arg" (func (param i32 i32 i32) (result i32)))
                 (import "env" "txn_uint" (func (param i32) (result i64)))
                 (import "env" "txn_bytes" (func (param i32 i32 i32) (result i32)))
+                (import "env" "ed25519verify_bare" (func (param i32 i32 i32 i32 i32 i32) (result i32)))
                 (memory (export "memory") 1)
                 (func (export "program") (result i32) i32.const 1))
             "#,
@@ -1116,6 +1395,19 @@ mod tests {
             r#"
             (module
                 (import "env" "txn_uint" (func (param i32) (result i32)))
+                (func (export "program") (result i32) i32.const 1))
+            "#,
+        )
+        .unwrap();
+        assert!(validate_inner(&wasm).is_err());
+    }
+
+    #[test]
+    fn validation_rejects_bad_ed25519_signature() {
+        let wasm = wat::parse_str(
+            r#"
+            (module
+                (import "env" "ed25519verify_bare" (func (param i32 i32 i32 i32 i32) (result i32)))
                 (func (export "program") (result i32) i32.const 1))
             "#,
         )

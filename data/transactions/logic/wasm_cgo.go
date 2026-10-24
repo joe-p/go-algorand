@@ -42,6 +42,18 @@ typedef int32_t (*wasm_txn_field_cb)(
 	uint8_t *err_buf,
 	size_t err_buf_len);
 
+// wasm_ed25519verify_bare_cb is implemented in Go (see wasm_host.go). Rust
+// calls it to verify an ed25519 signature over three byte ranges.
+typedef int32_t (*wasm_ed25519verify_bare_cb)(
+	const uint8_t *data,
+	size_t data_len,
+	const uint8_t *sig,
+	size_t sig_len,
+	const uint8_t *pk,
+	size_t pk_len,
+	uint8_t *err_buf,
+	size_t err_buf_len);
+
 extern int32_t goWasmTxnField(
 	uintptr_t ctx,
 	uint32_t field,
@@ -52,10 +64,24 @@ extern int32_t goWasmTxnField(
 	uint8_t *err_buf,
 	size_t err_buf_len);
 
+extern int32_t goWasmEd25519VerifyBare(
+	const uint8_t *data,
+	size_t data_len,
+	const uint8_t *sig,
+	size_t sig_len,
+	const uint8_t *pk,
+	size_t pk_len,
+	uint8_t *err_buf,
+	size_t err_buf_len);
+
 // Go cannot take the address of an exported function, so expose it through a
 // C helper that returns the function pointer.
 static wasm_txn_field_cb get_wasm_txn_field_cb(void) {
 	return goWasmTxnField;
+}
+
+static wasm_ed25519verify_bare_cb get_wasm_ed25519verify_bare_cb(void) {
+	return goWasmEd25519VerifyBare;
 }
 
 int32_t wasm_lsig_run(
@@ -65,7 +91,9 @@ int32_t wasm_lsig_run(
 	uint64_t *fuel_used,
 	uint64_t *args_read,
 	uint8_t *err_buf, size_t err_buf_len,
-	wasm_txn_field_cb txn_cb, uintptr_t txn_ctx);
+	wasm_txn_field_cb txn_cb,
+	wasm_ed25519verify_bare_cb ed25519verify_bare_cb,
+	uintptr_t ctx);
 
 int32_t wasm_lsig_validate(
 	const uint8_t *code, size_t code_len,
@@ -83,8 +111,8 @@ import (
 const wasmErrBufLen = 256
 
 // validateWasmProgram checks that program is a structurally valid WASM
-// LogicSig: a well-formed module that links against the args and txn host
-// functions and exports `program`. It does not execute the program.
+// LogicSig: a well-formed module that links against the args, txn, and crypto
+// host functions and exports `program`. It does not execute the program.
 func validateWasmProgram(program []byte) error {
 	if len(program) == 0 {
 		return errors.New("wasm program is empty")
@@ -105,7 +133,8 @@ func validateWasmProgram(program []byte) error {
 // runWasmProgram executes a WASM LogicSig with the given arguments, consuming
 // at most fuel units. It reports whether the program approved, how much fuel
 // was used, and which arguments were read. The evaluation context answers the
-// program's `txn` field reads for the duration of the call.
+// program's `txn` field reads, and crypto opcodes are verified by the same
+// helpers the AVM uses, for the duration of the call.
 func runWasmProgram(program []byte, args [][]byte, fuel uint64, cx *EvalContext) (bool, uint64, [argsReadWords]uint64, error) {
 	var accessed [argsReadWords]uint64
 	if len(program) == 0 {
@@ -137,6 +166,7 @@ func runWasmProgram(program []byte, args [][]byte, fuel uint64, cx *EvalContext)
 		(*C.uint8_t)(unsafe.Pointer(&errBuf[0])),
 		C.size_t(len(errBuf)),
 		C.get_wasm_txn_field_cb(),
+		C.get_wasm_ed25519verify_bare_cb(),
 		C.uintptr_t(handle),
 	)
 

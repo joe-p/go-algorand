@@ -37,21 +37,29 @@ The module may import, from the `env` module:
   copying. A negative value reports an ABI error (`-2` buffer too small, `-3`
   bad pointer or missing `memory` export); invalid, out-of-version, or
   integer fields trap the guest.
+- `ed25519verify_bare(data: i32, data_len: i32, sig: i32, sig_len: i32,
+  pk: i32, pk_len: i32) -> i32`: the AVM's `ed25519verify_bare`, verifying the
+  ed25519 signature `sig` over `data` under public key `pk`. Returns `1` when
+  the signature is valid and `0` when it is not. The three byte ranges are read
+  out of linear memory and verified in Go. A negative length, an out-of-bounds
+  range, oversized data, or a wrong-length key or signature traps the guest.
 
-Field values come from the node, so the AVM's field semantics (typing, version
-gating, allowed modes, and the 4096-byte value limit) have a single source of
-truth. Each read invokes Go once; length queries do not copy the payload.
-For now only the current
-transaction's non-array fields are exposed (the `txn` opcode, not `txna`,
-`gtxn`, or `itxn`). Later opcodes will be added to the same `env` module.
+Field values come from the node and `ed25519verify_bare` is verified by the
+node, so the AVM's semantics (typing, version gating, allowed modes, the
+4096-byte value limit, and ed25519 validation) have a single source of truth.
+Each read invokes Go once; length queries do not copy the payload. For now the
+`txn` opcode is limited to the current transaction's non-array fields (not
+`txna`, `gtxn`, or `itxn`) and `ed25519verify_bare` is the only crypto opcode.
+More opcodes will be added to the same `env` module.
 
 ## Execution limits
 
 - Fuel metered; the AVM cost budget is reused as the fuel limit, one fuel unit
   per cost unit. Each `txn_uint` or `txn_bytes` invocation costs one additional
   fuel unit, including length queries and invalid reads, on top of WASM
-  instruction fuel. The charge occurs before host work; insufficient fuel
-  traps. Running out of fuel is an error.
+  instruction fuel. `ed25519verify_bare` is charged its opcode cost (1900). The
+  charge occurs before host work; insufficient fuel traps. Running out of fuel
+  is an error.
 - Each invocation permits at most one linear memory (64 KiB), one table
   (1024 elements), and one instance. Size and count limits bound aggregate
   guest memory/table allocation, including initial allocation before `start`.
@@ -63,9 +71,10 @@ transaction's non-array fields are exposed (the `txn` opcode, not `txna`,
 ## C ABI
 
 - `wasm_lsig_run(code, code_len, args, args_len, fuel, fuel_used, args_read,
-  err_buf, err_buf_len, txn_cb, txn_ctx)`: `1` approved, `0` rejected, `-1`
-  error. `txn_cb` is the host's transaction-field provider and `txn_ctx` is an
-  opaque handle it receives back.
+  err_buf, err_buf_len, txn_cb, ed25519verify_bare_cb, ctx)`: `1` approved, `0`
+  rejected, `-1` error. `txn_cb` is the host's transaction-field provider,
+  `ed25519verify_bare_cb` its ed25519 verifier, and `ctx` an opaque handle it
+  receives back.
 - `wasm_lsig_validate(code, code_len, err_buf, err_buf_len)`: `0` valid,
   `-1` invalid.
 

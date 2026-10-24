@@ -264,24 +264,35 @@ func opEd25519Verify(cx *EvalContext) error {
 	return nil
 }
 
+// ed25519VerifyBare verifies the ed25519 signature sig over data under public
+// key pk. It is shared by the AVM's ed25519verify_bare opcode and the WASM host
+// function, so the two paths cannot disagree about key or signature validation.
+func ed25519VerifyBare(data, sig, pk []byte) (bool, error) {
+	var sv crypto.SignatureVerifier
+	if len(pk) != len(sv) {
+		return false, errors.New("invalid public key")
+	}
+	copy(sv[:], pk)
+
+	var signature crypto.Signature
+	if len(sig) != len(signature) {
+		return false, errors.New("invalid signature")
+	}
+	copy(signature[:], sig)
+
+	return sv.VerifyBytes(data, signature), nil
+}
+
 func opEd25519VerifyBare(cx *EvalContext) error {
 	last := len(cx.Stack) - 1 // index of PK
 	prev := last - 1          // index of signature
 	pprev := prev - 1         // index of data
 
-	var sv crypto.SignatureVerifier
-	if len(cx.Stack[last].Bytes) != len(sv) {
-		return errors.New("invalid public key")
+	ok, err := ed25519VerifyBare(cx.Stack[pprev].Bytes, cx.Stack[prev].Bytes, cx.Stack[last].Bytes)
+	if err != nil {
+		return err
 	}
-	copy(sv[:], cx.Stack[last].Bytes)
-
-	var sig crypto.Signature
-	if len(cx.Stack[prev].Bytes) != len(sig) {
-		return errors.New("invalid signature")
-	}
-	copy(sig[:], cx.Stack[prev].Bytes)
-
-	cx.Stack[pprev] = boolToSV(sv.VerifyBytes(cx.Stack[pprev].Bytes, sig))
+	cx.Stack[pprev] = boolToSV(ok)
 	cx.Stack = cx.Stack[:prev]
 	return nil
 }

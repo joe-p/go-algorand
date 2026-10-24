@@ -28,6 +28,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/algorand/go-algorand/config"
+	"github.com/algorand/go-algorand/crypto"
 	"github.com/algorand/go-algorand/data/transactions"
 	"github.com/algorand/go-algorand/protocol"
 	"github.com/algorand/go-algorand/test/partitiontest"
@@ -137,6 +138,35 @@ func TestWasmReadsTxnBytes(t *testing.T) {
 	pass, _, err = EvalSignatureProgram(program, [][]byte{{byte(Sender)}}, 0, optSigParams(wasmProto, txn))
 	require.NoError(t, err)
 	require.False(t, pass)
+}
+
+// TestWasmEd25519VerifyBare checks the ed25519verify_bare host function against
+// a real ed25519 signature: the program approves iff the signature is valid.
+func TestWasmEd25519VerifyBare(t *testing.T) {
+	partitiontest.PartitionTest(t)
+
+	c := crypto.GenerateSignatureSecrets(randSeed())
+	data := []byte("wasm ed25519verify_bare test message")
+	sig := c.SignBytes(data)
+	program := loadWasm(t, "ed25519verify_bare.wasm")
+
+	pass, _, err := EvalSignatureProgram(program, [][]byte{data, sig[:], c.SignatureVerifier[:]}, 0, optSigParams(wasmProto))
+	require.NoError(t, err)
+	require.True(t, pass)
+
+	// A tampered message fails verification, so the program rejects rather than
+	// erroring.
+	badData := append([]byte(nil), data...)
+	badData[0] ^= 0xff
+	pass, _, err = EvalSignatureProgram(program, [][]byte{badData, sig[:], c.SignatureVerifier[:]}, 0, optSigParams(wasmProto))
+	require.NoError(t, err)
+	require.False(t, pass)
+
+	// A short signature and a short public key are errors, as in the AVM.
+	_, _, err = EvalSignatureProgram(program, [][]byte{data, sig[1:], c.SignatureVerifier[:]}, 0, optSigParams(wasmProto))
+	require.ErrorContains(t, err, "invalid signature")
+	_, _, err = EvalSignatureProgram(program, [][]byte{data, sig[:], c.SignatureVerifier[1:]}, 0, optSigParams(wasmProto))
+	require.ErrorContains(t, err, "invalid public key")
 }
 
 // TestWasmTxnFieldTypeError checks that asking for a field with the wrong type

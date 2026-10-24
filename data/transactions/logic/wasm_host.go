@@ -110,6 +110,59 @@ func goWasmTxnField(ctx C.uintptr_t, field C.uint32_t, buf *C.uint8_t, bufCap C.
 	return 0
 }
 
+// goWasmEd25519VerifyBare answers an `ed25519verify_bare` opcode from a WASM
+// guest. The Rust executor copies the three operands out of guest memory and
+// calls this through C while the guest runs, and it must not let a panic cross
+// the FFI boundary.
+//
+// It returns 1 when the signature is valid, 0 when it is not, and -1 on error
+// (with a message in err_buf).
+//
+// Verification is delegated to ed25519VerifyBare, the helper the AVM opcode
+// uses, so the wasm and AVM code paths cannot disagree about the opcode.
+//
+//export goWasmEd25519VerifyBare
+func goWasmEd25519VerifyBare(dataPtr *C.uint8_t, dataLen C.size_t,
+	sigPtr *C.uint8_t, sigLen C.size_t, pkPtr *C.uint8_t, pkLen C.size_t,
+	errBuf *C.uint8_t, errCap C.size_t) (ret C.int32_t) {
+	defer func() {
+		if r := recover(); r != nil {
+			writeWasmErr(errBuf, errCap, fmt.Sprintf("panic verifying ed25519 signature: %v", r))
+			ret = -1
+		}
+	}()
+
+	data := wasmCBytes(dataPtr, dataLen)
+	// The AVM can only push values up to maxStringSize, and the Rust side
+	// rejects longer ranges, but enforce the same bound here as the txn path.
+	if len(data) > maxStringSize {
+		writeWasmErr(errBuf, errCap, fmt.Sprintf("ed25519verify_bare data is too big (%d)", len(data)))
+		return -1
+	}
+	sig := wasmCBytes(sigPtr, sigLen)
+	pk := wasmCBytes(pkPtr, pkLen)
+
+	ok, err := ed25519VerifyBare(data, sig, pk)
+	if err != nil {
+		writeWasmErr(errBuf, errCap, err.Error())
+		return -1
+	}
+	if ok {
+		return 1
+	}
+	return 0
+}
+
+// wasmCBytes views a C byte range as a Go slice. The slice aliases C memory and
+// is valid only for the duration of the host call. A zero length yields an
+// empty slice regardless of the pointer.
+func wasmCBytes(ptr *C.uint8_t, length C.size_t) []byte {
+	if length == 0 {
+		return nil
+	}
+	return unsafe.Slice((*byte)(unsafe.Pointer(ptr)), int(length))
+}
+
 // writeWasmErr copies msg into a NUL-terminated C buffer, truncating if needed.
 func writeWasmErr(errBuf *C.uint8_t, errCap C.size_t, msg string) {
 	if errBuf == nil || errCap == 0 {

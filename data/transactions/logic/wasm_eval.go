@@ -23,6 +23,11 @@ import (
 	"github.com/algorand/go-algorand/data/transactions"
 )
 
+// wasmFuelPerCost converts AVM budget units into wasmi fuel. Must match
+// FUEL_PER_COST in wasm/src/lib.rs. Guest instruction charges are unchanged;
+// host operations are calibrated separately toward 1 ns/fuel.
+const wasmFuelPerCost uint64 = 15
+
 // wasmEnabled reports whether the protocol runs WASM LogicSigs.
 func wasmEnabled(params *EvalParams) bool {
 	return params != nil && params.Proto != nil && params.Proto.EnableWasmLogicSig
@@ -76,8 +81,7 @@ func checkWasmContract(program []byte, params *EvalParams) error {
 
 // evalWasmSignatureProgram evaluates a WASM LogicSig authorizing the gi-th
 // transaction in params. It mirrors EvalSignatureProgram, but runs the wasm
-// executor instead of the AVM. The budget of the AVM is reused as the fuel
-// limit, one fuel unit to one cost unit.
+// executor instead of the AVM, with wasmFuelPerCost fuel per AVM cost unit.
 func evalWasmSignatureProgram(program []byte, args [][]byte, gi int, params *EvalParams) (bool, *EvalContext, error) {
 	cx := EvalContext{
 		EvalParams: params,
@@ -117,7 +121,7 @@ func wasmEvalContract(program []byte, cx *EvalContext) (bool, error) {
 	return wasmEval(cx, program)
 }
 
-// wasmEval runs program in cx, charging the fuel it consumes as AVM cost. In
+// wasmEval runs program in cx, converting consumed fuel to AVM cost. In
 // signature mode it validates the LogicSig argument bounds and records which
 // arguments were read; in application mode the guest reads arguments through
 // `txna` instead, so those signature-only rules do not apply.
@@ -139,12 +143,20 @@ func wasmEval(cx *EvalContext, program []byte) (bool, error) {
 		budget = 0
 	}
 
-	pass, fuelUsed, accessed, err := runWasmProgram(program, cx.sigArgs, uint64(budget), cx)
+	if uint64(budget) > ^uint64(0)/wasmFuelPerCost {
+		return false, errors.New("WASM fuel budget overflow")
+	}
+	pass, fuelUsed, accessed, err := runWasmProgram(program, cx.sigArgs, uint64(budget)*wasmFuelPerCost, cx)
 	if err != nil {
 		return false, err
 	}
 
-	cost := int(fuelUsed)
+	cx.wasmFuelUsed = fuelUsed
+	// Round up so even a partial cost unit is charged to the shared budget.
+	cost := int(fuelUsed / wasmFuelPerCost)
+	if fuelUsed%wasmFuelPerCost != 0 {
+		cost++
+	}
 	if cost > budget {
 		cost = budget
 	}

@@ -56,9 +56,10 @@
 //! The transaction fields come from the host through `TxnFieldCb`, so the AVM's
 //! field semantics (typing, version gating, allowed modes) have a single
 //! source of truth in Go. Byte fields have the AVM's 4096-byte limit. Each txn
-//! host invocation costs one additional fuel unit before performing host work.
+//! host invocation is charged before performing host work, with weights
+//! calibrated toward 1 ns/fuel on the fixtures in WASM_PERF.md.
 //! `ed25519verify_bare` similarly delegates verification to Go and is charged
-//! the opcode's AVM cost.
+//! the opcode's AVM cost multiplied by fifteen.
 //!
 //! Execution is deterministic (no floats, no auto-dispatch), fuel metered, and
 //! linear memory is capped. The engine is rebuilt per call; this is simple and
@@ -116,22 +117,38 @@ const ERR_BUF_LEN: usize = 256;
 /// operands of byte-string opcodes.
 const MAX_AVM_BYTES: usize = 4096;
 
+/// Fuel per AVM cost unit. Must match wasmFuelPerCost in Go's wasm_eval.go.
+/// Guest instruction charges remain in wasmi's native fuel denomination.
+const FUEL_PER_COST: u64 = 15;
+
+/// Explicit host charges calibrated from the linux/arm64 fixtures in
+/// WASM_PERF.md toward 1 ns/fuel. Each weight is approximately measured ns/call
+/// minus the fixture's guest/loop fuel, rounded up. These are fixed protocol
+/// weights, not runtime timing measurements; payload scaling needs more study.
+const ARG_FUEL_COST: u64 = 30;
+const ARG_COUNT_FUEL_COST: u64 = 10;
+
 /// Additional fuel charged per txn host invocation, including length queries.
-const TXN_FUEL_COST: u64 = 1;
+const TXN_UINT_FUEL_COST: u64 = 125;
+const TXN_BYTES_FUEL_COST: u64 = 190;
+const TXNA_BYTES_FUEL_COST: u64 = 200;
 
 /// Fuel charged for one `ed25519verify_bare` call. Must match the opcode's cost
-/// in the Go opcode table (`costly(1900)` for `ed25519verify_bare`).
-const ED25519_VERIFY_BARE_FUEL_COST: u64 = 1900;
+/// in the Go opcode table (`costly(1900)` for `ed25519verify_bare`), converted
+/// to fuel.
+const ED25519_VERIFY_BARE_FUEL_COST: u64 = 1900 * FUEL_PER_COST;
 
 // Error sentinels returned by the global-state byte-string read. Invalid
 // operations (a wrong-typed value) trap the guest instead.
 const GLOBAL_ERR_BUFFER: i32 = -2;
 const GLOBAL_ERR_MEMORY: i32 = -3;
 
-/// Fuel charged per global-state host invocation. Must match the AVM opcode cost
-/// in the Go opcode table: `app_global_get`, `app_global_put`, and
-/// `app_global_del` are all `only(ModeApp)`, whose default cost is 1.
-const GLOBAL_FUEL_COST: u64 = 1;
+/// Additional fuel charged per global-state host invocation.
+const GLOBAL_GET_UINT_FUEL_COST: u64 = 130;
+const GLOBAL_GET_BYTES_FUEL_COST: u64 = 170;
+const GLOBAL_PUT_UINT_FUEL_COST: u64 = 410;
+const GLOBAL_PUT_BYTES_FUEL_COST: u64 = 390;
+const GLOBAL_DEL_FUEL_COST: u64 = 140;
 
 /// A transaction field provider, implemented in Go. `ctx` is an opaque handle
 /// that Go maps back to the evaluation context; Rust never dereferences it.
@@ -257,7 +274,8 @@ impl HostState {
     }
 }
 
-fn arg_count(caller: Caller<'_, HostState>) -> Result<i32, wasmi::Error> {
+fn arg_count(mut caller: Caller<'_, HostState>) -> Result<i32, wasmi::Error> {
+    charge_fuel(&mut caller, ARG_COUNT_FUEL_COST)?;
     if caller.data().host.is_app {
         return Err(wasmi::Error::new(
             "arg_count is not available in application mode",
@@ -272,8 +290,11 @@ fn arg(
     out_ptr: i32,
     out_len: i32,
 ) -> Result<i32, wasmi::Error> {
+    charge_fuel(&mut caller, ARG_FUEL_COST)?;
     if caller.data().host.is_app {
-        return Err(wasmi::Error::new("arg is not available in application mode"));
+        return Err(wasmi::Error::new(
+            "arg is not available in application mode",
+        ));
     }
     if index < 0 {
         return Ok(ARG_ERR_INDEX);
@@ -323,13 +344,6 @@ fn fetch_txn_field(
     expect_array: bool,
     buf: &mut [u8],
 ) -> Result<(bool, usize), wasmi::Error> {
-    // Charge before doing any host work, including validation and callbacks.
-    let remaining = caller.get_fuel()?;
-    let remaining = remaining
-        .checked_sub(TXN_FUEL_COST)
-        .ok_or_else(|| wasmi::Error::from(TrapCode::OutOfFuel))?;
-    caller.set_fuel(remaining)?;
-
     let cb = caller.data().host.txn_field;
     let ctx = caller.data().host.ctx;
     let Some(cb) = cb else {
@@ -387,6 +401,8 @@ fn read_txn_uint(
     index: i32,
     expect_array: bool,
 ) -> Result<i64, wasmi::Error> {
+    // Charge before validation, buffer preparation, or Go callbacks.
+    charge_fuel(caller, TXN_UINT_FUEL_COST)?;
     let mut bytes = [0u8; 8];
     let (is_bytes, len) = fetch_txn_field(caller, field, index, expect_array, &mut bytes)?;
     if is_bytes {
@@ -424,6 +440,14 @@ fn read_txn_bytes(
     out_ptr: i32,
     out_len: i32,
 ) -> Result<i32, wasmi::Error> {
+    charge_fuel(
+        caller,
+        if expect_array {
+            TXNA_BYTES_FUEL_COST
+        } else {
+            TXN_BYTES_FUEL_COST
+        },
+    )?;
     let mut buf = [0u8; MAX_AVM_BYTES];
     // Length queries don't fetch or copy the field payload.
     let capacity = if out_len <= 0 {
@@ -592,7 +616,7 @@ fn app_global_get_uint(
     key_len: i32,
 ) -> Result<i64, wasmi::Error> {
     require_app(&caller)?;
-    charge_fuel(&mut caller, GLOBAL_FUEL_COST)?;
+    charge_fuel(&mut caller, GLOBAL_GET_UINT_FUEL_COST)?;
     let key = read_guest_bytes(&mut caller, key_ptr, key_len)?;
     let mut buf = [0u8; 8];
     let (exists, len, is_bytes) = host_global_get(&mut caller, &key, &mut buf)?;
@@ -622,7 +646,7 @@ fn app_global_get_bytes(
     out_len: i32,
 ) -> Result<i32, wasmi::Error> {
     require_app(&caller)?;
-    charge_fuel(&mut caller, GLOBAL_FUEL_COST)?;
+    charge_fuel(&mut caller, GLOBAL_GET_BYTES_FUEL_COST)?;
     let key = read_guest_bytes(&mut caller, key_ptr, key_len)?;
     let mut buf = [0u8; MAX_AVM_BYTES];
     // Length queries don't fetch or copy the value payload.
@@ -711,7 +735,7 @@ fn app_global_put_uint(
     value: i64,
 ) -> Result<(), wasmi::Error> {
     require_app(&caller)?;
-    charge_fuel(&mut caller, GLOBAL_FUEL_COST)?;
+    charge_fuel(&mut caller, GLOBAL_PUT_UINT_FUEL_COST)?;
     let key = read_guest_bytes(&mut caller, key_ptr, key_len)?;
     host_global_put(&mut caller, &key, &value.to_le_bytes(), true)
 }
@@ -725,7 +749,7 @@ fn app_global_put_bytes(
     val_len: i32,
 ) -> Result<(), wasmi::Error> {
     require_app(&caller)?;
-    charge_fuel(&mut caller, GLOBAL_FUEL_COST)?;
+    charge_fuel(&mut caller, GLOBAL_PUT_BYTES_FUEL_COST)?;
     let key = read_guest_bytes(&mut caller, key_ptr, key_len)?;
     let val = read_guest_bytes(&mut caller, val_ptr, val_len)?;
     host_global_put(&mut caller, &key, &val, false)
@@ -738,7 +762,7 @@ fn app_global_del(
     key_len: i32,
 ) -> Result<(), wasmi::Error> {
     require_app(&caller)?;
-    charge_fuel(&mut caller, GLOBAL_FUEL_COST)?;
+    charge_fuel(&mut caller, GLOBAL_DEL_FUEL_COST)?;
     let key = read_guest_bytes(&mut caller, key_ptr, key_len)?;
     let cb = caller.data().host.global_del;
     let ctx = caller.data().host.ctx;
@@ -1630,7 +1654,112 @@ mod tests {
     }
 
     #[test]
-    fn txn_charges_one_host_fuel_before_work() {
+    fn argument_hosts_charge_before_work() {
+        let wasm = wat::parse_str(
+            r#"(module
+                (memory (export "memory") 1)
+                (func (export "program") (result i32) i32.const 1))"#,
+        )
+        .unwrap();
+        let (mut store, _, _) = instantiate(
+            &wasm,
+            vec![vec![42]],
+            DEFAULT_MEMORY_LIMIT,
+            1000,
+            HostCallbacks::default(),
+        )
+        .unwrap();
+        let count = wasmi::Func::wrap(&mut store, arg_count)
+            .typed::<(), i32>(&store)
+            .unwrap();
+        store.set_fuel(ARG_COUNT_FUEL_COST - 1).unwrap();
+        let err = count.call(&mut store, ()).unwrap_err();
+        assert_eq!(err.as_trap_code(), Some(TrapCode::OutOfFuel));
+        store.set_fuel(ARG_COUNT_FUEL_COST).unwrap();
+        assert_eq!(count.call(&mut store, ()).unwrap(), 1);
+        assert_eq!(store.get_fuel().unwrap(), 0);
+
+        let read = wasmi::Func::wrap(&mut store, arg)
+            .typed::<(i32, i32, i32), i32>(&store)
+            .unwrap();
+        store.set_fuel(ARG_FUEL_COST - 1).unwrap();
+        let err = read.call(&mut store, (0, 0, 1)).unwrap_err();
+        assert_eq!(err.as_trap_code(), Some(TrapCode::OutOfFuel));
+        assert_eq!(store.data().accessed[0], 0);
+        store.set_fuel(ARG_FUEL_COST).unwrap();
+        // A direct host invocation has no guest caller's memory export.
+        assert_eq!(read.call(&mut store, (0, 0, 1)).unwrap(), ARG_ERR_MEMORY);
+        assert_eq!(store.get_fuel().unwrap(), 0);
+        assert_eq!(store.data().accessed[0], 0);
+        // Invalid reads still pay the same charge.
+        store.set_fuel(ARG_FUEL_COST).unwrap();
+        assert_eq!(read.call(&mut store, (-1, 0, 1)).unwrap(), ARG_ERR_INDEX);
+        assert_eq!(store.get_fuel().unwrap(), 0);
+    }
+
+    #[test]
+    fn global_hosts_charge_calibrated_fuel_before_work() {
+        let wasm = wat::parse_str(r#"(module (func (export "program") (result i32) i32.const 1))"#)
+            .unwrap();
+        let (mut store, _, _) = instantiate(
+            &wasm,
+            vec![],
+            DEFAULT_MEMORY_LIMIT,
+            1000,
+            HostCallbacks {
+                is_app: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        use wasmi::Val::{I32, I64};
+        let cases = [
+            (
+                wasmi::Func::wrap(&mut store, app_global_get_uint),
+                vec![I32(0), I32(0)],
+                vec![I64(0)],
+                130,
+            ),
+            (
+                wasmi::Func::wrap(&mut store, app_global_get_bytes),
+                vec![I32(0), I32(0), I32(0), I32(0)],
+                vec![I32(0)],
+                170,
+            ),
+            (
+                wasmi::Func::wrap(&mut store, app_global_put_uint),
+                vec![I32(0), I32(0), I64(0)],
+                vec![],
+                410,
+            ),
+            (
+                wasmi::Func::wrap(&mut store, app_global_put_bytes),
+                vec![I32(0), I32(0), I32(0), I32(0)],
+                vec![],
+                390,
+            ),
+            (
+                wasmi::Func::wrap(&mut store, app_global_del),
+                vec![I32(0), I32(0)],
+                vec![],
+                140,
+            ),
+        ];
+        for (func, inputs, mut outputs, cost) in cases {
+            store.set_fuel(cost - 1).unwrap();
+            let err = func.call(&mut store, &inputs, &mut outputs).unwrap_err();
+            assert_eq!(err.as_trap_code(), Some(TrapCode::OutOfFuel));
+            store.set_fuel(cost).unwrap();
+            // With enough fuel, execution reaches the missing callback rather
+            // than failing metering. Empty keys need no guest memory access.
+            let err = func.call(&mut store, &inputs, &mut outputs).unwrap_err();
+            assert!(err.to_string().contains("not available"), "{err}");
+            assert_eq!(store.get_fuel().unwrap(), 0);
+        }
+    }
+
+    #[test]
+    fn txn_charges_scaled_host_fuel_before_work() {
         let wasm = wat::parse_str(r#"(module (func (export "program") (result i32) i32.const 1))"#)
             .unwrap();
         let mut calls = 0usize;
@@ -1651,7 +1780,7 @@ mod tests {
         let uint = wasmi::Func::wrap(&mut store, txn_uint)
             .typed::<i32, i64>(&store)
             .unwrap();
-        store.set_fuel(1).unwrap();
+        store.set_fuel(TXN_UINT_FUEL_COST).unwrap();
         assert_eq!(uint.call(&mut store, 1).unwrap(), 42);
         assert_eq!(store.get_fuel().unwrap(), 0);
         assert_eq!(calls, 1);
@@ -1663,7 +1792,7 @@ mod tests {
             .typed::<(i32, i32, i32), i32>(&store)
             .unwrap();
         for (len, expected) in [(0, 32), (-1, TXN_ERR_MEMORY)] {
-            store.set_fuel(1).unwrap();
+            store.set_fuel(TXN_BYTES_FUEL_COST).unwrap();
             let before = calls;
             assert_eq!(bytes.call(&mut store, (0, 0, len)).unwrap(), expected);
             assert_eq!(store.get_fuel().unwrap(), 0);
@@ -1673,9 +1802,22 @@ mod tests {
             assert_eq!(calls, before + 1);
         }
         // Even a field rejected before invoking Go pays the host cost.
-        store.set_fuel(1).unwrap();
+        store.set_fuel(TXN_UINT_FUEL_COST).unwrap();
         let before = calls;
         assert!(uint.call(&mut store, -1).is_err());
+        assert_eq!(store.get_fuel().unwrap(), 0);
+        assert_eq!(calls, before);
+
+        let array = wasmi::Func::wrap(&mut store, txna_bytes)
+            .typed::<(i32, i32, i32, i32), i32>(&store)
+            .unwrap();
+        store.set_fuel(199).unwrap();
+        let err = array.call(&mut store, (2, 0, 0, 0)).unwrap_err();
+        assert_eq!(err.as_trap_code(), Some(TrapCode::OutOfFuel));
+        assert_eq!(calls, before);
+        store.set_fuel(200).unwrap();
+        // Invalid array fields still pay the calibrated charge.
+        assert!(array.call(&mut store, (-1, 0, 0, 0)).is_err());
         assert_eq!(store.get_fuel().unwrap(), 0);
         assert_eq!(calls, before);
     }

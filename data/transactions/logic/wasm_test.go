@@ -150,9 +150,13 @@ func TestWasmEd25519VerifyBare(t *testing.T) {
 	sig := c.SignBytes(data)
 	program := loadWasm(t, "ed25519verify_bare.wasm")
 
-	pass, _, err := EvalSignatureProgram(program, [][]byte{data, sig[:], c.SignatureVerifier[:]}, 0, optSigParams(wasmProto))
+	pass, cx, err := EvalSignatureProgram(program, [][]byte{data, sig[:], c.SignatureVerifier[:]}, 0, optSigParams(wasmProto))
 	require.NoError(t, err)
 	require.True(t, pass)
+	// Re-denominating fuel must preserve the verifier's ~1900 AVM-unit cost.
+	require.GreaterOrEqual(t, cx.wasmFuelUsed, uint64(28_500))
+	require.GreaterOrEqual(t, cx.Cost(), 1900)
+	require.Less(t, cx.Cost(), 2000)
 
 	// A tampered message fails verification, so the program rejects rather than
 	// erroring.
@@ -273,6 +277,70 @@ func TestWasmFuelExhaustion(t *testing.T) {
 	_, _, err := EvalSignatureProgram(loadWasm(t, "runaway.wasm"), nil, 0, ep)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "fuel")
+}
+
+func TestWasmFuelBudgetConversion(t *testing.T) {
+	partitiontest.PartitionTest(t)
+	program := loadWasm(t, "host_arg_count_loop.wasm")
+	args := [][]byte{le32(2000)}
+	for _, pooled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("pooled=%t", pooled), func(t *testing.T) {
+			params := func(budget int) *EvalParams {
+				ep := optSigParams(func(p *config.ConsensusParams) {
+					wasmProto(p)
+					p.LogicSigMaxCost = uint64(budget)
+				})
+				ep.PooledLogicSigBudget = nil
+				if pooled {
+					ep.PooledLogicSigBudget = &budget
+				}
+				return ep
+			}
+			ep := params(20_000)
+			pass, cx, err := EvalSignatureProgram(program, args, 0, ep)
+			require.NoError(t, err)
+			require.True(t, pass)
+			// This exceeds the old 1:1 fuel limit but fits the new 300,000.
+			require.Greater(t, cx.wasmFuelUsed, uint64(20_000))
+			require.LessOrEqual(t, cx.wasmFuelUsed, uint64(300_000))
+			cost := int((cx.wasmFuelUsed + wasmFuelPerCost - 1) / wasmFuelPerCost)
+			require.Equal(t, cost, cx.Cost())
+			if pooled {
+				require.Equal(t, 20_000-cost, *ep.PooledLogicSigBudget)
+				// A TEAL evaluation consumes the same pool in AVM cost units.
+				pass, tealCx, err := EvalSignatureProgram(testProg(t, "int 1", LogicVersion).Program, nil, 0, ep)
+				require.NoError(t, err)
+				require.True(t, pass)
+				require.Equal(t, 20_000-cost-tealCx.Cost(), *ep.PooledLogicSigBudget)
+			}
+			pass, _, err = EvalSignatureProgram(program, args, 0, params(cost))
+			require.NoError(t, err)
+			require.True(t, pass)
+			_, _, err = EvalSignatureProgram(program, args, 0, params(cost-1))
+			require.ErrorContains(t, err, "fuel")
+		})
+	}
+}
+
+func TestWasmFuelRoundsUp(t *testing.T) {
+	partitiontest.PartitionTest(t)
+	program := loadWasm(t, "host_arg_loop.wasm")
+	args := [][]byte{le32(1)}
+	ep := optSigParams(wasmProto)
+	budget := 20_000
+	ep.PooledLogicSigBudget = &budget
+	pass, cx, err := EvalSignatureProgram(program, args, 0, ep)
+	require.NoError(t, err)
+	require.True(t, pass)
+	require.Positive(t, cx.wasmFuelUsed)
+	require.NotZero(t, cx.wasmFuelUsed%wasmFuelPerCost)
+	cost := int(cx.wasmFuelUsed/wasmFuelPerCost) + 1
+	require.Equal(t, cost, cx.Cost())
+	require.Equal(t, 20_000-cost, budget)
+	budget = 0
+	// The same program cannot run once the pool is exhausted.
+	_, _, err = EvalSignatureProgram(program, args, 0, ep)
+	require.ErrorContains(t, err, "fuel")
 }
 
 func TestCheckWasmSignature(t *testing.T) {

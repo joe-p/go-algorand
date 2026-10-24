@@ -153,7 +153,7 @@ func maxGlobalLoops(b *testing.B, proto *config.ConsensusParams, teal, wasm []by
 	_, wasmCx, err := EvalContract(wasm, 0, 888, appLoopParams(proto, n, true))
 	require.NoError(b, err)
 	b.Logf("global loop N=%d: teal max=%d cost=%d/%d, wasm max=%d fuel=%d/%d",
-		n, tealMax, tealCx.Cost(), proto.MaxAppProgramCost, wasmMax, wasmCx.Cost(), proto.MaxAppProgramCost)
+		n, tealMax, tealCx.Cost(), proto.MaxAppProgramCost, wasmMax, wasmCx.wasmFuelUsed, uint64(proto.MaxAppProgramCost)*wasmFuelPerCost)
 	return n
 }
 
@@ -223,14 +223,23 @@ func BenchmarkAppFibCrossover(b *testing.B) {
 func benchmarkAppFib(b *testing.B, program []byte, n int, isWasm bool, proto *config.ConsensusParams) {
 	ep := appLoopParams(proto, n, isWasm)
 	ledger := ep.Ledger.(*Ledger)
+	var cost int
+	var fuel uint64
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		ep.reset()
 		ledger.Reset()
-		pass, _, err := EvalContract(program, 0, 888, ep)
+		pass, cx, err := EvalContract(program, 0, 888, ep)
 		require.NoError(b, err)
 		require.True(b, pass)
+		cost = cx.Cost()
+		fuel = cx.wasmFuelUsed
+	}
+	b.StopTimer()
+	b.ReportMetric(float64(cost), "cost")
+	if isWasm {
+		b.ReportMetric(float64(fuel), "fuel")
 	}
 }
 

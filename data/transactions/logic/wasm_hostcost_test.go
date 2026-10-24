@@ -57,7 +57,7 @@ type hostCostCase struct {
 // are the same in both and the residual is the host call plus the enclosing
 // loop. Compare ns/fuel against the instruction baseline from the Rust
 // `opcode_cost_table` (~1 ns/fuel) and against `ed25519verify_bare`, which is
-// charged the AVM's own 1900 and is the alignment reference.
+// charged 28,500 fuel (1900 AVM cost units) and is the alignment reference.
 func TestWasmHostCallCost(t *testing.T) {
 	if os.Getenv("WASM_OPCOST") == "" {
 		t.Skip("set WASM_OPCOST=1 to run the host-call cost table")
@@ -132,7 +132,7 @@ func evalTimedApp(t *testing.T, program []byte, args [][]byte, proto *config.Con
 	ep := appParamsSchema(proto, args, schema)
 	ledger := ep.Ledger.(*Ledger)
 	var totalNs int64
-	var lastFuel int
+	var lastFuel uint64
 	for i := 0; i < iters; i++ {
 		ep.reset()
 		ledger.Reset()
@@ -141,7 +141,7 @@ func evalTimedApp(t *testing.T, program []byte, args [][]byte, proto *config.Con
 		totalNs += time.Since(start).Nanoseconds()
 		require.NoError(t, err)
 		require.True(t, pass)
-		lastFuel = cx.Cost()
+		lastFuel = cx.wasmFuelUsed
 	}
 	return float64(lastFuel), float64(totalNs) / float64(iters)
 }
@@ -151,7 +151,7 @@ func evalTimedApp(t *testing.T, program []byte, args [][]byte, proto *config.Con
 func evalTimedSig(t *testing.T, program []byte, n int, opt protoOpt, iters int) (fuel, ns float64) {
 	t.Helper()
 	var totalNs int64
-	var lastFuel int
+	var lastFuel uint64
 	for i := 0; i < iters; i++ {
 		ep := optSigParams(opt)
 		start := time.Now()
@@ -159,7 +159,7 @@ func evalTimedSig(t *testing.T, program []byte, n int, opt protoOpt, iters int) 
 		totalNs += time.Since(start).Nanoseconds()
 		require.NoError(t, err)
 		require.True(t, pass)
-		lastFuel = cx.Cost()
+		lastFuel = cx.wasmFuelUsed
 	}
 	return float64(lastFuel), float64(totalNs) / float64(iters)
 }

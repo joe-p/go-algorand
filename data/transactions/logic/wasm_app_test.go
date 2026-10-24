@@ -59,6 +59,20 @@ func TestWasmAppApproveReject(t *testing.T) {
 	testAppBytes(t, loadWasm(t, "reject.wasm"), wasmAppParams(), "REJECT")
 }
 
+func TestWasmAppFuelBudgetConversion(t *testing.T) {
+	partitiontest.PartitionTest(t)
+	proto := makeTestProto(wasmAppProto)
+	ep := appLoopParams(proto, 100, true)
+	before := *ep.PooledApplicationBudget
+	pass, cx, err := EvalContract(loadWasm(t, "app_fib.wasm"), 0, 888, ep)
+	require.NoError(t, err)
+	require.True(t, pass)
+	require.Greater(t, cx.wasmFuelUsed, uint64(before))
+	cost := int((cx.wasmFuelUsed + wasmFuelPerCost - 1) / wasmFuelPerCost)
+	require.Equal(t, cost, cx.Cost())
+	require.Equal(t, before-cost, *ep.PooledApplicationBudget)
+}
+
 // TestWasmAppClearState runs WASM programs as clear-state programs.
 func TestWasmAppClearState(t *testing.T) {
 	partitiontest.PartitionTest(t)

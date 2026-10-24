@@ -760,9 +760,10 @@ type EvalContext struct {
 	// there is no need to walk the caller chain again.
 	familyReentrancyChecked bool
 
-	subtxns []transactions.SignedTxnWithAD // place to build for itxn_submit
-	cost    int                            // cost incurred so far
-	logSize int                            // total log size so far
+	subtxns      []transactions.SignedTxnWithAD // place to build for itxn_submit
+	cost         int                            // cost incurred so far
+	wasmFuelUsed uint64                         // raw fuel consumed by a WASM evaluation; cost is in AVM units
+	logSize      int                            // total log size so far
 
 	// Set of PC values that branches we've seen so far might
 	// go. So, if checkStep() skips one, that branch is trying to

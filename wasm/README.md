@@ -95,12 +95,15 @@ opcode. More opcodes will be added to the same `env` module.
 
 ## Execution limits
 
-- Fuel metered; the AVM cost budget is reused as the fuel limit, one fuel unit
-  per cost unit. Each `txn_uint`, `txn_bytes`, `txna_uint`, or `txna_bytes`
-  invocation costs one additional fuel unit, including length queries and
-  invalid reads, on top of WASM instruction fuel. Each `app_global_*` invocation
-  costs the corresponding AVM opcode's cost (1) plus instruction fuel.
-  `ed25519verify_bare` is charged its opcode cost (1900). The charge occurs
+- Fuel metered at **15 fuel per AVM cost unit**: a 20,000-cost LogicSig budget
+  permits 300,000 fuel. Guest instruction charges are unchanged. Consumed fuel
+  is divided by fifteen, rounding up per evaluation, before charging AVM/shared
+  budgets. Host charges are calibrated toward 1 ns/fuel on the fixtures in
+  `../WASM_PERF.md`: `arg` 30, `arg_count` 10, `txn_uint`/`txna_uint` 125,
+  `txn_bytes` 190, `txna_bytes` 200, global get uint/bytes 130/170, global put
+  uint/bytes 410/390, and global delete 140 fuel. These fixed charges include
+  length queries and invalid reads, on top of WASM instruction fuel.
+  `ed25519verify_bare` costs 28,500 fuel (1900 AVM cost units). The charge occurs
   before host work; insufficient fuel traps. Running out of fuel is an error.
 - Each invocation permits at most one linear memory (4 MiB, matching the AVM's
   bound on live data of `maxStringSize` 4096 by `maxStackDepth` 1000), one table

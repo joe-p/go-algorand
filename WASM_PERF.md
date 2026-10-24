@@ -13,24 +13,32 @@ Caveats.
 
 ## Budget denomination
 
-WASM now receives **15 fuel per AVM cost unit**, in both signature and
-application mode. A 20,000-cost LogicSig budget therefore permits 300,000 fuel.
+WASM now receives **10 fuel per AVM cost unit**, in both signature and
+application mode. A 20,000-cost LogicSig budget therefore permits 200,000 fuel.
 Guest instruction charges are unchanged. Host charges are calibrated toward
-**1 ns/fuel**, with 28,500 fuel for `ed25519verify_bare` (1900 AVM cost units).
+**1 ns/fuel**, with 28,500 fuel for `ed25519verify_bare` (2850 AVM budget units,
+versus the TEAL opcode's 1900). All raw instruction, host, and setup weights
+remain unchanged from the 15:1 calibration.
 Consumed fuel is converted back to AVM cost with rounding up per evaluation,
 so shared budgets remain in AVM units, including mixed TEAL/WASM groups.
 Total fuel now includes a deterministic setup charge reserved before compilation
 or allocation, in addition to wasmi's execution and lazy-translation fuel.
 
-The measurements below use this conversion. The 15:1 ratio is a provisional
-calibration, not a claim that each fuel unit represents identical wall-clock
-work. The cost columns use AVM units; fuel columns use wasmi's denomination.
+Moving from 15:1 to 10:1 charges 50% more budget for the same raw fuel (before
+rounding), targeting less wall time per allowed budget unit. The conversion is
+deterministic and consensus-relevant; benchmark timing never changes it at
+runtime. These microbenchmarks do not prove an AVM-equivalent worst-case
+validation-time bound. Cost columns use AVM units; fuel uses wasmi's denomination.
+Compute/host/global-loop timings were rerun for 10:1 below. Instruction and setup
+tables retain their raw-fuel calibration measurements because those weights and
+code paths are unchanged by this conversion.
 
 The host weights were selected from the pre-calibration fixtures as
 `ns/call / (1 ns/fuel) - guest/loop fuel`, rounded up to convenient constants.
-They are deterministic protocol weights, not runtime timers. Signature
-verification retains its AVM price; the other host weights need not equal their
-AVM opcode equivalents. `txna_uint` provisionally shares `txn_uint`'s charge.
+They are deterministic protocol weights, not runtime timers. Host budget prices
+need not equal their AVM opcode equivalents; signature verification also retains
+its raw weight rather than AVM price parity. `txna_uint` provisionally shares
+`txn_uint`'s charge.
 Payload-size and cross-machine calibration remain future work.
 
 ## Compute-bound crossover: where WASM overtakes the AVM
@@ -47,24 +55,40 @@ medians of three runs, with
 
 | N | TEAL time | TEAL cost | WASM time | WASM fuel | WASM cost | faster |
 | --- | --- | --- | --- | --- | --- | --- |
-| 0 | ~6.7 us | 13 | ~14.2 us | 9,205 | 614 | TEAL |
-| 50 | ~14.2 us | 763 | ~14.9 us | 10,255 | 684 | ~tie (TEAL slightly faster) |
-| 100 | ~21.8 us | 1,513 | ~15.8 us | 11,305 | 754 | WASM 1.4x |
-| 300 | ~50.3 us | 4,513 | ~19.2 us | 15,505 | 1,034 | WASM 2.6x |
-| 1000 | ~152.6 us | 15,013 | ~31.2 us | 30,205 | 2,014 | WASM 4.9x |
+| 0 | ~7.4 us | 13 | ~16.8 us | 9,205 | 921 | TEAL |
+| 50 | ~15.6 us | 763 | ~16.8 us | 10,255 | 1,026 | TEAL 1.1x |
+| 100 | ~22.9 us | 1,513 | ~17.2 us | 11,305 | 1,131 | WASM 1.3x |
+| 300 | ~52.8 us | 4,513 | ~20.9 us | 15,505 | 1,551 | WASM 2.5x |
+| 1000 | ~158.2 us | 15,013 | ~32.8 us | 30,205 | 3,021 | WASM 4.8x |
 
-The endpoint slopes are **TEAL ~146 ns/iteration vs WASM ~17 ns/iteration**.
+The endpoint slopes are **TEAL ~151 ns/iteration vs WASM ~16 ns/iteration**.
 WASM has higher fixed evaluation overhead (including module compile and
 instantiate, no cache yet); these samples cross between N=50 and N=100.
 Short-run timing varies, so this is not a precise, stable crossover N.
 
-Each WASM row now includes **8,382 setup fuel** (559 AVM units before execution).
+Each WASM row includes **8,382 setup fuel** (839 AVM units before execution).
 At N=50, the remaining 1,873 fuel is execution/lazy translation, so the total
-cost is `ceil((8382 + 1873) / 15) = 684`, rather than the previous 125 that
-priced execution alone. Setup is charged once per evaluation, not per iteration.
+cost is `ceil((8382 + 1873) / 10) = 1026`, versus 684 at 15:1.
+Setup is charged once per evaluation, not per iteration. This fixture no longer
+fits a single default 700-unit app budget even at N=0; it needs pooled budget.
 
-Fib costs TEAL ~15 cost/iteration vs WASM ~21 fuel/iteration. With the 15:1
-conversion, that guest execution costs ~1.4 AVM units/iteration, not 21.
+Fib costs TEAL ~15 cost/iteration vs WASM ~21 fuel/iteration. With the 10:1
+conversion, that guest execution costs ~2.1 AVM units/iteration, not 21.
+
+For the validation-time ceiling question, time **per charged budget unit** is
+more useful than same-work speedup. Using the unrounded median timings above:
+
+| N | TEAL ns/cost | WASM ns/cost at 10:1 | WASM/TEAL time per cost |
+| --- | --- | --- | --- |
+| 100 | 15.1 | 15.2 | 1.01x |
+| 300 | 11.7 | 13.5 | 1.15x |
+| 1000 | 10.5 | 10.9 | 1.03x |
+
+10:1 is substantially closer than 15:1, but does **not** establish a strict
+AVM ceiling: N=300 still uses about 15% more time per cost unit. These ratios
+are comparisons of the measured workloads, not worst-case budget-filling
+group/block bounds. The denomination change does not make execution faster;
+differences from the prior timing table are measurement variation.
 
 ## Host-call cost: the AVM wins
 
@@ -75,46 +99,48 @@ running the loop N times and not at all, divided by N. Fixed setup cancels, but
 the result includes loop scaffolding as well as the host invocation. The fixed
 setup charge cancels in this subtraction; it is still paid by each evaluation.
 Cost/call
-is marginal fuel divided by fifteen, not a separately rounded charge per call.
+is marginal fuel divided by ten, not a separately rounded charge per call.
 
 Medians of three runs (`WASM_OPCOST=1 go test ./data/transactions/logic/
 -run '^TestWasmHostCallCost$' -v -count=3`):
 
 | host call | host charge (fuel) | fuel/call | cost/call | ns/call | ns/fuel | AVM equivalent |
 | --- | --- | --- | --- | --- | --- | --- |
-| `txn_uint` | 125 | 137 | 9.13 | 136 | 0.99 | `txn` (1) |
-| `txn_bytes` | 190 | 203 | 13.53 | 204 | 1.01 | `txn` (1) |
-| `txna_bytes` | 200 | 214 | 14.27 | 203 | 0.95 | `txna` (1) |
-| `app_global_get_uint` | 130 | 143 | 9.53 | 148 | 1.03 | `app_global_get` (1) |
-| `app_global_get_bytes` | 170 | 184 | 12.27 | 191 | 1.04 | `app_global_get` (1) |
-| `app_global_put_uint` | 410 | 427 | 28.47 | 414 | 0.97 | `app_global_put` (1) |
-| `app_global_put_bytes` | 390 | 404 | 26.93 | 379 | 0.94 | `app_global_put` (1) |
-| `app_global_del` | 140 | 152 | 10.13 | 149 | 0.98 | `app_global_del` (1) |
-| `ed25519verify_bare` | 28,500 | 28,516 | 1901.07 | 29,364 | 1.03 | `ed25519verify_bare` (1900) |
-| `arg` (sig) | 30 | 43 | 2.87 | 43 | 0.99 | `arg` (1) |
-| `arg_count` (sig) | 10 | 20 | 1.33 | 18 | 0.91 | `args` (1) |
+| `txn_uint` | 125 | 137 | 13.70 | 137 | 1.00 | `txn` (1) |
+| `txn_bytes` | 190 | 203 | 20.30 | 218 | 1.07 | `txn` (1) |
+| `txna_bytes` | 200 | 214 | 21.40 | 215 | 1.01 | `txna` (1) |
+| `app_global_get_uint` | 130 | 143 | 14.30 | 148 | 1.03 | `app_global_get` (1) |
+| `app_global_get_bytes` | 170 | 184 | 18.40 | 192 | 1.04 | `app_global_get` (1) |
+| `app_global_put_uint` | 410 | 427 | 42.70 | 426 | 1.00 | `app_global_put` (1) |
+| `app_global_put_bytes` | 390 | 404 | 40.40 | 392 | 0.97 | `app_global_put` (1) |
+| `app_global_del` | 140 | 152 | 15.20 | 151 | 0.99 | `app_global_del` (1) |
+| `ed25519verify_bare` | 28,500 | 28,516 | 2851.60 | 30,618 | 1.07 | `ed25519verify_bare` (1900) |
+| `arg` (sig) | 30 | 43 | 4.30 | 41 | 0.95 | `arg` (1) |
+| `arg_count` (sig) | 10 | 20 | 2.00 | 18 | 0.87 | `args` (1) |
 
-The calibrated fixtures now cluster around **0.91-1.04 ns/fuel**, similar to
+The calibrated fixtures now cluster around **0.87-1.07 ns/fuel**, similar to
 guest instruction loops. The explicit host charge excludes guest/loop fuel,
 which is still charged by wasmi. Signature verification costs 28,500 fuel plus
-16 fuel of fixture overhead, preserving its explicit 1900-unit AVM cost.
+16 fuel of fixture overhead: 2850 budget units for the host charge, compared
+with the TEAL opcode's 1900.
 State/transaction calls deliberately cost more AVM budget units than their TEAL
 equivalents to account for the WASM boundary. These are fixture calibrations,
 not guarantees for every payload size or platform.
 
 A whole-app host-call-bound comparison (`BenchmarkAppGlobalLoop`,
-`app_global_loop.wasm`) at **N=24 global increments** gives these medians of
+`app_global_loop.wasm`) at **N=7 global increments** gives these medians of
 three 2-second benchmark runs. The benchmark now explicitly lifts the cap to
 **1,400 cost units** (a two-app-sized allowance); setup plus the zero-iteration
 WASM fixture no longer fits a single 700-unit app allowance:
 
 | engine | time | AVM cost | WASM fuel |
 | --- | --- | --- | --- |
-| TEAL | ~17.6 us | 397 | — |
-| WASM | ~26.8 us | 1,398 | 20,966 |
+| TEAL | ~11.1 us | 125 | — |
+| WASM | ~21.6 us | 1,371 | 13,707 |
 
-At equal work the AVM is **1.5x faster**. Under the configured 1,400-unit budget
-(21,000 WASM fuel), maxima are 86 increments for TEAL and 24 for WASM. Actual
+At equal work the AVM is **1.9x faster**. Under the configured 1,400-unit budget
+(14,000 WASM fuel), maxima are 86 increments for TEAL and 7 for WASM (down from
+24 at 15:1). Actual
 protocol budgets are unchanged: this is an engine microbenchmark, not a claim
 that a single default-budget application can run these loop counts.
 
@@ -126,7 +152,7 @@ linux/arm64, 100k iterations, one run; module compile and instantiate are
 excluded from both columns. The instruction-loop measurements span
 ~0.56-1.33 ns/fuel, with `call_indirect`, `table.fill`, and `table.copy` at the
 upper end. Both time and fuel include loop scaffolding, so these are not isolated
-opcode costs. Guest fuel weights are unchanged by the 15:1 budget conversion;
+opcode costs. Guest fuel weights are unchanged by the 10:1 budget conversion;
 this instruction table is retained from the preceding run.
 
 | op | fuel/iter | ns/iter | ns/fuel |

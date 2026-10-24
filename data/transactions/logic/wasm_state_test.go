@@ -38,6 +38,8 @@ func wasmStateParams(t testing.TB, schema basics.StateSchema) *EvalParams {
 	txn.Txn.Type = protocol.ApplicationCallTx
 	txn.Txn.ApplicationID = 888
 	proto := makeTestProto(wasmAppProto)
+	// State semantics fixtures need a two-app-sized allowance at 10 fuel/unit.
+	proto.MaxAppProgramCost *= 2
 	ep := NewAppEvalParams(transactions.WrapSignedTxnsWithAD([]transactions.SignedTxn{txn}), proto, &transactions.SpecialAddresses{})
 	ep.Trace = &strings.Builder{}
 	ledger := NewLedger(nil)

@@ -49,7 +49,7 @@ This is a separate Cargo workspace from the host executor so `make wasmlib`
 
   The switch means on-chain verification matches the AVM's opcode exactly (Go's
   `crypto/ed25519` semantics, *not* dalek's cofactored/small-order rules) and
-  bills the opcode's cost as fuel (28,500 fuel = 1900 AVM cost units) rather than
+  bills a calibrated host charge (28,500 fuel = 2850 AVM budget units) rather than
   guest instructions.
 
   The diff against upstream 2.2.0 is `ed25519-dalek-host.patch` (only
@@ -104,5 +104,5 @@ load.
 
 The example fits the current limits: ~4.7 KiB of program (the program byte cap
 is `MaxAbsoluteLogicSigProgramSize`, 16000 in `vFuture`). The LSig cost budget is
-`LogicSigMaxCost`, 20,000, converted to 300,000 fuel. The guest linear memory cap
+`LogicSigMaxCost`, 20,000, converted to 200,000 fuel at 10 fuel/cost unit. The guest linear memory cap
 is 4 MiB.

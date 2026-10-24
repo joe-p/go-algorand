@@ -57,7 +57,7 @@ type hostCostCase struct {
 // are the same in both and the residual is the host call plus the enclosing
 // loop. Compare ns/fuel against the instruction baseline from the Rust
 // `opcode_cost_table` (~1 ns/fuel) and against `ed25519verify_bare`, which is
-// charged 28,500 fuel (1900 AVM cost units) and is the alignment reference.
+// charged 28,500 fuel (2850 AVM budget units) and is the alignment reference.
 func TestWasmHostCallCost(t *testing.T) {
 	if os.Getenv("WASM_OPCOST") == "" {
 		t.Skip("set WASM_OPCOST=1 to run the host-call cost table")

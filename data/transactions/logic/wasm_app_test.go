@@ -51,6 +51,15 @@ func wasmAppParams(txns ...transactions.SignedTxn) *EvalParams {
 	return ep
 }
 
+// wasmAppFundedParams gives semantic fixtures a two-app-sized pooled allowance.
+// Default-budget acceptance/rejection is tested using wasmAppParams directly.
+func wasmAppFundedParams(txns ...transactions.SignedTxn) *EvalParams {
+	ep := wasmAppParams(txns...)
+	ep.Proto.MaxAppProgramCost *= 2
+	*ep.PooledApplicationBudget *= 2
+	return ep
+}
+
 // TestWasmAppApproveReject runs trivial WASM programs as application programs.
 func TestWasmAppApproveReject(t *testing.T) {
 	partitiontest.PartitionTest(t)
@@ -62,6 +71,8 @@ func TestWasmAppApproveReject(t *testing.T) {
 func TestWasmAppFuelBudgetConversion(t *testing.T) {
 	partitiontest.PartitionTest(t)
 	proto := makeTestProto(wasmAppProto)
+	// Fund a two-app-sized allowance; setup alone exceeds 7000 raw fuel.
+	proto.MaxAppProgramCost *= 2
 	ep := appLoopParams(proto, 50, true)
 	before := *ep.PooledApplicationBudget
 	pass, cx, err := EvalContract(loadWasm(t, "app_fib.wasm"), 0, 888, ep)
@@ -71,6 +82,22 @@ func TestWasmAppFuelBudgetConversion(t *testing.T) {
 	cost := int((cx.wasmFuelUsed + wasmFuelPerCost - 1) / wasmFuelPerCost)
 	require.Equal(t, cost, cx.Cost())
 	require.Equal(t, before-cost, *ep.PooledApplicationBudget)
+}
+
+func TestWasmAppDefaultBudgetAtTenFuelPerCost(t *testing.T) {
+	partitiontest.PartitionTest(t)
+	require.Equal(t, uint64(10), wasmFuelPerCost)
+	for _, fixture := range []string{"app_fib.wasm", "app_arg_len.wasm", "app_global_loop.wasm"} {
+		t.Run(fixture, func(t *testing.T) {
+			ep := wasmAppParams()
+			require.Equal(t, 700, *ep.PooledApplicationBudget)
+			pass, cx, err := EvalContract(loadWasm(t, fixture), 0, 888, ep)
+			require.False(t, pass)
+			require.ErrorContains(t, err, "fuel during setup")
+			require.Equal(t, 700, cx.Cost())
+			require.Zero(t, *ep.PooledApplicationBudget)
+		})
+	}
 }
 
 func TestWasmAppFailedSetupAndExecutionAreCharged(t *testing.T) {
@@ -107,13 +134,13 @@ func TestWasmAppReadsAppArgs(t *testing.T) {
 	txn := makeSampleTxn()
 	txn.Txn.Type = protocol.ApplicationCallTx
 	// The sample transaction's first argument is protocol.PaymentTx ("pay").
-	testAppBytes(t, loadWasm(t, "app_arg_len.wasm"), wasmAppParams(txn))
+	testAppBytes(t, loadWasm(t, "app_arg_len.wasm"), wasmAppFundedParams(txn))
 
 	// A different argument length must reject.
 	bad := makeSampleTxn()
 	bad.Txn.Type = protocol.ApplicationCallTx
 	bad.Txn.ApplicationArgs[0] = []byte("too long")
-	testAppBytes(t, loadWasm(t, "app_arg_len.wasm"), wasmAppParams(bad), "REJECT")
+	testAppBytes(t, loadWasm(t, "app_arg_len.wasm"), wasmAppFundedParams(bad), "REJECT")
 }
 
 // TestWasmAppNumAppArgs checks txn_uint on the array-length field NumAppArgs.
@@ -122,7 +149,7 @@ func TestWasmAppNumAppArgs(t *testing.T) {
 
 	txn := makeSampleTxn()
 	txn.Txn.Type = protocol.ApplicationCallTx
-	testAppBytes(t, loadWasm(t, "app_num_args.wasm"), wasmAppParams(txn))
+	testAppBytes(t, loadWasm(t, "app_num_args.wasm"), wasmAppFundedParams(txn))
 }
 
 // TestWasmAppArgIsUnavailable checks that the signature-only arg host functions

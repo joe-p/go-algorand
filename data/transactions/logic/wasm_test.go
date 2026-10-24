@@ -154,10 +154,11 @@ func TestWasmEd25519VerifyBare(t *testing.T) {
 	pass, cx, err := EvalSignatureProgram(program, [][]byte{data, sig[:], c.SignatureVerifier[:]}, 0, optSigParams(wasmProto))
 	require.NoError(t, err)
 	require.True(t, pass)
-	// The verifier retains its 1900-unit charge; total cost now includes setup.
+	// The raw verifier charge stays 28,500 fuel despite changing denomination.
+	// At 10:1 that is 2850 budget units, plus setup and guest execution.
 	require.GreaterOrEqual(t, cx.wasmFuelUsed, uint64(28_500))
-	require.GreaterOrEqual(t, cx.Cost(), 1900)
-	require.Less(t, cx.Cost(), 3000)
+	require.GreaterOrEqual(t, cx.Cost(), 2850)
+	require.Less(t, cx.Cost(), 4500)
 
 	// A tampered message fails verification, so the program rejects rather than
 	// erroring.
@@ -301,9 +302,9 @@ func TestWasmFuelBudgetConversion(t *testing.T) {
 			pass, cx, err := EvalSignatureProgram(program, args, 0, ep)
 			require.NoError(t, err)
 			require.True(t, pass)
-			// This exceeds the old 1:1 fuel limit but fits the new 300,000.
+			// This exceeds the old 1:1 fuel limit but fits the 200,000 allowance.
 			require.Greater(t, cx.wasmFuelUsed, uint64(20_000))
-			require.LessOrEqual(t, cx.wasmFuelUsed, uint64(300_000))
+			require.LessOrEqual(t, cx.wasmFuelUsed, uint64(200_000))
 			cost := int((cx.wasmFuelUsed + wasmFuelPerCost - 1) / wasmFuelPerCost)
 			require.Equal(t, cost, cx.Cost())
 			if pooled {
@@ -326,7 +327,7 @@ func TestWasmFuelBudgetConversion(t *testing.T) {
 func TestWasmFuelRoundsUp(t *testing.T) {
 	partitiontest.PartitionTest(t)
 	program := loadWasm(t, "host_arg_loop.wasm")
-	args := [][]byte{le32(1)}
+	args := [][]byte{le32(2)}
 	ep := optSigParams(wasmProto)
 	budget := 20_000
 	ep.PooledLogicSigBudget = &budget

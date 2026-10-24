@@ -59,7 +59,7 @@
 //! host invocation is charged before performing host work, with weights
 //! calibrated toward 1 ns/fuel on the fixtures in WASM_PERF.md.
 //! `ed25519verify_bare` similarly delegates verification to Go and is charged
-//! the opcode's AVM cost multiplied by fifteen.
+//! 28,500 fuel, independently of Go's fuel-to-budget conversion.
 //!
 //! Execution is deterministic (no floats, no auto-dispatch), fuel metered, and
 //! linear memory is capped. The engine is rebuilt per call; this is simple and
@@ -119,10 +119,6 @@ const ERR_BUF_LEN: usize = 256;
 /// operands of byte-string opcodes.
 const MAX_AVM_BYTES: usize = 4096;
 
-/// Fuel per AVM cost unit. Must match wasmFuelPerCost in Go's wasm_eval.go.
-/// Guest instruction charges remain in wasmi's native fuel denomination.
-const FUEL_PER_COST: u64 = 15;
-
 /// Explicit host charges calibrated from the linux/arm64 fixtures in
 /// WASM_PERF.md toward 1 ns/fuel. Each weight is approximately measured ns/call
 /// minus the fixture's guest/loop fuel, rounded up. These are fixed protocol
@@ -135,10 +131,10 @@ const TXN_UINT_FUEL_COST: u64 = 125;
 const TXN_BYTES_FUEL_COST: u64 = 190;
 const TXNA_BYTES_FUEL_COST: u64 = 200;
 
-/// Fuel charged for one `ed25519verify_bare` call. Must match the opcode's cost
-/// in the Go opcode table (`costly(1900)` for `ed25519verify_bare`), converted
-/// to fuel.
-const ED25519_VERIFY_BARE_FUEL_COST: u64 = 1900 * FUEL_PER_COST;
+/// Fuel charged for one `ed25519verify_bare` call, calibrated near 1 ns/fuel.
+/// Keep this raw weight independent of Go's budget conversion; at 10:1 it
+/// represents 2850 budget units, not the AVM opcode's 1900-unit price.
+const ED25519_VERIFY_BARE_FUEL_COST: u64 = 28_500;
 
 // Error sentinels returned by the global-state byte-string read. Invalid
 // operations (a wrong-typed value) trap the guest instead.
@@ -2088,7 +2084,7 @@ mod tests {
     }
 
     #[test]
-    fn ed25519verify_bare_charges_opcode_cost() {
+    fn ed25519verify_bare_charges_fixed_host_fuel() {
         // Just enough fuel for the call itself, not for the preceding
         // instructions, so the program must run out.
         let err = run_wat_with_ed25519(&ed25519_wat(3, 4), ED25519_VERIFY_BARE_FUEL_COST);

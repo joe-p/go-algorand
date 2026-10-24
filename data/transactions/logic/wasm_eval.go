@@ -23,10 +23,10 @@ import (
 	"github.com/algorand/go-algorand/data/transactions"
 )
 
-// wasmFuelPerCost converts AVM budget units into wasmi fuel. Must match
-// FUEL_PER_COST in wasm/src/lib.rs. Guest instruction charges are unchanged;
-// host operations are calibrated separately toward 1 ns/fuel.
-const wasmFuelPerCost uint64 = 15
+// wasmFuelPerCost converts AVM budget units into wasmi fuel. The Rust meter
+// uses raw fuel only: guest, host, and setup charges remain unchanged when this
+// exchange rate changes. Host operations are calibrated toward 1 ns/fuel.
+const wasmFuelPerCost uint64 = 10
 
 // wasmEnabled reports whether the protocol runs WASM LogicSigs.
 func wasmEnabled(params *EvalParams) bool {

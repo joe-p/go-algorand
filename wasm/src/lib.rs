@@ -77,8 +77,21 @@ const MAX_ARGS: usize = 255;
 /// Number of u64 words needed to record which arguments were read.
 const ARGS_READ_WORDS: usize = MAX_ARGS.div_ceil(64);
 
-/// Default cap on a guest's linear memory, in bytes.
-const DEFAULT_MEMORY_LIMIT: usize = 64 * 1024;
+/// Default cap on a guest's linear memory, in bytes. Matches the AVM's upper
+/// bound on live data, `maxStringSize` (4096) times `maxStackDepth` (1000),
+/// rounded up to a whole number of wasm pages (64 pages, 4 MiB).
+///
+/// This is a consensus-relevant resource cap that is not metered by execution
+/// fuel: a guest can declare a large minimum memory and make the node allocate
+/// it. It is fixed at 4 MiB while WASM LogicSigs are gated behind `vFuture`;
+/// before release it should become a dedicated consensus parameter.
+const DEFAULT_MEMORY_LIMIT: usize = 4 * 1024 * 1024;
+
+/// `DEFAULT_MEMORY_LIMIT` expressed in wasm pages (64 KiB each). Tests that
+/// must exceed the cap derive from this so the cap can change without the
+/// tests silently passing.
+#[cfg(test)]
+const DEFAULT_MEMORY_PAGES: usize = DEFAULT_MEMORY_LIMIT / 65536;
 
 /// A guest may have at most one table, with this many elements. Restricting
 /// both the size and count bounds aggregate table allocation at instantiation,
@@ -1001,13 +1014,14 @@ mod tests {
 
     #[test]
     fn instantiation_limits_guest_allocation() {
-        for resources in [
-            "(table 1000000 funcref)",
-            "(table 1025 funcref)",
-            "(table 1 funcref) (table 1 funcref)",
-            "(memory 2)",
-            "(memory 1) (memory 1)",
-        ] {
+        let cases = [
+            "(table 1000000 funcref)".to_string(),
+            "(table 1025 funcref)".to_string(),
+            "(table 1 funcref) (table 1 funcref)".to_string(),
+            format!("(memory {})", DEFAULT_MEMORY_PAGES + 1),
+            "(memory 1) (memory 1)".to_string(),
+        ];
+        for resources in cases {
             let wat = format!(
                 r#"(module {resources}
                     (func (export "program") (result i32) i32.const 1))"#
@@ -1024,7 +1038,7 @@ mod tests {
                 (memory 1)
                 (table {MAX_TABLE_ELEMENTS} funcref)
                 (func $check_limits
-                    (if (i32.ne (memory.grow (i32.const 1)) (i32.const -1))
+                    (if (i32.ne (memory.grow (i32.const {DEFAULT_MEMORY_PAGES})) (i32.const -1))
                         (then unreachable))
                     (if (i32.ne (table.grow (ref.null func) (i32.const 1)) (i32.const -1))
                         (then unreachable)))

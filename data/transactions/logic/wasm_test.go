@@ -169,6 +169,35 @@ func TestWasmEd25519VerifyBare(t *testing.T) {
 	require.ErrorContains(t, err, "invalid public key")
 }
 
+// TestWasmEd25519DalekGuest checks a Rust guest that uses ed25519-dalek's
+// `VerifyingKey::verify` against the patched host-backed crate: the fork routes
+// verification to ed25519verify_bare, so a real Go-produced signature is
+// accepted and a tampered message rejected.
+func TestWasmEd25519DalekGuest(t *testing.T) {
+	partitiontest.PartitionTest(t)
+
+	c := crypto.GenerateSignatureSecrets(randSeed())
+	data := []byte("wasm ed25519-dalek guest test message")
+	sig := c.SignBytes(data)
+	program := loadWasm(t, "ed25519_dalek.wasm")
+
+	pass, _, err := EvalSignatureProgram(program, [][]byte{data, sig[:], c.SignatureVerifier[:]}, 0, optSigParams(wasmProto))
+	require.NoError(t, err)
+	require.True(t, pass)
+
+	// A tampered message fails verification, so the program rejects.
+	badData := append([]byte(nil), data...)
+	badData[0] ^= 0xff
+	pass, _, err = EvalSignatureProgram(program, [][]byte{badData, sig[:], c.SignatureVerifier[:]}, 0, optSigParams(wasmProto))
+	require.NoError(t, err)
+	require.False(t, pass)
+
+	// A wrong-length signature is rejected: the guest requires exactly 64 bytes.
+	pass, _, err = EvalSignatureProgram(program, [][]byte{data, sig[1:], c.SignatureVerifier[:]}, 0, optSigParams(wasmProto))
+	require.NoError(t, err)
+	require.False(t, pass)
+}
+
 // TestWasmTxnFieldTypeError checks that asking for a field with the wrong type
 // traps, just as an invalid field would in the AVM.
 func TestWasmTxnFieldTypeError(t *testing.T) {

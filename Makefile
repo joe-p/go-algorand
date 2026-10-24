@@ -171,6 +171,12 @@ wasmlib:
 	@command -v cargo >/dev/null 2>&1 || { echo "cargo (Rust toolchain) is required to build the WASM LogicSig executor: https://rustup.rs"; exit 1; }
 	cargo build --release --locked --manifest-path wasm/Cargo.toml
 
+# Build the Rust guest WASM LogicSig fixtures loaded by the Go tests.
+wasm-guest-fixtures:
+	@command -v cargo >/dev/null 2>&1 || { echo "cargo (Rust toolchain) is required to build the WASM LogicSig guest fixtures: https://rustup.rs"; exit 1; }
+	cargo build --release --locked --manifest-path wasm/guest/Cargo.toml -p ed25519-verify --target wasm32-unknown-unknown
+	cp wasm/guest/target/wasm32-unknown-unknown/release/ed25519_verify.wasm data/transactions/logic/testdata/wasm/ed25519_dalek.wasm
+
 MSGP := go run github.com/algorand/msgp@v1.1.66
 %/msgp_gen.go: ALWAYS
 		@set +e; \
@@ -443,7 +449,7 @@ dump: $(addprefix gen/,$(addsuffix /genesis.dump, $(NETWORKS)))
 install: build
 	scripts/dev_install.sh -p $(GOBIN)
 
-.PHONY: default fmt lint check_shell sanity cover prof build build-race build-e2e test fulltest shorttest x-repo-types clean cleango deploy node_exporter install %gen gen NONGO_BIN check-go-version rebuild_kmd_swagger universal libsodium modernize wasmlib
+.PHONY: default fmt lint check_shell sanity cover prof build build-race build-e2e test fulltest shorttest x-repo-types clean cleango deploy node_exporter install %gen gen NONGO_BIN check-go-version rebuild_kmd_swagger universal libsodium modernize wasmlib wasm-guest-fixtures
 
 ###### TARGETS FOR CICD PROCESS ######
 include ./scripts/release/mule/Makefile.mule

@@ -1,0 +1,31 @@
+# Copyright (C) 2019-2026 Algorand Foundation Ltd.
+# This file is part of go-algorand
+#
+# go-algorand is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
+#
+# go-algorand is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with go-algorand.  If not, see <https://www.gnu.org/licenses/>.
+
+# Host-side test harness: runs committed guest `.wasm` fixtures through the real
+# executor (`wasm_lsig`) with a stub ed25519 verifier, so `cargo test` covers
+# the guest programs without a Go build.
+[package]
+name = "wasm-guest-runner"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-or-later"
+
+[lib]
+name = "wasm_guest_runner"
+
+[dependencies]
+wasm_lsig = { path = "../.." }

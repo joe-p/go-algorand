@@ -1,0 +1,414 @@
+// Copyright (C) 2019-2026 Algorand Foundation Ltd.
+// This file is part of go-algorand
+//
+// go-algorand is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as
+// published by the Free Software Foundation, either version 3 of the
+// License, or (at your option) any later version.
+//
+// go-algorand is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with go-algorand.  If not, see <https://www.gnu.org/licenses/>.
+
+//! Idiomatic, safe Rust bindings for the WASM LogicSig `env` host functions.
+//!
+//! A WASM LogicSig is a WebAssembly module whose `Logic` bytes begin with the
+//! `\0asm` magic. The module must export `program`, and may import a small set
+//! of functions from the `env` module. This crate wraps those imports in typed,
+//! safe Rust so a guest never has to touch raw pointers or error sentinels.
+//!
+//! The guest ABI (see `wasm/README.md`) is:
+//!
+//! | import | Rust binding |
+//! |---|---|
+//! | `arg_count() -> i32` | [`arg_count`] |
+//! | `arg(i, out, len) -> i32` | [`arg_into`] |
+//! | `txn_uint(field) -> i64` | [`txn_uint`] |
+//! | `txn_bytes(field, out, len) -> i32` | [`txn_bytes`] |
+//! | `ed25519verify_bare(d, dl, s, sl, p, pl) -> i32` | [`ed25519_verify_bare`] |
+//!
+//! Some host functions *trap* rather than return an error (an invalid or
+//! out-of-version transaction field, an integer field read as bytes, or an
+//! oversized value). A trap ends the guest, matching the AVM, so those cases
+//! are not modelled as `Result`. The functions that do report errors return a
+//! typed error enum.
+//!
+//! # Example
+//!
+//! ```ignore
+//! #![no_std]
+//! use wasm_guest::{arg_into, ed25519_verify_bare, entry};
+//!
+//! entry!(|| {
+//!     let mut data = [0u8; 4096];
+//!     let mut sig = [0u8; 64];
+//!     let mut pk = [0u8; 32];
+//!     let data_len = match arg_into(0, &mut data) {
+//!         Ok(d) => d.len(),
+//!         Err(_) => return false,
+//!     };
+//!     if arg_into(1, &mut sig).is_err() || arg_into(2, &mut pk).is_err() {
+//!         return false;
+//!     }
+//!     ed25519_verify_bare(&data[..data_len], &sig, &pk)
+//! });
+//! ```
+//!
+//! This crate is `no_std`; it does not allocate.
+
+#![no_std]
+
+/// Maximum size of a LogicSig argument, and of any byte value crossing the host
+/// boundary. Matches `transactions.MaxLogicSigArgSize` and the AVM's
+/// `maxStringSize`.
+pub const MAX_ARG_BYTES: usize = 4096;
+
+// Error sentinels returned by `env.arg`.
+const ARG_ERR_INDEX: i32 = -1;
+const ARG_ERR_BUFFER: i32 = -2;
+const ARG_ERR_MEMORY: i32 = -3;
+
+// Error sentinels returned by `env.txn_bytes`. Invalid or unavailable fields
+// trap the guest instead of returning a sentinel.
+const TXN_ERR_BUFFER: i32 = -2;
+const TXN_ERR_MEMORY: i32 = -3;
+
+#[cfg(target_arch = "wasm32")]
+mod sys {
+    //! Raw `env` imports. Only linked when compiling for `wasm32`.
+
+    #[link(wasm_import_module = "env")]
+    extern "C" {
+        pub fn arg_count() -> i32;
+        pub fn arg(index: i32, out: i32, len: i32) -> i32;
+        pub fn txn_uint(field: i32) -> i64;
+        pub fn txn_bytes(field: i32, out: i32, len: i32) -> i32;
+        pub fn ed25519verify_bare(
+            data: i32,
+            data_len: i32,
+            sig: i32,
+            sig_len: i32,
+            pk: i32,
+            pk_len: i32,
+        ) -> i32;
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+mod sys {
+    //! Native stubs so the crate builds and links for host targets (e.g. to
+    //! type-check `cargo test`). The host functions only exist inside the wasm
+    //! executor; calling one natively is a bug.
+
+    macro_rules! unavailable {
+        ($name:literal) => {
+            panic!(concat!(
+                "wasm_guest::",
+                $name,
+                " is only available on wasm32 (inside a WASM LogicSig)"
+            ))
+        };
+    }
+
+    pub unsafe fn arg_count() -> i32 {
+        unavailable!("arg_count")
+    }
+    pub unsafe fn arg(_index: i32, _out: i32, _len: i32) -> i32 {
+        unavailable!("arg")
+    }
+    pub unsafe fn txn_uint(_field: i32) -> i64 {
+        unavailable!("txn_uint")
+    }
+    pub unsafe fn txn_bytes(_field: i32, _out: i32, _len: i32) -> i32 {
+        unavailable!("txn_bytes")
+    }
+    pub unsafe fn ed25519verify_bare(
+        _data: i32,
+        _data_len: i32,
+        _sig: i32,
+        _sig_len: i32,
+        _pk: i32,
+        _pk_len: i32,
+    ) -> i32 {
+        unavailable!("ed25519verify_bare")
+    }
+}
+
+/// Why [`arg_into`] failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ArgError {
+    /// There is no argument with that index.
+    OutOfRange,
+    /// The destination buffer is smaller than the argument.
+    BufferTooSmall,
+    /// The guest has no `memory` export, or the write was out of bounds.
+    Memory,
+    /// An unrecognised sentinel, which should not happen.
+    Unknown,
+}
+
+impl core::fmt::Display for ArgError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let msg = match self {
+            ArgError::OutOfRange => "no such argument",
+            ArgError::BufferTooSmall => "destination buffer too small",
+            ArgError::Memory => "invalid or missing linear memory",
+            ArgError::Unknown => "unknown argument error",
+        };
+        f.write_str(msg)
+    }
+}
+
+/// Why [`txn_bytes`] failed. Invalid transaction fields trap instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TxnError {
+    /// The destination buffer is smaller than the field's value.
+    BufferTooSmall,
+    /// The guest has no `memory` export, or the write was out of bounds.
+    Memory,
+    /// An unrecognised sentinel, which should not happen.
+    Unknown,
+}
+
+impl core::fmt::Display for TxnError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let msg = match self {
+            TxnError::BufferTooSmall => "destination buffer too small",
+            TxnError::Memory => "invalid or missing linear memory",
+            TxnError::Unknown => "unknown transaction field error",
+        };
+        f.write_str(msg)
+    }
+}
+
+/// A transaction field for [`txn_uint`] and [`txn_bytes`].
+///
+/// The discriminants match Go's `logic.TxnField` exactly; the host validates
+/// the field against the current protocol. All fields are listed so the enum
+/// stays in lockstep with Go, even though WASM LogicSigs currently support only
+/// the current transaction's non-array fields.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(i32)]
+#[allow(missing_docs)]
+pub enum TxnField {
+    Sender = 0,
+    Fee = 1,
+    FirstValid = 2,
+    FirstValidTime = 3,
+    LastValid = 4,
+    Note = 5,
+    Lease = 6,
+    Receiver = 7,
+    Amount = 8,
+    CloseRemainderTo = 9,
+    VotePK = 10,
+    SelectionPK = 11,
+    VoteFirst = 12,
+    VoteLast = 13,
+    VoteKeyDilution = 14,
+    Type = 15,
+    TypeEnum = 16,
+    XferAsset = 17,
+    AssetAmount = 18,
+    AssetSender = 19,
+    AssetReceiver = 20,
+    AssetCloseTo = 21,
+    GroupIndex = 22,
+    TxID = 23,
+    ApplicationID = 24,
+    OnCompletion = 25,
+    ApplicationArgs = 26,
+    NumAppArgs = 27,
+    Accounts = 28,
+    NumAccounts = 29,
+    ApprovalProgram = 30,
+    ClearStateProgram = 31,
+    RekeyTo = 32,
+    ConfigAsset = 33,
+    ConfigAssetTotal = 34,
+    ConfigAssetDecimals = 35,
+    ConfigAssetDefaultFrozen = 36,
+    ConfigAssetUnitName = 37,
+    ConfigAssetName = 38,
+    ConfigAssetURL = 39,
+    ConfigAssetMetadataHash = 40,
+    ConfigAssetManager = 41,
+    ConfigAssetReserve = 42,
+    ConfigAssetFreeze = 43,
+    ConfigAssetClawback = 44,
+    FreezeAsset = 45,
+    FreezeAssetAccount = 46,
+    FreezeAssetFrozen = 47,
+    Assets = 48,
+    NumAssets = 49,
+    Applications = 50,
+    NumApplications = 51,
+    GlobalNumUint = 52,
+    GlobalNumByteSlice = 53,
+    LocalNumUint = 54,
+    LocalNumByteSlice = 55,
+    ExtraProgramPages = 56,
+    Nonparticipation = 57,
+    Logs = 58,
+    NumLogs = 59,
+    CreatedAssetID = 60,
+    CreatedApplicationID = 61,
+    LastLog = 62,
+    StateProofPK = 63,
+    ApprovalProgramPages = 64,
+    NumApprovalProgramPages = 65,
+    ClearStateProgramPages = 66,
+    NumClearStateProgramPages = 67,
+    RejectVersion = 68,
+}
+
+/// The number of LogicSig arguments.
+#[inline]
+pub fn arg_count() -> u32 {
+    let n = unsafe { sys::arg_count() };
+    if n < 0 {
+        0
+    } else {
+        n as u32
+    }
+}
+
+/// Copies argument `index` into `buf`, returning the bytes that were written.
+///
+/// A successful read marks the argument as read, which the node requires: a
+/// LogicSig must read every argument it carries. There is no length query, so
+/// pass a buffer at least as large as the argument (`MAX_ARG_BYTES` always
+/// suffices). On error nothing is written and the argument is not marked read.
+#[inline]
+pub fn arg_into<'a>(index: u32, buf: &'a mut [u8]) -> Result<&'a [u8], ArgError> {
+    let ret = unsafe {
+        sys::arg(
+            index as i32,
+            buf.as_mut_ptr() as usize as i32,
+            buf.len() as i32,
+        )
+    };
+    if ret >= 0 {
+        Ok(&buf[..ret as usize])
+    } else {
+        Err(match ret {
+            ARG_ERR_INDEX => ArgError::OutOfRange,
+            ARG_ERR_BUFFER => ArgError::BufferTooSmall,
+            ARG_ERR_MEMORY => ArgError::Memory,
+            _ => ArgError::Unknown,
+        })
+    }
+}
+
+/// Reads a uint64 transaction field, like the AVM's `txn`.
+///
+/// An invalid or out-of-version field, or a field whose value is a byte string,
+/// traps the guest, as an invalid `txn` fails the AVM.
+#[inline]
+pub fn txn_uint(field: TxnField) -> i64 {
+    unsafe { sys::txn_uint(field as i32) }
+}
+
+/// Reads a byte-string transaction field, like the AVM's `txn`.
+///
+/// Returns the field's length, which may exceed `buf.len()` if the buffer was
+/// too small; in that case nothing is written and callers can retry with a
+/// larger buffer. Passing an empty `buf` returns the length without copying.
+/// An invalid or out-of-version field, or an integer field, traps the guest.
+#[inline]
+pub fn txn_bytes(field: TxnField, buf: &mut [u8]) -> Result<usize, TxnError> {
+    let ret = unsafe {
+        sys::txn_bytes(
+            field as i32,
+            buf.as_mut_ptr() as usize as i32,
+            buf.len() as i32,
+        )
+    };
+    if ret >= 0 {
+        Ok(ret as usize)
+    } else {
+        Err(match ret {
+            TXN_ERR_BUFFER => TxnError::BufferTooSmall,
+            TXN_ERR_MEMORY => TxnError::Memory,
+            _ => TxnError::Unknown,
+        })
+    }
+}
+
+/// Verifies an ed25519 signature, the AVM's `ed25519verify_bare`.
+///
+/// Returns `true` when `sig` is a valid signature over `data` under `pk`. The
+/// operands are verified by the host (Go), so this matches the AVM exactly. A
+/// key or signature of the wrong length, an oversized `data`, or an
+/// out-of-bounds range traps the guest; taking fixed-size arrays makes the
+/// length cases impossible.
+#[inline]
+pub fn ed25519_verify_bare(data: &[u8], sig: &[u8; 64], pk: &[u8; 32]) -> bool {
+    let ret = unsafe {
+        sys::ed25519verify_bare(
+            data.as_ptr() as usize as i32,
+            data.len() as i32,
+            sig.as_ptr() as usize as i32,
+            sig.len() as i32,
+            pk.as_ptr() as usize as i32,
+            pk.len() as i32,
+        )
+    };
+    ret == 1
+}
+
+/// Defines the module's `program` export from a fallible body.
+///
+/// The body is an expression callable as `FnOnce() -> R`, where `R` implements
+/// [`Approve`]. It may be a closure or a function path. `true` / `Ok(())`
+/// approves; `false` / `Err(_)` rejects.
+///
+/// ```ignore
+/// wasm_guest::entry!(|| {
+///     let mut buf = [0u8; 4096];
+///     arg_into(0, &mut buf).is_ok()
+/// });
+/// ```
+#[macro_export]
+macro_rules! entry {
+    ($body:expr) => {
+        #[no_mangle]
+        pub extern "C" fn program() -> i32 {
+            let approve: bool = $crate::Approve::approve(($body)());
+            if approve {
+                1
+            } else {
+                0
+            }
+        }
+    };
+}
+
+/// Converts a `Result<(), E>`-shaped value into an approval decision.
+///
+/// Used by [`entry!`]: `Ok(())` approves and `Err(_)` rejects. Exposed as a
+/// trait so guest bodies can return either a `bool` or a `Result`.
+pub trait Approve {
+    /// Whether the guest approves the transaction.
+    fn approve(self) -> bool;
+}
+
+impl Approve for bool {
+    #[inline]
+    fn approve(self) -> bool {
+        self
+    }
+}
+
+impl<E> Approve for Result<(), E> {
+    #[inline]
+    fn approve(self) -> bool {
+        self.is_ok()
+    }
+}

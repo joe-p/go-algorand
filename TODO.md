@@ -19,10 +19,14 @@ gated by the `EnableWasmLogicSig` consensus parameter (currently set only in
 - [ ] Decide whether resource accounting should carry a dedicated knob (e.g. a
       `WasmLogicSigMaxFuel` / fuel-per-cost rate) instead of reusing
       `LogicSigMaxCost` 1:1 with wasmi fuel.
-- [ ] Review the fixed per-invocation resource caps (one 64 KiB linear memory,
+- [ ] Review the fixed per-invocation resource caps (one 4 MiB linear memory,
       one table of up to 1024 elements, one instance) before release, and decide
       whether they need dedicated consensus parameters. Both initial allocation
-      and runtime growth are bounded by these caps.
+      and runtime growth are bounded by these caps. Linear memory is not metered
+      by execution fuel, so a minimal guest can declare a large minimum memory
+      and force the node to allocate it; 4 MiB per concurrent evaluation is a
+      real memory-pressure surface that should be metered or capped by a
+      consensus parameter.
 - [ ] Pin down the accepted WebAssembly feature set explicitly (currently floats
       off, no SIMD, no memory64, no auto-dispatch). Verify bulk-memory,
       reference-types, multi-value, etc. are intended and deterministic.
@@ -58,13 +62,20 @@ gated by the `EnableWasmLogicSig` consensus parameter (currently set only in
       as needed; the args-only host was built to extend this way).
 - [ ] Add `goal`/clerk tooling to create, compile-to-WASM, and submit WASM
       LogicSigs, mirroring the existing TEAL lsig flow.
-- [ ] Provide a small guest-authoring SDK / ABI doc and example contracts.
+- [x] Provide a small guest-authoring SDK / ABI doc and example contracts.
+      `wasm/guest` contains safe host bindings (`wasm-guest`), a host-backed
+      `ed25519-dalek` fork selected via `[patch.crates-io]`, and an example guest
+      with both Rust and Go end-to-end tests. Still to do: expose the full
+      opcode/txn surface through the SDK, and build the guest fixture in CI
+      (today only `make wasm-guest-fixtures` produces it).
 
 ## Build & packaging
 
 - [ ] Add Rust toolchain installation to the developer setup
       (`scripts/configure_dev.sh`), CI, and Dockerfile; `make build` now requires
-      `cargo` because `buildsrc` depends on `wasmlib`.
+      `cargo` because `buildsrc` depends on `wasmlib`. Building the guest
+      fixtures (`make wasm-guest-fixtures`) additionally needs the
+      `wasm32-unknown-unknown` target.
 - [ ] Decide how to ship the static library: build from source everywhere, or
       vendor prebuilt per-platform `.a` files like `crypto/libs`.
 - [ ] Support all shipped platforms (darwin/linux/windows, amd64/arm64) and the

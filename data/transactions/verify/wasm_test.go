@@ -130,6 +130,34 @@ func TestWasmLogicSigEd25519VerifyBare(t *testing.T) {
 	require.Error(t, err)
 }
 
+// TestWasmLogicSigEd25519DalekGuest checks the same Rust ed25519-dalek guest
+// through the full transaction path, so it also exercises the program size cap
+// and the LSig cost budget.
+func TestWasmLogicSigEd25519DalekGuest(t *testing.T) {
+	partitiontest.PartitionTest(t)
+	t.Parallel()
+
+	blkHdr := createDummyBlockHeader(protocol.ConsensusFuture)
+	program := readWasmFixture(t, "ed25519_dalek.wasm")
+
+	var seed crypto.Seed
+	seed[0] = 2
+	secrets := crypto.GenerateSignatureSecrets(seed)
+	data := []byte("verify ed25519-dalek guest end to end")
+	sig := secrets.SignBytes(data)
+
+	approve := wasmContractTxn(program, [][]byte{data, sig[:], secrets.SignatureVerifier[:]})
+	_, err := TxnGroup([]transactions.SignedTxn{approve}, &blkHdr, nil, &DummyLedgerForSignature{})
+	require.NoError(t, err)
+
+	// A tampered message rejects.
+	badData := append([]byte(nil), data...)
+	badData[0] ^= 0xff
+	reject := wasmContractTxn(program, [][]byte{badData, sig[:], secrets.SignatureVerifier[:]})
+	_, err = TxnGroup([]transactions.SignedTxn{reject}, &blkHdr, nil, &DummyLedgerForSignature{})
+	require.Error(t, err)
+}
+
 // TestWasmLogicSigArgAccess checks that the arg-access rule applies to WASM
 // LogicSigs too: a program that ignores an argument it carries is rejected.
 func TestWasmLogicSigArgAccess(t *testing.T) {

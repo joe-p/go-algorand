@@ -1,0 +1,87 @@
+# Copyright (C) 2019-2026 Algorand Foundation Ltd.
+# This file is part of go-algorand
+#
+# go-algorand is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
+#
+# go-algorand is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with go-algorand.  If not, see <https://www.gnu.org/licenses/>.
+
+# A vendored fork of ed25519-dalek 2.2.0 whose signature verification is routed
+# through the WASM LogicSig `ed25519verify_bare` host function (see
+# `src/verifying.rs`), so on-chain verification matches the AVM's opcode exactly
+# and does not spend guest fuel on curve arithmetic.
+#
+# It is selected with `[patch.crates-io]` in the workspace root, keeping the
+# crate name and API so guests depend on `ed25519-dalek` unchanged. Upstream is
+# BSD-3-Clause (see LICENSE); this fork is distributed under the workspace's
+# AGPL-3.0-or-later terms.
+[package]
+name = "ed25519-dalek"
+version = "2.2.0"
+edition = "2021"
+rust-version = "1.81"
+authors = [
+    "isis lovecruft <isis@patternsinthevoid.net>",
+    "Tony Arcieri <bascule@gmail.com>",
+    "Michael Rosenberg <michael@mrosenberg.pub>",
+]
+description = "Vendored ed25519-dalek whose verification uses the ed25519verify_bare host function."
+homepage = "https://github.com/dalek-cryptography/curve25519-dalek"
+documentation = "https://docs.rs/ed25519-dalek"
+readme = "README.md"
+keywords = ["cryptography", "ed25519", "curve25519", "signature", "ECC"]
+categories = ["cryptography", "no-std"]
+license = "BSD-3-Clause"
+repository = "https://github.com/dalek-cryptography/curve25519-dalek/tree/main/ed25519-dalek"
+publish = false
+autotests = false
+autobenches = false
+autoexamples = false
+
+[lib]
+name = "ed25519_dalek"
+path = "src/lib.rs"
+
+[features]
+default = ["fast", "std", "zeroize"]
+alloc = ["curve25519-dalek/alloc", "ed25519/alloc", "zeroize/alloc"]
+asm = ["sha2/asm"]
+fast = ["curve25519-dalek/precomputed-tables"]
+hazmat = []
+digest = ["signature/digest"]
+legacy_compatibility = ["curve25519-dalek/legacy_compatibility"]
+std = ["alloc", "ed25519/std", "sha2/std"]
+zeroize = ["dep:zeroize", "curve25519-dalek/zeroize"]
+
+[dependencies]
+subtle = { version = "2.3.0", default-features = false }
+sha2 = { version = "0.10", default-features = false }
+curve25519-dalek = { version = "4", features = ["digest"], default-features = false }
+ed25519 = { version = ">=2.2, <2.3", default-features = false }
+zeroize = { version = "1.5", optional = true, default-features = false }
+signature = { version = ">=2.0, <2.3", optional = true, default-features = false }
+
+# Routed to the `env.ed25519verify_bare` host function on wasm32.
+wasm-guest = { path = "../host" }
+
+# Upstream's in-src `#[cfg(test)]` modules use these. They are test-only and do
+# not enter the wasm32 guest build.
+[dev-dependencies]
+rand = "0.8"
+rand_core = { version = "0.6.4", default-features = false }
+blake2 = "0.10"
+sha3 = "0.10"
+
+# The vendored sources reference upstream feature names we do not expose
+# (pkcs8, serde, rand_core, batch, pem). Silence the resulting cfg warnings
+# rather than declaring features whose code we do not compile.
+[lints.rust]
+unexpected_cfgs = "allow"

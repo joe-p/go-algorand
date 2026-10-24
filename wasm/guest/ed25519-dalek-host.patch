@@ -1,0 +1,152 @@
+diff -ruN a/src/errors.rs b/src/errors.rs
+--- a/src/errors.rs	2026-10-24 09:57:25.026515697 -0400
++++ b/src/errors.rs	2026-10-24 09:57:25.024515649 -0400
+@@ -23,6 +23,9 @@
+ /// need to pay any attention to these.
+ #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+ pub(crate) enum InternalError {
++    // Only constructed by the native `VerifyingKey::from_bytes`; on wasm32 the
++    // host validates the key instead, so this is dead code there.
++    #[allow(dead_code)]
+     PointDecompression,
+     ScalarFormat,
+     /// An error in the length of bytes handed to a constructor.
+diff -ruN a/src/verifying.rs b/src/verifying.rs
+--- a/src/verifying.rs	2026-10-24 09:57:25.026515697 -0400
++++ b/src/verifying.rs	2026-10-24 09:57:25.024515649 -0400
+@@ -21,6 +21,7 @@
+ 
+ use ed25519::signature::Verifier;
+ 
++#[cfg(any(not(target_arch = "wasm32"), feature = "digest"))]
+ use sha2::Sha512;
+ 
+ #[cfg(feature = "pkcs8")]
+@@ -164,12 +165,29 @@
+     #[inline]
+     pub fn from_bytes(bytes: &[u8; PUBLIC_KEY_LENGTH]) -> Result<VerifyingKey, SignatureError> {
+         let compressed = CompressedEdwardsY(*bytes);
+-        let point = compressed
+-            .decompress()
+-            .ok_or(InternalError::PointDecompression)?;
+ 
+-        // Invariant: VerifyingKey.1 is always the decompression of VerifyingKey.0
+-        Ok(VerifyingKey { compressed, point })
++        // On wasm32 the fork defers key validation to the host: the
++        // `ed25519verify_bare` opcode rejects malformed encodings, and skipping
++        // the decompression keeps the guest out of expensive curve arithmetic
++        // (see `host_verify`). The decompressed point is unused on this path, so
++        // the identity is stored in its place.
++        #[cfg(target_arch = "wasm32")]
++        {
++            Ok(VerifyingKey {
++                compressed,
++                point: EdwardsPoint::default(),
++            })
++        }
++
++        #[cfg(not(target_arch = "wasm32"))]
++        {
++            let point = compressed
++                .decompress()
++                .ok_or(InternalError::PointDecompression)?;
++
++            // Invariant: VerifyingKey.1 is always the decompression of VerifyingKey.0
++            Ok(VerifyingKey { compressed, point })
++        }
+     }
+ 
+     /// Create a verifying context that can be used for Ed25519ph with
+@@ -359,23 +377,30 @@
+         message: &[u8],
+         signature: &ed25519::Signature,
+     ) -> Result<(), SignatureError> {
+-        let signature = InternalSignature::try_from(signature)?;
+-
+-        let signature_R = signature
+-            .R
+-            .decompress()
+-            .ok_or_else(|| SignatureError::from(InternalError::Verify))?;
+-
+-        // Logical OR is fine here as we're not trying to be constant time.
+-        if signature_R.is_small_order() || self.point.is_small_order() {
+-            return Err(InternalError::Verify.into());
++        #[cfg(target_arch = "wasm32")]
++        {
++            self.host_verify(message, signature)
+         }
+-
+-        let expected_R = RCompute::<Sha512>::compute(self, signature, None, message);
+-        if expected_R == signature.R {
+-            Ok(())
+-        } else {
+-            Err(InternalError::Verify.into())
++        #[cfg(not(target_arch = "wasm32"))]
++        {
++            let signature = InternalSignature::try_from(signature)?;
++
++            let signature_R = signature
++                .R
++                .decompress()
++                .ok_or_else(|| SignatureError::from(InternalError::Verify))?;
++
++            // Logical OR is fine here as we're not trying to be constant time.
++            if signature_R.is_small_order() || self.point.is_small_order() {
++                return Err(InternalError::Verify.into());
++            }
++
++            let expected_R = RCompute::<Sha512>::compute(self, signature, None, message);
++            if expected_R == signature.R {
++                Ok(())
++            } else {
++                Err(InternalError::Verify.into())
++            }
+         }
+     }
+ 
+@@ -554,6 +579,29 @@
+     }
+ }
+ 
++/// Verifies through the host's `ed25519verify_bare` opcode (the WASM LogicSig
++/// ABI). This fork replaces the pure-Rust verification so an on-chain check
++/// matches the AVM's opcode and costs its fuel instead of guest curve
++/// arithmetic.
++///
++/// On native targets [`VerifyingKey::verify`] and [`VerifyingKey::verify_strict`]
++/// keep upstream ed25519-dalek behavior, so the crate still behaves normally
++/// when built or tested off-chain.
++#[cfg(target_arch = "wasm32")]
++impl VerifyingKey {
++    fn host_verify(
++        &self,
++        message: &[u8],
++        signature: &ed25519::Signature,
++    ) -> Result<(), SignatureError> {
++        if wasm_guest::ed25519_verify_bare(message, &signature.to_bytes(), &self.to_bytes()) {
++            Ok(())
++        } else {
++            Err(InternalError::Verify.into())
++        }
++    }
++}
++
+ impl Verifier<ed25519::Signature> for VerifyingKey {
+     /// Verify a signature on a message with this keypair's public key.
+     ///
+@@ -561,7 +609,14 @@
+     ///
+     /// Returns `Ok(())` if the signature is valid, and `Err` otherwise.
+     fn verify(&self, message: &[u8], signature: &ed25519::Signature) -> Result<(), SignatureError> {
+-        self.raw_verify::<Sha512>(message, signature)
++        #[cfg(target_arch = "wasm32")]
++        {
++            self.host_verify(message, signature)
++        }
++        #[cfg(not(target_arch = "wasm32"))]
++        {
++            self.raw_verify::<Sha512>(message, signature)
++        }
+     }
+ }
+ 

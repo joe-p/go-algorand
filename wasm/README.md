@@ -60,7 +60,8 @@ More opcodes will be added to the same `env` module.
   instruction fuel. `ed25519verify_bare` is charged its opcode cost (1900). The
   charge occurs before host work; insufficient fuel traps. Running out of fuel
   is an error.
-- Each invocation permits at most one linear memory (64 KiB), one table
+- Each invocation permits at most one linear memory (4 MiB, matching the AVM's
+  bound on live data of `maxStringSize` 4096 by `maxStackDepth` 1000), one table
   (1024 elements), and one instance. Size and count limits bound aggregate
   guest memory/table allocation, including initial allocation before `start`.
   Instantiation fails if the initial allocation exceeds these limits;
@@ -90,3 +91,8 @@ to `.wasm` with:
 ```
 cargo run --example wat2wasm -- <input.wat> <output.wasm>
 ```
+
+Guest programs can also be written in Rust. The guest SDK lives in `wasm/guest`
+(safe host bindings, the host-backed `ed25519-dalek`, and an example); see
+`wasm/guest/README.md`. `make wasm-guest-fixtures` rebuilds the committed Rust
+guest fixture `data/transactions/logic/testdata/wasm/ed25519_dalek.wasm`.

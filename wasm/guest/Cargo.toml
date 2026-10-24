@@ -1,0 +1,35 @@
+# Copyright (C) 2019-2026 Algorand Foundation Ltd.
+# This file is part of go-algorand
+#
+# go-algorand is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
+#
+# go-algorand is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with go-algorand.  If not, see <https://www.gnu.org/licenses/>.
+
+# Guest-side crates for authoring WASM LogicSigs. Kept out of the host
+# executor's manifest (`wasm/Cargo.toml`) so `make wasmlib` is unaffected.
+[workspace]
+resolver = "2"
+members = ["host", "ed25519-dalek", "examples/ed25519-verify", "runner"]
+
+# Replace the crates.io `ed25519-dalek` with our host-backed fork. Guests opt in
+# by depending on `ed25519-dalek` as usual; Cargo resolves it to the fork.
+[patch.crates-io]
+ed25519-dalek = { path = "ed25519-dalek" }
+
+# Guests are compiled to `wasm32-unknown-unknown`; size matters for the program
+# byte cap and fuel is charged per instruction, so optimize for size.
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

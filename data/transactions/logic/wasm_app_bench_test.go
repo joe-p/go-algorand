@@ -95,6 +95,103 @@ fib_done:
   int 1
 `
 
+// tealFibRecAppSrc is a TEAL application program that computes fib(N)
+// recursively with `callsub`, where N is ApplicationArgs[0] (big-endian). It is
+// the AVM counterpart to app_fib_rec.wasm, which does the same recursion with
+// WASM calls. The result is written to the uint global "fib".
+const tealFibRecAppSrc = `#pragma version 8
+b main
+
+fib:
+  dup
+  int 2
+  <
+  bnz fib_base
+  dup
+  int 1
+  -
+  callsub fib
+  swap
+  int 2
+  -
+  callsub fib
+  +
+  retsub
+fib_base:
+  retsub
+
+main:
+  txn ApplicationArgs 0
+  btoi
+  callsub fib
+  store 0
+  byte "fib"
+  load 0
+  app_global_put
+  int 1
+`
+
+// tealRecDepthAppSrc is a TEAL application program that recurses to depth N
+// with `callsub`, where N is ApplicationArgs[0] (big-endian), doing O(1) work
+// per frame. It pairs with app_rec_depth.wasm; unlike recursive fib, the call
+// count equals the depth, so it measures call-stack growth itself.
+const tealRecDepthAppSrc = `#pragma version 8
+b main
+
+rec:
+  dup
+  bz rec_base
+  int 1
+  -
+  callsub rec
+  int 1
+  +
+  retsub
+rec_base:
+  pop
+  int 0
+  retsub
+
+main:
+  txn ApplicationArgs 0
+  btoi
+  callsub rec
+  store 0
+  byte "depth"
+  load 0
+  app_global_put
+  int 1
+`
+
+// tealDepthLoopAppSrc is the iterative TEAL baseline for tealRecDepthAppSrc:
+// the same N iterations of O(1) work, without nested calls. Its loop body is a
+// slightly different instruction mix than the recursive body, so the rec/loop
+// gap is an approximate frame-cost estimate rather than an exact subtraction.
+const tealDepthLoopAppSrc = `#pragma version 8
+txn ApplicationArgs 0
+btoi
+store 0
+int 0
+store 1
+loop:
+  load 0
+  bz done
+  load 1
+  int 1
+  +
+  store 1
+  load 0
+  int 1
+  -
+  store 0
+  b loop
+done:
+  byte "depth"
+  load 1
+  app_global_put
+  int 1
+`
+
 // BenchmarkAppGlobalLoop compares the execution cost of a TEAL and a WASM
 // application program that each increment the same uint64 global the same
 // number of times, run for the largest N that fits a two-app-sized allowance in
@@ -214,16 +311,83 @@ func BenchmarkAppFibCrossover(b *testing.B) {
 	for _, n := range []int{0, 50, 100, 300, 1000} {
 		n := n
 		b.Run(fmt.Sprintf("teal-fib/N%d", n), func(b *testing.B) {
-			benchmarkAppFib(b, tealOps.Program, n, false, proto)
+			benchmarkAppAtN(b, tealOps.Program, n, false, proto)
 		})
 		b.Run(fmt.Sprintf("wasm-fib/N%d", n), func(b *testing.B) {
-			benchmarkAppFib(b, wasm, n, true, proto)
+			benchmarkAppAtN(b, wasm, n, true, proto)
 		})
 	}
 }
 
-// benchmarkAppFib times one EvalContract of a fib program at loop count N.
-func benchmarkAppFib(b *testing.B, program []byte, n int, isWasm bool, proto *config.ConsensusParams) {
+// BenchmarkAppFibRecursive compares a TEAL and a WASM application program that
+// compute fib(N) recursively, at several N. Recursive fib has depth N but an
+// exponential number of calls, so this shows what deep call stacks cost on a
+// realistic divide-and-conquer shape. As with BenchmarkAppFibCrossover the
+// budget is lifted: these N values are engine-cost measurements, not valid
+// transactions.
+func BenchmarkAppFibRecursive(b *testing.B) {
+	tealOps, err := AssembleString(tealFibRecAppSrc)
+	require.NoError(b, err)
+	wasm := loadWasm(b, "app_fib_rec.wasm")
+
+	proto := makeTestProto(wasmAppProto)
+	proto.MaxAppProgramCost = 1_000_000_000 // lift the cap; see the comment above
+
+	for _, n := range []int{5, 10, 15, 20} {
+		n := n
+		b.Run(fmt.Sprintf("teal-fib-rec/N%d", n), func(b *testing.B) {
+			benchmarkAppAtN(b, tealOps.Program, n, false, proto)
+		})
+		b.Run(fmt.Sprintf("wasm-fib-rec/N%d", n), func(b *testing.B) {
+			benchmarkAppAtN(b, wasm, n, true, proto)
+		})
+	}
+}
+
+// BenchmarkAppCallDepth isolates how a growing call stack affects performance.
+// Every variant does N iterations of O(1) work on the same engine; only the
+// shape differs: `*-rec` nests N calls, `*-loop` runs a loop. The gap between
+// rec and loop at each N is the approximate per-frame cost (frame push/pop plus
+// the call and return happening at all); the bodies are not identical
+// instruction sets, so it is not an exact subtraction. The slope of rec across N
+// is the marginal cost of depth. Running both engines shows whether AVM
+// `callsub` frames and WASMI call frames scale the same way.
+//
+// WASMI is configured with a recursion limit of 1024 (wasm/src/lib.rs), so
+// depths above that are a clean trap rather than a measurement.
+func BenchmarkAppCallDepth(b *testing.B) {
+	tealRecOps, err := AssembleString(tealRecDepthAppSrc)
+	require.NoError(b, err)
+	tealLoopOps, err := AssembleString(tealDepthLoopAppSrc)
+	require.NoError(b, err)
+
+	proto := makeTestProto(wasmAppProto)
+	proto.MaxAppProgramCost = 1_000_000_000 // lift the cap; see the comment above
+
+	variants := []struct {
+		name    string
+		program []byte
+		wasm    bool
+	}{
+		{"teal-rec", tealRecOps.Program, false},
+		{"teal-loop", tealLoopOps.Program, false},
+		{"wasm-rec", loadWasm(b, "app_rec_depth.wasm"), true},
+		{"wasm-loop", loadWasm(b, "app_depth_loop.wasm"), true},
+	}
+	for _, n := range []int{16, 64, 256, 512} {
+		n := n
+		for _, v := range variants {
+			v := v
+			b.Run(fmt.Sprintf("%s/N%d", v.name, n), func(b *testing.B) {
+				benchmarkAppAtN(b, v.program, n, v.wasm, proto)
+			})
+		}
+	}
+}
+
+// benchmarkAppAtN times one EvalContract of a program driven by the 4-byte
+// input N, reporting its AVM cost (and RAW fuel for WASM programs).
+func benchmarkAppAtN(b *testing.B, program []byte, n int, isWasm bool, proto *config.ConsensusParams) {
 	ep := appLoopParams(proto, n, isWasm)
 	ledger := ep.Ledger.(*Ledger)
 	var cost int

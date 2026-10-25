@@ -17,10 +17,10 @@ representative contract before judging these results.
       useful contracts impractical.
       - First pass on linux/arm64, 8 cores: strict max TEAL block (4 KiB `b~`)
         validates in 45.4-47.5 s / 1.88-1.97 GB; strict max WASM blocks
-        measured at 0.59-1.15 s / 0.50-1.02 GB. Static validation is ~72-90 ms
+        measured at 0.57-1.09 s / 0.46-0.85 GB. Static validation is ~72-90 ms
         per max block.
         The default 700-unit app budget is below even a trivial WASM app's
-        setup cost (921-943), so apps need pooling. See
+        total cost (922-945), which is dominated by setup, so apps need pooling. See
         `WASM_ADVERSARIAL.md`. Remaining: app/inner-txn blocks, amd64/cold
         runs, and many-core memory aggregation.
 - [x] **Can realistic, compiler-generated contracts fit actual size and budget
@@ -33,7 +33,7 @@ representative contract before judging these results.
       - Measured with compiler-generated Rust fixtures deployed through algod on
         `ConsensusFuture`: a 560-byte stateful counter has 1,832 setup cost and
         needs 4 pooled app calls to deploy and 4 to call; a 4,522-byte
-        ed25519 signed-claim contract has 4,821 setup cost (8,899 total) and
+        ed25519 signed-claim contract has 4,821 setup cost (8,930 to call) and
         needs 8 calls to deploy and 13 of the maximum 16 to call. Creation runs
         the approval program, so deployment needs pooling too. A second
         signature check would exceed the 11,200 pooled ceiling. Size is not the

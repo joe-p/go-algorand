@@ -86,13 +86,16 @@ fresh process for that case.
 
 | WASM workload | txns / groups | validation wall | ns/txn | peak RSS |
 | --- | ---: | ---: | ---: | ---: |
-| `arg` 4 KiB, pooled groups of 16 | 10,816 / 676 | **1.11–1.15 s** | ~103,000–111,000 | **0.50 GB** |
-| `memory.copy` 2 MiB | 17,361 | **0.98–1.04 s** | ~56,000–65,000 | **0.85–0.87 GB** |
-| `memory.fill` 4 MiB | 17,594 | **0.59–0.63 s** | ~34,000–40,000 | **0.97–1.02 GB** |
+| `arg` 4 KiB, pooled groups of 16 | 10,816 / 676 | **0.89–0.92 s** | ~83,000–85,000 | **0.46 GB** |
+| `memory.copy` 2 MiB | 17,361 | **0.95–1.09 s** | ~55,000–63,000 | **0.82 GB** |
+| `memory.fill` 4 MiB | 17,594 | **0.57–0.65 s** | ~32,000–37,000 | **0.85 GB** |
 
 The `arg` case uses one 4 KiB-argument LogicSig plus 15 plain payments per
 group. The group-pooled budget is 320,000 units, so one program can read the
-4 KiB argument up to the pooled limit. It is the worst host-payload block found.
+4 KiB argument up to the pooled limit. The prototype operator weights raised
+the per-read fuel, so each pooled LogicSig now performs about 20% fewer reads.
+That makes this block slightly faster than the `memory.copy` block; the two are
+the worst host-payload cases found.
 
 ### Per-invocation WASM costs
 
@@ -100,15 +103,16 @@ Measured with a 20,000-unit LogicSig budget unless noted:
 
 | workload | max work | cost | time | ns/cost |
 | --- | ---: | ---: | ---: | ---: |
-| `arg` 4 KiB | 4,453 reads | 20,000 | 0.58–0.86 ms | ~12–36 |
-| `memory.copy` 2 MiB | 5 copies | 19,456 | 196–235 µs | ~10–12 |
-| `memory.fill` 4 MiB | 2 fills | 16,170 | 53–67 µs | ~2–4 |
-| `memory.grow` 1→64 pages | to 4 MiB | 7,257 | 93 µs warm / 829 µs cold | ~13–114 |
-| runaway LSig (out of fuel) | full budget | 20,000 | 0.33–0.53 ms | ~16–26 |
-| failed clear-state app | 700 budget | 700 | 21–67 µs | ~30–96 |
+| `arg` 4 KiB | 3,545 reads | 19,998 | 0.46–0.47 ms | ~23–24 |
+| `memory.copy` 2 MiB | 5 copies | 19,458 | 0.20–0.21 ms | ~10–11 |
+| `memory.fill` 4 MiB | 2 fills | 16,171 | 55–71 µs | ~3.4–4.4 |
+| `memory.grow` 1→64 pages | to 4 MiB | 7,264 | ~45 µs warm | ~6.1–6.5 |
+| runaway LSig (out of fuel) | full budget | 20,000 | 0.16–0.20 ms | ~8–10 |
+| failed clear-state app | 700 budget | 700 | 26–29 µs | ~37–41 |
 
-The `memory.grow` result is the highest WASM ns/cost outside the `arg` case,
-but it remains below the strict TEAL `b~` ceiling.
+Failed clear-state executions have the highest ns/cost outside the `arg` case
+(37–41), followed by bulk memory copies (10–11). Both remain below the strict
+TEAL `b~` per-transaction ceiling (~130–208 ns/cost).
 
 ### Static validation
 
@@ -130,14 +134,15 @@ executes these modules cannot do so within the 20,000 budget.
 
 | contract | WASM cost | TEAL cost | normal budget | pooled calls needed |
 | --- | ---: | ---: | ---: | ---: |
-| ed25519 LSig | 3,821 | 1,903 | 20,000 | 1 |
-| `app_global_inc` | 943 | 10 | 700 | 2 |
-| `app_fib N=0` | 921 | — | 700 | 2 |
+| ed25519 LSig | 3,825 | 1,903 | 20,000 | 1 |
+| `app_global_inc` | 945 | 10 | 700 | 2 |
+| `app_fib N=0` | 922 | — | 700 | 2 |
 
 The ed25519 LogicSig fits comfortably. A trivial WASM application does not fit
-one default 700-unit app call: setup alone is 921–943 cost. That is a real
-practicality constraint, even though 2 pooled calls is bounded. This is the
-main “safe pricing makes useful contracts impractical” finding so far.
+one default 700-unit app call: its total cost is 922–945, dominated by setup.
+That is a real practicality constraint, even though 2 pooled calls is bounded.
+This is the main “safe pricing makes useful contracts impractical” finding so
+far.
 
 Compiler-generated Rust applications extend this result: even a 560-byte
 stateful contract has a 1,832 setup charge and needs 4 pooled calls, and a
@@ -149,10 +154,11 @@ normal-limit deployment measurements.
 
 On this machine, for the measured workloads:
 
-- **Time:** strict max WASM validation is 1.11–1.15 s versus **45.4–47.5 s**
-  for strict max TEAL. WASM is well inside the existing AVM worst-case envelope.
-- **Memory:** strict max WASM peak RSS is 0.97–1.02 GB versus **1.88–1.97 GB**
-  for strict max TEAL. WASM is below the AVM envelope.
+- **Time:** the slowest max-byte WASM block (`memory.copy`) validates in
+  0.95–1.09 s versus **45.4–47.5 s** for strict max TEAL. WASM is well inside
+  the existing AVM worst-case envelope.
+- **Memory:** the largest WASM peak RSS is ~0.85 GB versus **1.88–1.97 GB** for
+  strict max TEAL. WASM is below the AVM envelope.
 - **Static validation:** ~72–90 ms worst-case upper bound, not a bottleneck.
 - **Failed and clear-state executions:** consume their budget but do not
   create a new worst case.

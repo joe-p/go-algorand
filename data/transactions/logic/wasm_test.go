@@ -327,7 +327,9 @@ func TestWasmFuelBudgetConversion(t *testing.T) {
 func TestWasmFuelRoundsUp(t *testing.T) {
 	partitiontest.PartitionTest(t)
 	program := loadWasm(t, "host_arg_loop.wasm")
-	args := [][]byte{le32(2)}
+	// N=3 keeps the total fuel off a multiple of wasmFuelPerCost, so the
+	// rounding path below is actually exercised.
+	args := [][]byte{le32(3)}
 	ep := optSigParams(wasmProto)
 	budget := 20_000
 	ep.PooledLogicSigBudget = &budget

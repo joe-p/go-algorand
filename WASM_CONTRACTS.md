@@ -66,16 +66,16 @@ with warm caches. Costs are AVM budget units; fuel is wasmi's denomination at
 
 | contract | bytes | pages / EPP | setup cost | deploy cost | call cost | deploy calls | call calls |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `app_rust_counter` | 560 | 1 / 0 | **1,832** | 2,101 | 2,248 | **4** | **4** |
-| `app_rust_signed_claim` | 4,522 | 3 / 2 | **4,821** | 5,332 | 8,899 | **8** | **13** |
+| `app_rust_counter` | 560 | 1 / 0 | **1,832** | 2,108 | 2,255 | **4** | **4** |
+| `app_rust_signed_claim` | 4,522 | 3 / 2 | **4,821** | 5,345 | 8,930 | **8** | **13** |
 
 `deploy cost` and `call cost` are `app-budget-consumed` for the first
 transaction of a successful group, reported by `simulate` through the new WASM
 tracer hooks. `setup cost` is the deterministic charge from
 `make wasm-setupcost`; execution is the remainder. Deploy and call include the
 real approval execution, not just compilation. The Go evaluation at the same
-normal 16-call pool reports the same costs as the algod simulation (2,248 for
-the counter and 8,899 for the signed claim), so the pricing is consistent
+normal 16-call pool reports the same costs as the algod simulation (2,255 for
+the counter and 8,930 for the signed claim), so the pricing is consistent
 between the harness and the node.
 
 For comparison, the WAT `app_fib.wasm` fixture is 208 bytes with an 839 setup
@@ -87,8 +87,8 @@ because it has no memory section, no runtime functions, and no data segments.
 
 | contract | setup | deploy execution | call execution |
 | --- | ---: | ---: | ---: |
-| `app_rust_counter` | 1,832 | 269 | 416 |
-| `app_rust_signed_claim` | 4,821 | 511 | 4,078 |
+| `app_rust_counter` | 1,832 | 276 | 423 |
+| `app_rust_signed_claim` | 4,821 | 524 | 4,109 |
 
 The signed-claim call execution is dominated by the 2,850-unit
 `ed25519verify_bare` host charge. Even so, setup is 54% of the total call cost.
@@ -122,9 +122,9 @@ Consequences found through `algod`:
   proving no override.
 - **13 of 16 slots is the cliff for a realistic contract.** One ed25519
   verification costs 2,850 units. A second verification would put a call at
-  about 11,749 units, above the 11,200 maximum pool. Such a contract cannot be
+  about 11,780 units, above the 11,200 maximum pool. Such a contract cannot be
   executed at normal limits without a protocol change. Even at the maximum
-  16-call pool only about 2,300 units remain above the 8,899 call cost, and the
+  16-call pool only about 2,270 units remain above the 8,930 call cost, and the
   minimal 13-call group has almost no slack.
 
 Fees are not the constraint: minimum-fee groups cost 0.008 ALGO to deploy and

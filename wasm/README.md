@@ -96,19 +96,26 @@ opcode. More opcodes will be added to the same `env` module.
 ## Execution limits
 
 - Fuel metered at **10 fuel per AVM cost unit**: a 20,000-cost LogicSig budget
-  permits 200,000 fuel. Guest instruction charges are unchanged. Consumed fuel
+  permits 200,000 fuel. Guest instruction weights use the custom
+  `guest_operator_costs` table in `src/lib.rs`, not wasmi's defaults: every
+  operator costs at least 1 fuel, and `call`/`call_indirect` cost 10 (wasmi
+  charges 1 for `call` and 0 for `return`, `end`, `else`, and structural
+  operators). Consumed fuel
   is divided by ten, rounding up per evaluation, before charging AVM/shared
   budgets. Fuel includes deterministic setup charges reserved before compilation
   and allocation (see `../WASM_PERF.md` and `src/setup.rs`), as well as execution
   and wasmi's lazy translation. Failed evaluations also retain consumed fuel;
   invalid/unaffordable preflights consume their supplied allowance. Host charges
   are calibrated toward 1 ns/fuel on the fixtures in
-  `../WASM_PERF.md`: `arg` 30, `arg_count` 10, `txn_uint`/`txna_uint` 125,
+  `../WASM_PERF.md` (they predate the operator table, so each host call now
+  also pays the 10-fuel `call`; the measured ratio is ~0.8-1.0 ns/fuel):
+  `arg` 30, `arg_count` 10, `txn_uint`/`txna_uint` 125,
   `txn_bytes` 190, `txna_bytes` 200, global get uint/bytes 130/170, global put
   uint/bytes 410/390, and global delete 140 fuel. These fixed charges include
   length queries and invalid reads, on top of WASM instruction fuel.
-  `ed25519verify_bare` costs 28,500 fuel (2850 AVM budget units, versus the TEAL
-  opcode's 1900). The raw host charge is independent of the conversion. The charge occurs
+  `ed25519verify_bare` has an explicit 28,500-fuel host charge (2850 AVM budget
+  units, versus the TEAL opcode's 1900; 28,527 fuel for the whole call under the
+  operator table). The raw host charge is independent of the conversion. The charge occurs
   before host work; insufficient fuel traps. Running out of fuel is an error.
 - Each invocation permits at most one linear memory (4 MiB, matching the AVM's
   bound on live data of `maxStringSize` 4096 by `maxStackDepth` 1000), one table

@@ -70,7 +70,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 mod setup;
 
 use wasmi::{
-    Caller, Config, Engine, ExternType, Instance, Linker, Module, Store, StoreLimits,
+    Caller, Config, Engine, ExternType, Instance, Linker, Module, OperatorCost, Store, StoreLimits,
     StoreLimitsBuilder, TrapCode, TypedFunc, ValType,
 };
 
@@ -859,6 +859,44 @@ fn store_limits(memory_limit_bytes: usize) -> StoreLimits {
         .build()
 }
 
+/// Fuel weights for guest Wasm operators.
+///
+/// wasmi's default table charges 1 fuel per operator, except `nop`, `drop`,
+/// `block`, `loop`, `else`, `end`, `return`, and `unreachable`, which are free.
+/// That models wasmi's own relative instruction priorities, not a consensus
+/// time budget:
+///
+///   * `return` emits a runtime return (it pops a call frame), and `else` can
+///     emit an unconditional branch when both arms are reachable;
+///   * `call` and `i32.add` both cost 1, even though `call` also sets up a
+///     frame, initializes locals, and copies arguments.
+///
+/// WASM_PERF.md ("Call-stack cost") measures recursive frames at ~20 ns for
+/// ~11 fuel, while loop code is near the 1 ns/fuel target, so `call` is priced
+/// at 10 fuel. Nothing is free: even where wasmi erases `nop`/`drop` today, a
+/// zero weight makes the budget depend on that internal detail, and a future
+/// engine change would silently create unmetered work. A floor of 1 keeps the
+/// invariant that every executed operator consumes fuel.
+///
+/// `call_indirect` uses the same weight as `call` until it is measured
+/// separately; tail calls keep the default weight because they reuse the
+/// current frame.
+fn guest_operator_costs() -> OperatorCost {
+    OperatorCost {
+        unreachable: 1,
+        nop: 1,
+        block: 1,
+        loop_: 1,
+        else_: 1,
+        end: 1,
+        return_: 1,
+        call: 10,
+        call_indirect: 10,
+        drop: 1,
+        ..OperatorCost::default()
+    }
+}
+
 fn new_engine() -> Engine {
     let mut config = Config::default();
     config.consume_fuel(true);
@@ -870,6 +908,7 @@ fn new_engine() -> Engine {
     config.floats(false);
     config.set_max_stack_height(1 << 16);
     config.set_max_recursion_depth(1024);
+    config.operator_cost(guest_operator_costs());
     Engine::new(&config)
 }
 

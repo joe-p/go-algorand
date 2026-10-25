@@ -20,6 +20,7 @@ package logic
 
 import (
 	"encoding/binary"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -333,4 +334,81 @@ func TestWasmTracerHooks(t *testing.T) {
 		require.Equal(t, []int{cx.Cost()}, rec.costs)
 		require.Equal(t, program, cx.GetProgram())
 	})
+}
+
+// TestWasmAppRecursiveFib checks the recursive fib fixtures against known
+// values, running the same TEAL and WASM programs used by
+// BenchmarkAppFibRecursive. Each result is read back from the global state
+// delta, so a wrong fib value fails rather than merely costing fuel.
+func TestWasmAppRecursiveFib(t *testing.T) {
+	partitiontest.PartitionTest(t)
+
+	proto := makeTestProto(wasmAppProto)
+	proto.MaxAppProgramCost = 1_000_000 // recursive fib is exponential
+	tealOps, err := AssembleString(tealFibRecAppSrc)
+	require.NoError(t, err)
+
+	for n, want := range []uint64{0, 1, 1, 2, 3, 5, 8, 13, 21, 34, 55} {
+		n, want := n, want
+		t.Run(fmt.Sprintf("N%d", n), func(t *testing.T) {
+			for _, impl := range []struct {
+				name    string
+				program []byte
+				wasm    bool
+			}{
+				{"teal", tealOps.Program, false},
+				{"wasm", loadWasm(t, "app_fib_rec.wasm"), true},
+			} {
+				ep := appLoopParamsSchema(proto, n, impl.wasm, basics.StateSchema{NumUint: 1})
+				pass, cx, err := EvalContract(impl.program, 0, 888, ep)
+				require.NoError(t, err, impl.name)
+				require.True(t, pass, impl.name)
+				require.Equal(t, want, cx.txn.EvalDelta.GlobalDelta["fib"].Uint, impl.name)
+			}
+		})
+	}
+}
+
+// TestWasmAppRecursionDepth checks that app_rec_depth returns its depth, that the
+// iterative baseline computes the same value, and that a depth past WASMI's
+// recursion limit is a clean, charged trap instead of a process crash.
+func TestWasmAppRecursionDepth(t *testing.T) {
+	partitiontest.PartitionTest(t)
+
+	proto := makeTestProto(wasmAppProto)
+	proto.MaxAppProgramCost = 1_000_000 // depth 512 costs more than one app allowance
+	tealOps, err := AssembleString(tealRecDepthAppSrc)
+	require.NoError(t, err)
+	tealLoopOps, err := AssembleString(tealDepthLoopAppSrc)
+	require.NoError(t, err)
+
+	for _, n := range []int{1, 16, 256, 512} {
+		for _, impl := range []struct {
+			name    string
+			program []byte
+			wasm    bool
+		}{
+			{"teal-rec", tealOps.Program, false},
+			{"teal-loop", tealLoopOps.Program, false},
+			{"wasm-rec", loadWasm(t, "app_rec_depth.wasm"), true},
+			{"wasm-loop", loadWasm(t, "app_depth_loop.wasm"), true},
+		} {
+			ep := appLoopParamsSchema(proto, n, impl.wasm, basics.StateSchema{NumUint: 1})
+			pass, cx, err := EvalContract(impl.program, 0, 888, ep)
+			require.NoError(t, err, "%s/N%d", impl.name, n)
+			require.True(t, pass, "%s/N%d", impl.name, n)
+			require.Equal(t, uint64(n), cx.txn.EvalDelta.GlobalDelta["depth"].Uint, "%s/N%d", impl.name, n)
+		}
+	}
+
+	// wasmi is configured with max_recursion_depth 1024 (wasm/src/lib.rs), so
+	// 2048 frames cannot run. The failure must be charged like any other trap.
+	const tooDeep = 2048
+	ep := appLoopParamsSchema(proto, tooDeep, true, basics.StateSchema{NumUint: 1})
+	before := *ep.PooledApplicationBudget
+	pass, cx, err := EvalContract(loadWasm(t, "app_rec_depth.wasm"), 0, 888, ep)
+	require.False(t, pass)
+	require.ErrorContains(t, err, "call stack exhausted")
+	require.Positive(t, cx.Cost())
+	require.Equal(t, before-cx.Cost(), *ep.PooledApplicationBudget)
 }

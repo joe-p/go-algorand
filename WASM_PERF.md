@@ -34,7 +34,10 @@ tables retain their raw-fuel calibration measurements because those weights and
 code paths are unchanged by this conversion.
 
 The host weights were selected from the pre-calibration fixtures as
-`ns/call / (1 ns/fuel) - guest/loop fuel`, rounded up to convenient constants.
+`whole-iteration ns / (1 ns/fuel) - guest/loop fuel`, rounded up to convenient
+constants. This estimates the host portion by assuming the guest scaffolding
+runs at the target 1 ns/fuel; it does **not** subtract separately measured
+loop-only time or independently measure host-call or boundary time.
 They are deterministic protocol weights, not runtime timers. Host budget prices
 need not equal their AVM opcode equivalents; signature verification also retains
 its raw weight rather than AVM price parity. `txna_uint` provisionally shares
@@ -94,17 +97,25 @@ differences from the prior timing table are measurement variation.
 
 `TestWasmHostCallCost` (`data/transactions/logic/wasm_hostcost_test.go`, gated on
 `WASM_OPCOST`) measures every host function through the real Go/cgo path, in app
-and signature mode. For each fixture the per-call cost is the difference between
-running the loop N times and not at all, divided by N. Fixed setup cancels, but
-the result includes loop scaffolding as well as the host invocation. The fixed
-setup charge cancels in this subtraction; it is still paid by each evaluation.
-Cost/call
-is marginal fuel divided by ten, not a separately rounded charge per call.
+and signature mode. For each fixture, time and fuel per iteration are the
+difference between running the loop N times and not at all, divided by N:
+
+```text
+ns/iter   = (time(N) - time(0)) / N
+fuel/iter = (fuel(N) - fuel(0)) / N
+cost/iter = fuel/iter / 10
+```
+
+Fixed setup cancels, but repeated loop scaffolding, operand preparation, and
+result handling remain alongside the host invocation. The fixed setup charge
+is still paid by each evaluation. `cost/iter` is marginal fuel divided by ten,
+not a separately rounded charge per call. Only `host charge (fuel)` below is
+the explicit host-function weight; the other columns describe whole iterations.
 
 Medians of three runs (`WASM_OPCOST=1 go test ./data/transactions/logic/
 -run '^TestWasmHostCallCost$' -v -count=3`):
 
-| host call | host charge (fuel) | fuel/call | cost/call | ns/call | ns/fuel | AVM equivalent |
+| host call | host charge (fuel) | fuel/iter | cost/iter | ns/iter | ns/fuel | TEAL opcode (opcode-only cost) |
 | --- | --- | --- | --- | --- | --- | --- |
 | `txn_uint` | 125 | 137 | 13.70 | 137 | 1.00 | `txn` (1) |
 | `txn_bytes` | 190 | 203 | 20.30 | 218 | 1.07 | `txn` (1) |
@@ -116,16 +127,97 @@ Medians of three runs (`WASM_OPCOST=1 go test ./data/transactions/logic/
 | `app_global_del` | 140 | 152 | 15.20 | 151 | 0.99 | `app_global_del` (1) |
 | `ed25519verify_bare` | 28,500 | 28,516 | 2851.60 | 30,618 | 1.07 | `ed25519verify_bare` (1900) |
 | `arg` (sig) | 30 | 43 | 4.30 | 41 | 0.95 | `arg` (1) |
-| `arg_count` (sig) | 10 | 20 | 2.00 | 18 | 0.87 | `args` (1) |
+| `arg_count` (sig) | 10 | 20 | 2.00 | 18 | 0.87 | no direct equivalent |
 
 The calibrated fixtures now cluster around **0.87-1.07 ns/fuel**, similar to
 guest instruction loops. The explicit host charge excludes guest/loop fuel,
 which is still charged by wasmi. Signature verification costs 28,500 fuel plus
 16 fuel of fixture overhead: 2850 budget units for the host charge, compared
 with the TEAL opcode's 1900.
-State/transaction calls deliberately cost more AVM budget units than their TEAL
-equivalents to account for the WASM boundary. These are fixture calibrations,
-not guarantees for every payload size or platform.
+State/transaction host weights exceed their TEAL opcode prices under this
+independent time-based calibration. The weights account for the host path, not
+just crossing the WASM boundary, and their ratios to TEAL prices are not measured
+slowdown factors. These are fixture calibrations, not guarantees for every
+payload size or platform.
+
+For example, `TXN_UINT_FUEL_COST = 125` is the explicit charge per invocation,
+not the total iteration cost and not an independently measured 125 ns duration:
+
+```text
+txn_uint host charge       = 125 fuel = 12.50 AVM cost
+guest scaffolding          =  12 fuel =  1.20 AVM cost
+whole iteration            = 137 fuel = 13.70 AVM cost
+```
+
+The earlier fixture measured about 137 ns per whole iteration, consistent with
+the target 1 ns/fuel. Later runs can differ (see the matched table below) without
+changing the fixed 125-fuel protocol weight. Neither 12.50 nor 13.70 establishes
+a corresponding slowdown relative to TEAL's 1-cost `txn` opcode.
+
+### Matched TEAL host-work loops
+
+The host-call harness now also runs matched TEAL fixtures: the same transaction
+fields, keys, values, argument sizes, and valid signature, using each engine's
+own loop. Both timings subtract a zero-iteration evaluation before dividing by
+N. Debug tracing is disabled in both engines. Loop counts are encoded
+little-endian for WASM's `i32.load` and big-endian for TEAL's `btoi`.
+
+Measured on 2026-10-25, linux/arm64, Go 1.25.3, using the host-call command above
+with `-count=3`. Times are medians of three runs; ratios divide the displayed
+medians. Costs are marginal **whole-iteration** costs, including loop control,
+operand preparation, and result handling, not just the named operation.
+
+For example, the matched TEAL `txn_uint` iteration costs **11**, although
+`txn FirstValid` itself costs **1**:
+
+```teal
+loop:
+  load 0          // remaining iterations
+  int 0
+  ==
+  bnz done
+  txn FirstValid  // operation being measured
+  store 1         // save result, matching the WASM fixture
+  load 0
+  int 1
+  -
+  store 0
+  b loop
+```
+
+All eleven instructions cost 1: nine implement loop control, one reads the
+transaction field, and one stores the result. Thus the comparison is **13.70
+versus 11 for whole iterations**, or **12.50 versus 1 for explicit operation
+charges**. Neither comparison isolates operation timings. Zero-iteration
+subtraction removes fixed setup, not this repeated scaffolding, in both engines.
+
+| host work | WASM cost/iter | TEAL cost/iter | WASM ns/iter | TEAL ns/iter | WASM/TEAL time |
+| --- | --- | --- | --- | --- | --- |
+| `txn_uint` (`FirstValid`) | 13.70 | 11 | 126.4 | 120.8 | 1.05x |
+| `txn_bytes` (`Sender`, 32 bytes) | 20.30 | 11 | 198.3 | 121.3 | 1.63x |
+| `txna_bytes` (`ApplicationArgs[0]`, 4 bytes) | 21.40 | 11 | 195.9 | 126.3 | 1.55x |
+| `app_global_get_uint` (absent `counter`) | 14.30 | 12 | 146.3 | 129.9 | 1.13x |
+| `app_global_get_bytes` (absent `b`) | 18.40 | 12 | 177.6 | 117.9 | 1.51x |
+| `app_global_put_uint` (incrementing `counter`) | 42.70 | 16 | 413.6 | 414.6 | 1.00x |
+| `app_global_put_bytes` (`b` = `x`) | 40.40 | 12 | 384.0 | 311.8 | 1.23x |
+| `app_global_del` (absent `d`) | 15.20 | 11 | 143.2 | 122.8 | 1.17x |
+| `ed25519verify_bare` (32-byte message) | 2851.60 | 1913 | 26996.4 | 26644.8 | 1.01x |
+| `arg` (sig, 4 bytes) | 4.30 | 11 | 39.2 | 86.5 | 0.45x |
+
+Thus **14.3 budget units versus the TEAL opcode price of 1 does not mean a
+14.3x slowdown**. It also compares a WASM iteration with a single TEAL opcode:
+the matched TEAL get iteration costs 12, not 1. On this workload the full WASM
+get iteration is about 13% slower. Neither this ratio nor subtraction of the
+two timings isolates the Rust/C/Go boundary: the engines have different loop,
+operand, dispatch, and result-handling costs. No loop-only control is subtracted.
+These measurements do not determine an isolated TEAL opcode time or establish
+whether its protocol price is appropriate.
+
+Both get fixtures read **absent keys**, and delete is also an absent-key case;
+these do not measure successful value retrieval or deletion. The bytes put
+repeats the same one-byte value, whereas the uint put changes its value on each
+iteration. `arg_count` has no direct TEAL equivalent and is omitted here:
+TEAL `args` indexes an argument rather than returning the argument count.
 
 A whole-app host-call-bound comparison (`BenchmarkAppGlobalLoop`,
 `app_global_loop.wasm`) at **N=7 global increments** gives these medians of

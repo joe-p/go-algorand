@@ -315,6 +315,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "rust-counter"
+version = "0.1.0"
+dependencies = [
+ "wasm-guest",
+]
+
+[[package]]
+name = "rust-signed-claim"
+version = "0.1.0"
+dependencies = [
+ "ed25519-dalek",
+ "wasm-guest",
+]
+
+[[package]]
 name = "rustc_version"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -499,6 +514,7 @@ name = "wasm_lsig"
 version = "0.1.0"
 dependencies = [
  "wasmi",
+ "wasmparser",
 ]
 
 [[package]]

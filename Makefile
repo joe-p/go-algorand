@@ -171,11 +171,14 @@ wasmlib:
 	@command -v cargo >/dev/null 2>&1 || { echo "cargo (Rust toolchain) is required to build the WASM LogicSig executor: https://rustup.rs"; exit 1; }
 	cargo build --release --locked --manifest-path wasm/Cargo.toml
 
-# Build the Rust guest WASM LogicSig fixtures loaded by the Go tests.
+# Build the Rust guest WASM fixtures loaded by the Go tests.
 wasm-guest-fixtures:
 	@command -v cargo >/dev/null 2>&1 || { echo "cargo (Rust toolchain) is required to build the WASM LogicSig guest fixtures: https://rustup.rs"; exit 1; }
 	cargo build --release --locked --manifest-path wasm/guest/Cargo.toml -p ed25519-verify --target wasm32-unknown-unknown
 	cp wasm/guest/target/wasm32-unknown-unknown/release/ed25519_verify.wasm data/transactions/logic/testdata/wasm/ed25519_dalek.wasm
+	cargo build --release --locked --manifest-path wasm/guest/Cargo.toml -p rust-counter -p rust-signed-claim --target wasm32-unknown-unknown
+	cp wasm/guest/target/wasm32-unknown-unknown/release/rust_counter.wasm data/transactions/logic/testdata/wasm/app_rust_counter.wasm
+	cp wasm/guest/target/wasm32-unknown-unknown/release/rust_signed_claim.wasm data/transactions/logic/testdata/wasm/app_rust_signed_claim.wasm
 
 # Print the per-opcode wall-clock/fuel table (metering calibration harness).
 # The host-function table is the gated Go test:
@@ -192,8 +195,15 @@ wasm-setupcost:
 # Adversarial workload bounds. The strict max TEAL full block is a ~48s run on
 # the 8-core reference machine; set TEAL_MAX_FULL=1 to include it.
 wasm-adversarial:
-	WASM_ADVERSARIAL=1 go test ./data/transactions/logic -run '^(TestWasmAdversarialCost|TestWasmStaticValidationCost|TestWasmFailureAndGrowthCost|TestWasmUsefulContractBudget)$$' -v -count=1
+	WASM_ADVERSARIAL=1 go test ./data/transactions/logic -run '^(TestWasmAdversarialCost|TestWasmStaticValidationCost|TestWasmFailureAndGrowthCost|TestWasmUsefulContractBudget|TestWasmRustContractBudget)$$' -v -count=1
 	WASM_ADVERSARIAL=1 go test ./ledger -run '^(TestTEALOpcodeWorst|TestTEALPatternBlocks|TestTEALWorstCase|TestWASMAdversarialBlocks)$$' -v -count=1 -timeout=0
+
+# Deploy the compiler-generated Rust contract fixtures through algod with normal
+# protocol limits and measure their size and pooled budget. Requires fresh
+# binaries in GOBIN (make build) and the committed guest fixtures.
+wasm-contract-e2e:
+	@mkdir -p $${TESTDIR:-/tmp/wasm-contract-e2e}
+	TESTDIR=$${TESTDIR:-/tmp/wasm-contract-e2e} go test ./test/e2e-go/features/transactions -run '^TestWasmContractBudgetAndSize$$' -v -count=1 -timeout=20m
 
 MSGP := go run github.com/algorand/msgp@v1.1.66
 %/msgp_gen.go: ALWAYS
@@ -467,7 +477,7 @@ dump: $(addprefix gen/,$(addsuffix /genesis.dump, $(NETWORKS)))
 install: build
 	scripts/dev_install.sh -p $(GOBIN)
 
-.PHONY: default fmt lint check_shell sanity cover prof build build-race build-e2e test fulltest shorttest x-repo-types clean cleango deploy node_exporter install %gen gen NONGO_BIN check-go-version rebuild_kmd_swagger universal libsodium modernize wasmlib wasm-guest-fixtures wasm-opcost wasm-setupcost wasm-adversarial
+.PHONY: default fmt lint check_shell sanity cover prof build build-race build-e2e test fulltest shorttest x-repo-types clean cleango deploy node_exporter install %gen gen NONGO_BIN check-go-version rebuild_kmd_swagger universal libsodium modernize wasmlib wasm-guest-fixtures wasm-opcost wasm-setupcost wasm-adversarial wasm-contract-e2e
 
 ###### TARGETS FOR CICD PROCESS ######
 include ./scripts/release/mule/Makefile.mule

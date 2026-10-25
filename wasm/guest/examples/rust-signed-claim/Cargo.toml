@@ -1,0 +1,32 @@
+# Copyright (C) 2019-2026 Algorand Foundation Ltd.
+# This file is part of go-algorand
+#
+# go-algorand is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
+#
+# go-algorand is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with go-algorand.  If not, see <https://www.gnu.org/licenses/>.
+
+[package]
+name = "rust-signed-claim"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-or-later"
+description = "Representative compiler-generated WASM application: signature-authorized claims with replay-protected global state."
+
+[lib]
+name = "rust_signed_claim"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wasm-guest = { path = "../../host" }
+# Resolved to the host-backed fork via [patch.crates-io] in the workspace root.
+ed25519-dalek = { version = "2.2", default-features = false }

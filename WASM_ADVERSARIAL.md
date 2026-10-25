@@ -139,6 +139,12 @@ one default 700-unit app call: setup alone is 921–943 cost. That is a real
 practicality constraint, even though 2 pooled calls is bounded. This is the
 main “safe pricing makes useful contracts impractical” finding so far.
 
+Compiler-generated Rust applications extend this result: even a 560-byte
+stateful contract has a 1,832 setup charge and needs 4 pooled calls, and a
+representative ed25519 signed-claim contract needs 8 calls to deploy and 13 of
+the maximum 16 to call. See `WASM_CONTRACTS.md` for the algorithm and the
+normal-limit deployment measurements.
+
 ## Interpretation
 
 On this machine, for the measured workloads:
@@ -190,4 +196,5 @@ WASM_ADVERSARIAL=1 go test ./data/transactions/logic -run '^TestWasmAdversarialC
 WASM_ADVERSARIAL=1 go test ./data/transactions/logic -run '^TestWasmStaticValidationCost$' -v
 WASM_ADVERSARIAL=1 go test ./data/transactions/logic -run '^TestWasmFailureAndGrowthCost$' -v
 WASM_ADVERSARIAL=1 go test ./data/transactions/logic -run '^TestWasmUsefulContractBudget$' -v
+WASM_ADVERSARIAL=1 go test ./data/transactions/logic -run '^TestWasmRustContractBudget$' -v
 ```

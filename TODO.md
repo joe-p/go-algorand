@@ -23,13 +23,22 @@ representative contract before judging these results.
         setup cost (921-943), so apps need pooling. See
         `WASM_ADVERSARIAL.md`. Remaining: app/inner-txn blocks, amd64/cold
         runs, and many-core memory aggregation.
-- [ ] **Can realistic, compiler-generated contracts fit actual size and budget
+- [x] **Can realistic, compiler-generated contracts fit actual size and budget
       limits?** Deploy and execute a representative Rust contract through
       algod/goal with normal protocol limits, without lifted benchmark caps.
       Record module size, setup/execution cost, and required budget pooling.
       Setup alone puts the Fibonacci fixture above one app's 700-unit allowance;
       determine whether useful contracts need excessive pooling or exceed size
       limits.
+      - Measured with compiler-generated Rust fixtures deployed through algod on
+        `ConsensusFuture`: a 560-byte stateful counter has 1,832 setup cost and
+        needs 4 pooled app calls to deploy and 4 to call; a 4,522-byte
+        ed25519 signed-claim contract has 4,821 setup cost (8,899 total) and
+        needs 8 calls to deploy and 13 of the maximum 16 to call. Creation runs
+        the approval program, so deployment needs pooling too. A second
+        signature check would exceed the 11,200 pooled ceiling. Size is not the
+        binding limit; the 700/11,200 budget model is. A Rust clear-state
+        program cannot fit the unpooled 700 budget. See `WASM_CONTRACTS.md`.
 - [ ] **Do supported architectures produce identical results and fuel
       consumption?** Run the same corpus on amd64 and arm64, comparing acceptance,
       return values, state deltas, traps, and exact fuel/cost. Include fuel
@@ -80,13 +89,18 @@ Still to do:
 - [ ] Extend the stateful surface beyond global state: local state
       (`app_local_*`), boxes, `log`, inner transactions, foreign access, and
       scratch, wired to shared Go primitives so AVM and WASM can't disagree.
-- [ ] Emit tracer hooks (`BeforeProgram`/`AfterProgram`) for the WASM app path
-      so `simulate` produces traces (and state-change explanations).
+- [x] Emit tracer hooks (`BeforeProgram`/`AfterProgram`) for the WASM app path
+      so `simulate` reports `app-budget-consumed` and a program trace frame.
+      WASM has no AVM opcode-level trace; state-change explanations use the
+      existing transaction/delta hooks.
 - [ ] Decide the release path for `EnableWasmApp` (which numbered version).
 - [ ] Confirm `WellSizedPrograms` page accounting is the right cap for WASM app
       modules, or add a WASM-specific app program size limit.
-- [ ] e2e test creating and calling a WASM app through algod/goal (raw
-      `--approval-prog-raw`/`--clear-prog-raw` already accept the bytes).
+- [x] e2e test creating and calling a WASM app through algod/goal (raw
+      `--approval-prog-raw`/`--clear-prog-raw` already accept the bytes). See
+      `test/e2e-go/features/transactions/wasm_contract_test.go` and
+      `test/scripts/e2e_subs/e2e-wasm-contract-budget.sh`; measurements are in
+      `WASM_CONTRACTS.md`.
 - [ ] Extend WASM app determinism and exact fuel-boundary coverage. Budget
       conversion, default-budget limits, and charging failed setup/execution
       already have tests.
@@ -124,9 +138,9 @@ Still to do:
 - [ ] Extend the algod API on-curve escrow check
       (`daemon/algod/api/server/v2/handlers.go`) to WASM LogicSigs; today it
       parses the program as AVM and silently skips WASM programs.
-- [ ] Emit tracer hooks for WASM programs so `simulate` produces traces
-      (`logic.EvalTracer` `BeforeProgram`/`AfterProgram` are not called on the
-      WASM path).
+- [x] Emit tracer hooks for WASM programs so `simulate` produces traces
+      (`logic.EvalTracer` `BeforeProgram`/`AfterProgram` are now called on both
+      the WASM signature and app paths).
 - [ ] Ensure the `!cgo` / `gofuzz` fallback returns a clear, user-facing error
       through the normal transaction rejection paths, and confirm fuzz builds
       behave as intended.

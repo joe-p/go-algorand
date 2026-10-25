@@ -18,7 +18,14 @@
 # executor's manifest (`wasm/Cargo.toml`) so `make wasmlib` is unaffected.
 [workspace]
 resolver = "2"
-members = ["host", "ed25519-dalek", "examples/ed25519-verify", "runner"]
+members = [
+    "host",
+    "ed25519-dalek",
+    "examples/ed25519-verify",
+    "examples/rust-counter",
+    "examples/rust-signed-claim",
+    "runner",
+]
 
 # Replace the crates.io `ed25519-dalek` with our host-backed fork. Guests opt in
 # by depending on `ed25519-dalek` as usual; Cargo resolves it to the fork.

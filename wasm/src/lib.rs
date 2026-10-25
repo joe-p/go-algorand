@@ -2521,6 +2521,18 @@ mod tests {
             include_bytes!("../../data/transactions/logic/testdata/wasm/ed25519_dalek.wasm")
                 .to_vec(),
         ));
+        cases.push((
+            "rust_counter",
+            include_bytes!("../../data/transactions/logic/testdata/wasm/app_rust_counter.wasm")
+                .to_vec(),
+        ));
+        cases.push((
+            "rust_signed_claim",
+            include_bytes!(
+                "../../data/transactions/logic/testdata/wasm/app_rust_signed_claim.wasm"
+            )
+            .to_vec(),
+        ));
 
         // Independent size sweeps used to calibrate deterministic setup fuel.
         let mut sweep = Vec::new();

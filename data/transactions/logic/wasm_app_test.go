@@ -19,12 +19,14 @@
 package logic
 
 import (
+	"encoding/binary"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/algorand/go-algorand/config"
+	"github.com/algorand/go-algorand/crypto"
 	"github.com/algorand/go-algorand/data/basics"
 	"github.com/algorand/go-algorand/data/transactions"
 	"github.com/algorand/go-algorand/protocol"
@@ -243,4 +245,92 @@ func TestWasmAppInnerProgramVersion(t *testing.T) {
 	v, err = innerProgramVersion(&cxDisabled, loadWasm(t, "approve.wasm"))
 	require.NoError(t, err)
 	require.Equal(t, uint64(0), v)
+}
+
+// wasmProgramTracer records the program tracer hooks emitted for a WASM
+// evaluation.
+type wasmProgramTracer struct {
+	NullEvalTracer
+	before int
+	after  int
+	costs  []int
+	passed []bool
+}
+
+func (t *wasmProgramTracer) BeforeProgram(cx *EvalContext) {
+	t.before++
+}
+
+func (t *wasmProgramTracer) AfterProgram(cx *EvalContext, pass bool, evalError error) {
+	t.after++
+	t.costs = append(t.costs, cx.Cost())
+	t.passed = append(t.passed, pass)
+}
+
+// TestWasmTracerHooks ensures WASM application and signature evaluations emit
+// the BeforeProgram/AfterProgram hooks, so simulate can report their cost and
+// trace. It runs both fixtures under normal pooled budgets (700 per app call).
+func TestWasmTracerHooks(t *testing.T) {
+	partitiontest.PartitionTest(t)
+
+	t.Run("app", func(t *testing.T) {
+		// Sixteen app calls is the normal 11,200-unit pooled group; the contract
+		// itself needs most of it, but this test only checks the hooks.
+		var amount [8]byte
+		binary.BigEndian.PutUint64(amount[:], 1000)
+		var seed crypto.Seed
+		for i := range seed {
+			seed[i] = 0x42
+		}
+		issuer := crypto.GenerateSignatureSecrets(seed)
+		sig := issuer.SignBytes(amount[:])
+
+		txns := make([]transactions.SignedTxn, 16)
+		for i := range txns {
+			txns[i].Txn.Type = protocol.ApplicationCallTx
+			txns[i].Txn.ApplicationID = 888
+		}
+		txns[0].Txn.ApplicationArgs = [][]byte{sig[:], amount[:]}
+		proto := makeTestProto(wasmAppProto)
+		ep := NewAppEvalParams(transactions.WrapSignedTxnsWithAD(txns), proto, &transactions.SpecialAddresses{})
+		ledger := NewLedger(nil)
+		ledger.NewApp(basics.Address{}, 888, basics.AppParams{StateSchemas: basics.StateSchemas{
+			GlobalStateSchema: basics.StateSchema{NumUint: 2},
+		}})
+		ep.Ledger = ledger
+		ep.SigLedger = ledger
+		ep.Trace = &strings.Builder{}
+		rec := &wasmProgramTracer{}
+		ep.Tracer = rec
+		program := loadWasm(t, "app_rust_signed_claim.wasm")
+		pass, cx, err := EvalContract(program, 0, 888, ep)
+		require.NoError(t, err)
+		require.True(t, pass)
+		require.Equal(t, 1, rec.before)
+		require.Equal(t, 1, rec.after)
+		require.Equal(t, []int{cx.Cost()}, rec.costs)
+		require.Equal(t, []bool{true}, rec.passed)
+		t.Logf("cost=%d fuel=%d", cx.Cost(), cx.wasmFuelUsed)
+		require.Equal(t, program, cx.GetProgram())
+	})
+
+	t.Run("signature", func(t *testing.T) {
+		ep := optSigParams(func(p *config.ConsensusParams) {
+			p.EnableWasmLogicSig = true
+			p.LogicSigMaxCost = 20_000
+		})
+		rec := &wasmProgramTracer{}
+		ep.Tracer = rec
+		program := loadWasm(t, "ed25519verify_bare.wasm")
+		c := crypto.GenerateSignatureSecrets(crypto.Seed{1})
+		data := []byte("tracer hook payload")
+		sig := c.SignBytes(data)
+		pass, cx, err := EvalSignatureProgram(program, [][]byte{data, sig[:], c.SignatureVerifier[:]}, 0, ep)
+		require.NoError(t, err)
+		require.True(t, pass)
+		require.Equal(t, 1, rec.before)
+		require.Equal(t, 1, rec.after)
+		require.Equal(t, []int{cx.Cost()}, rec.costs)
+		require.Equal(t, program, cx.GetProgram())
+	})
 }

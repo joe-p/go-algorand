@@ -62,6 +62,16 @@ This is a separate Cargo workspace from the host executor so `make wasmlib`
   `(data, signature, public key)` from arguments and verifies with the
   `ed25519-dalek` API, exercising the patch.
 
+- **`examples/rust-counter/`** — a baseline compiler-generated application
+  program: reads a big-endian delta and the sender, and updates global state. It
+  floors the size, setup, and budget pooling of a real Rust app.
+
+- **`examples/rust-signed-claim/`** — a representative signature-authorized
+  application: verifies an ed25519 signature over the amount with the patched
+  `ed25519-dalek` API, enforces per-sender replay protection, and updates global
+  state. Its normal-limit size and budget measurements are in
+  `../../WASM_CONTRACTS.md`.
+
 - **`runner/`** — host-side tests that run the committed guest `.wasm` fixtures
   through the real executor with a stub `ed25519verify_bare`.
 
@@ -90,15 +100,15 @@ entry!(|| {
 # Rust unit/integration tests (host target)
 cargo test --manifest-path wasm/guest/Cargo.toml
 
-# Build the guest fixture used by the Go end-to-end tests
+# Build the guest fixtures used by the Go tests
 make wasm-guest-fixtures
 ```
 
-`make wasm-guest-fixtures` builds `examples/ed25519-verify` for
-`wasm32-unknown-unknown` and copies the result to
-`data/transactions/logic/testdata/wasm/ed25519_dalek.wasm`, which
-`data/transactions/logic/wasm_test.go` and `data/transactions/verify/wasm_test.go`
-load.
+`make wasm-guest-fixtures` builds the example guests for
+`wasm32-unknown-unknown` and copies the results to
+`data/transactions/logic/testdata/wasm/` (`ed25519_dalek.wasm`,
+`app_rust_counter.wasm`, and `app_rust_signed_claim.wasm`), which the Go unit
+and end-to-end tests load.
 
 ## Resource limits
 
@@ -106,3 +116,8 @@ The example fits the current limits: ~4.7 KiB of program (the program byte cap
 is `MaxAbsoluteLogicSigProgramSize`, 16000 in `vFuture`). The LSig cost budget is
 `LogicSigMaxCost`, 20,000, converted to 200,000 fuel at 10 fuel/cost unit. The guest linear memory cap
 is 4 MiB.
+
+These limits are tighter for application programs. The compiler-generated
+`app_rust_signed_claim.wasm` is 4,522 bytes (three pages) and has a 4,821
+deterministic setup cost, so even deploying it needs a pooled group; see
+`../../WASM_CONTRACTS.md`.

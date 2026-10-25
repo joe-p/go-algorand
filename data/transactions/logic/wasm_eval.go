@@ -125,7 +125,21 @@ func wasmEvalContract(program []byte, cx *EvalContext) (bool, error) {
 // signature mode it validates the LogicSig argument bounds and records which
 // arguments were read; in application mode the guest reads arguments through
 // `txna` instead, so those signature-only rules do not apply.
-func wasmEval(cx *EvalContext, program []byte) (bool, error) {
+//
+// It emits the same BeforeProgram/AfterProgram tracer hooks as the AVM path, so
+// `simulate` reports `app-budget-consumed` / `logic-sig-budget-consumed` and
+// produces a program trace entry for WASM programs. `cx.program` is set so the
+// tracer can hash the WASM module. The error passed to AfterProgram is the raw
+// evaluation error; callers map it through evalError just as the AVM path does.
+func wasmEval(cx *EvalContext, program []byte) (pass bool, err error) {
+	cx.program = program
+	if cx.Tracer != nil {
+		cx.Tracer.BeforeProgram(cx)
+		defer func() {
+			cx.Tracer.AfterProgram(cx, pass, err)
+		}()
+	}
+
 	if cx.runMode == ModeSig {
 		// The same argument bounds the AVM path enforces.
 		if len(cx.sigArgs) > transactions.EvalMaxArgs {
@@ -146,7 +160,9 @@ func wasmEval(cx *EvalContext, program []byte) (bool, error) {
 	if uint64(budget) > ^uint64(0)/wasmFuelPerCost {
 		return false, errors.New("WASM fuel budget overflow")
 	}
-	pass, fuelUsed, accessed, err := runWasmProgram(program, cx.sigArgs, uint64(budget)*wasmFuelPerCost, cx)
+	var fuelUsed uint64
+	var accessed [argsReadWords]uint64
+	pass, fuelUsed, accessed, err = runWasmProgram(program, cx.sigArgs, uint64(budget)*wasmFuelPerCost, cx)
 
 	cx.wasmFuelUsed = fuelUsed
 	// Round up so even a partial cost unit is charged to the shared budget.

@@ -19,6 +19,7 @@
 package logic
 
 import (
+	"encoding/binary"
 	"fmt"
 	"os"
 	"testing"
@@ -310,4 +311,73 @@ func sigParams(proto *config.ConsensusParams) *EvalParams {
 	var txn transactions.SignedTxn
 	txn.Lsig.Logic = []byte{1}
 	return NewSigEvalParams([]transactions.SignedTxn{txn}, proto, &NoHeaderLedger{})
+}
+
+// TestWasmRustContractBudget measures the compiler-generated Rust application
+// fixtures at normal protocol limits: 700 units per app call, pooled across a
+// real transaction group. It reports setup plus execution under the largest
+// legal pool (16 app calls, 11,200 units) and shows that a single call cannot
+// pay even the setup charge.
+//
+//	WASM_ADVERSARIAL=1 go test ./data/transactions/logic -run '^TestWasmRustContractBudget$' -v -count=1
+func TestWasmRustContractBudget(t *testing.T) {
+	if os.Getenv("WASM_ADVERSARIAL") == "" {
+		t.Skip("set WASM_ADVERSARIAL=1 to run the useful-contract budget measurements")
+	}
+
+	var amount [8]byte
+	binary.BigEndian.PutUint64(amount[:], 1000)
+	var seed crypto.Seed
+	for i := range seed {
+		seed[i] = 0x42
+	}
+	sig := crypto.GenerateSignatureSecrets(seed).SignBytes(amount[:])
+
+	cases := []struct {
+		name   string
+		file   string
+		args   [][]byte
+		schema basics.StateSchema
+	}{
+		{"rust counter", "app_rust_counter.wasm", [][]byte{amount[:]}, basics.StateSchema{NumUint: 2}},
+		{"rust signed claim", "app_rust_signed_claim.wasm", [][]byte{sig[:], amount[:]}, basics.StateSchema{NumUint: 2}},
+	}
+
+	params := func(n int, args [][]byte, schema basics.StateSchema) *EvalParams {
+		txns := make([]transactions.SignedTxn, n)
+		for i := range txns {
+			txns[i].Txn.Type = protocol.ApplicationCallTx
+			txns[i].Txn.ApplicationID = 888
+		}
+		txns[0].Txn.ApplicationArgs = args
+		proto := makeTestProto(wasmAppProto)
+		ep := NewAppEvalParams(transactions.WrapSignedTxnsWithAD(txns), proto, &transactions.SpecialAddresses{})
+		ledger := NewLedger(nil)
+		ledger.NewApp(basics.Address{}, 888, basics.AppParams{StateSchemas: basics.StateSchemas{
+			GlobalStateSchema: schema,
+		}})
+		ep.Ledger = ledger
+		ep.SigLedger = ledger
+		return ep
+	}
+
+	fmt.Printf("\n%-20s %8s %10s %10s %8s\n", "contract", "bytes", "cost", "fuel", "app calls")
+	for _, c := range cases {
+		program := loadWasm(t, c.file)
+
+		// One unpooled call cannot pay the setup charge.
+		pass, cx, err := EvalContract(program, 0, 888, params(1, c.args, c.schema))
+		require.Error(t, err)
+		require.False(t, pass)
+		require.Contains(t, err.Error(), "fuel")
+		require.Equal(t, 700, cx.Cost())
+
+		// The full legal pool (16 app calls) executes the contract.
+		pass, cx, err = EvalContract(program, 0, 888, params(16, c.args, c.schema))
+		require.NoError(t, err)
+		require.True(t, pass)
+		calls := (cx.Cost() + 699) / 700
+		require.LessOrEqual(t, calls, 16)
+		fmt.Printf("%-20s %8d %10d %10d %8d\n", c.name, len(program), cx.Cost(), cx.wasmFuelUsed, calls)
+	}
 }

@@ -384,6 +384,8 @@ are **microseconds per module**. Setup total also includes engine/linker creatio
 | 32,768 compressed locals | 44 | 0.21 | 1.90 | 0.34 | 3.12 | 0.57 | 6,148 | 0.60 |
 | `app_fib.wasm` | 208 | 0.36 | 2.49 | 0.83 | 4.41 | 0.62 | 8,382 | 0.60 |
 | `ed25519_dalek.wasm` | 4,761 | 1.40 | 19.89 | 5.57 | 27.59 | 0.91 | 48,160 | 0.59 |
+| `app_rust_counter.wasm` | 560 | 0.63 | 4.90 | 5.39 | 11.64 | 0.75 | 18,312 | 0.64 |
+| `app_rust_signed_claim.wasm` | 4,522 | 1.64 | 20.33 | 6.02 | 28.71 | 0.94 | 48,202 | 0.60 |
 
 Across all 150 case/run combinations, the highest measured setup-plus-teardown
 ratio was **0.98 ns/fuel**. This is empirical headroom on this machine, not a

@@ -429,3 +429,6 @@ go test ./ledger/ -run '^$' -bench '^BenchmarkBlockEvaluatorLsigs' -benchtime=2s
   conservatively on this one machine, not a proven upper bound for all valid
   modules or validator platforms. Go/cgo/ledger overhead and static checking are
   not comprehensively priced by the Rust setup formula.
+- Strict max TEAL/WASM block measurements, large host payloads, static
+  validation, memory growth, failures, and useful-contract budgets are in
+  `WASM_ADVERSARIAL.md`.

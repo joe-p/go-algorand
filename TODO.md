@@ -15,6 +15,14 @@ representative contract before judging these results.
       failed/clear-state executions. Current single-machine microbenchmarks do
       not establish a worst-case bound. Check that safe pricing does not make
       useful contracts impractical.
+      - First pass on linux/arm64, 8 cores: strict max TEAL block (4 KiB `b~`)
+        validates in 45.4-47.5 s / 1.88-1.97 GB; strict max WASM blocks
+        measured at 0.59-1.15 s / 0.50-1.02 GB. Static validation is ~72-90 ms
+        per max block.
+        The default 700-unit app budget is below even a trivial WASM app's
+        setup cost (921-943), so apps need pooling. See
+        `WASM_ADVERSARIAL.md`. Remaining: app/inner-txn blocks, amd64/cold
+        runs, and many-core memory aggregation.
 - [ ] **Can realistic, compiler-generated contracts fit actual size and budget
       limits?** Deploy and execute a representative Rust contract through
       algod/goal with normal protocol limits, without lifted benchmark caps.

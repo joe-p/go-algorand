@@ -189,6 +189,12 @@ wasm-setupcost:
 	@command -v cargo >/dev/null 2>&1 || { echo "cargo (Rust toolchain) is required: https://rustup.rs"; exit 1; }
 	cargo test --release --locked --manifest-path wasm/Cargo.toml -- --ignored --nocapture module_setup_cost_table
 
+# Adversarial workload bounds. The strict max TEAL full block is a ~48s run on
+# the 8-core reference machine; set TEAL_MAX_FULL=1 to include it.
+wasm-adversarial:
+	WASM_ADVERSARIAL=1 go test ./data/transactions/logic -run '^(TestWasmAdversarialCost|TestWasmStaticValidationCost|TestWasmFailureAndGrowthCost|TestWasmUsefulContractBudget)$$' -v -count=1
+	WASM_ADVERSARIAL=1 go test ./ledger -run '^(TestTEALOpcodeWorst|TestTEALPatternBlocks|TestTEALWorstCase|TestWASMAdversarialBlocks)$$' -v -count=1 -timeout=0
+
 MSGP := go run github.com/algorand/msgp@v1.1.66
 %/msgp_gen.go: ALWAYS
 		@set +e; \
@@ -461,7 +467,7 @@ dump: $(addprefix gen/,$(addsuffix /genesis.dump, $(NETWORKS)))
 install: build
 	scripts/dev_install.sh -p $(GOBIN)
 
-.PHONY: default fmt lint check_shell sanity cover prof build build-race build-e2e test fulltest shorttest x-repo-types clean cleango deploy node_exporter install %gen gen NONGO_BIN check-go-version rebuild_kmd_swagger universal libsodium modernize wasmlib wasm-guest-fixtures wasm-opcost wasm-setupcost
+.PHONY: default fmt lint check_shell sanity cover prof build build-race build-e2e test fulltest shorttest x-repo-types clean cleango deploy node_exporter install %gen gen NONGO_BIN check-go-version rebuild_kmd_swagger universal libsodium modernize wasmlib wasm-guest-fixtures wasm-opcost wasm-setupcost wasm-adversarial
 
 ###### TARGETS FOR CICD PROCESS ######
 include ./scripts/release/mule/Makefile.mule

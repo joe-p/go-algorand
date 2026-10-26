@@ -16,33 +16,25 @@
 
 //! Tuples `(T1,T2,…)`, up to 16 elements.
 
-use super::layout::{decode_at, layout, split_tuple, static_len, Layout, Span};
+use super::desc::{read_tuple_elem, Desc};
 use super::Decode;
-use super::DecodeError;
 
 impl Decode<'_> for () {
-    const STATIC_LEN: Option<usize> = Some(0);
+    const DESC: Desc = Desc::tuple(&[]);
 
     #[inline]
-    fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
-        if bytes.is_empty() {
-            Ok(())
-        } else {
-            Err(DecodeError)
-        }
-    }
+    unsafe fn read(_bytes: &[u8]) -> Self {}
 }
 
 macro_rules! decode_tuple {
     ($($name:ident $index:tt),+) => {
         impl<'a, $($name: Decode<'a>),+> Decode<'a> for ($($name,)+) {
-            const STATIC_LEN: Option<usize> = static_len(Self::ELEMS);
-            const ELEMS: &'static [Layout] = &[$(layout::<$name>()),+];
+            const DESC: Desc = Desc::tuple(&[$($name::DESC),+]);
 
-            fn decode(bytes: &'a [u8]) -> Result<Self, DecodeError> {
-                let mut spans = [$({ stringify!($name); Span::EMPTY }),+];
-                split_tuple(bytes, Self::ELEMS, &mut spans)?;
-                Ok(($(decode_at::<$name>(bytes, spans[$index])?,)+))
+            unsafe fn read(bytes: &'a [u8]) -> Self {
+                let elems = Self::DESC.elems();
+                // SAFETY: the caller validated `bytes` as this tuple.
+                ($(unsafe { read_tuple_elem::<$name>(bytes, elems, $index) },)+)
             }
         }
     };

@@ -635,10 +635,14 @@ fn check_unique(methods: &[AbiMethod]) -> syn::Result<()> {
 
 /// The router: bare calls (no arguments) go to `approve`, or approve a plain
 /// create when there is none; method calls must be `NoOp`, match a selector,
-/// carry exactly the expected arguments, and decode.
+/// carry exactly the expected arguments, and validate.
 ///
 /// All arguments are read into one buffer up front, so dynamic parameters can
-/// borrow from it without allocating.
+/// borrow from it without allocating. The arm validates every argument against
+/// the method's static descriptors with one shared call, so the entry reads
+/// them unchecked and infallibly: nothing threads a `Result` through the
+/// parameters, and a bad call still rejects by returning 0 rather than
+/// trapping.
 ///
 /// Each method gets its own `#[inline(never)]` entry function. wasmi compiles
 /// a function the first time it runs and charges fuel per byte for it, so a
@@ -652,66 +656,78 @@ fn arc4_route(self_ty: &Type, methods: &[AbiMethod], has_approve: bool) -> Token
         quote! { app_id == 0 && on_completion == ::avm_sdk::arc4::NO_OP }
     };
     let mut entries = Vec::new();
-    let arms: Vec<_> = methods.iter().map(|method| {
-        let [b0, b1, b2, b3] = method.selector;
-        let ident = &method.ident;
-        let entry = format_ident!("abi_{}", ident);
-        let create = method.create;
-        let (separate, packed) = if method.params.len() > MAX_SEPARATE_ARGS {
-            method.params.split_at(MAX_SEPARATE_ARGS - 1)
-        } else {
-            (method.params.as_slice(), &[][..])
-        };
-        let num_args = (separate.len() + usize::from(!packed.is_empty()) + 1) as u32;
+    let arms: Vec<_> = methods
+        .iter()
+        .map(|method| {
+            let selector = u32::from_le_bytes(method.selector);
+            let ident = &method.ident;
+            let entry = format_ident!("abi_{}", ident);
+            let create = method.create;
+            let (separate, packed) = if method.params.len() > MAX_SEPARATE_ARGS {
+                method.params.split_at(MAX_SEPARATE_ARGS - 1)
+            } else {
+                (method.params.as_slice(), &[][..])
+            };
+            let num_args = (separate.len() + usize::from(!packed.is_empty()) + 1) as u32;
 
-        let mut decode = Vec::new();
-        let mut args = Vec::new();
-        for (i, param) in separate.iter().enumerate() {
-            let arg = format_ident!("arg{i}");
-            let ty = &param.ty;
-            let index = i + 1;
-            decode.push(quote! {
-                let #arg: #ty = match ::avm_sdk::arc4::decode_arg(buf, spans, #index) {
-                    ::core::result::Result::Ok(value) => value,
-                    ::core::result::Result::Err(_) => return false,
-                };
-            });
-            args.push(arg);
-        }
-        if !packed.is_empty() {
-            let offset = separate.len();
-            let names: Vec<_> = (0..packed.len())
-                .map(|i| format_ident!("arg{}", offset + i))
-                .collect();
-            let types = packed.iter().map(|param| &param.ty);
-            let index = MAX_SEPARATE_ARGS;
-            decode.push(quote! {
-                let (#(#names,)*): (#(#types,)*) = match ::avm_sdk::arc4::decode_arg(buf, spans, #index) {
-                    ::core::result::Result::Ok(value) => value,
-                    ::core::result::Result::Err(_) => return false,
-                };
-            });
-            args.extend(names);
-        }
-        entries.push(quote! {
-            #[inline(never)]
-            fn #entry(
-                buf: &[u8; ::avm_sdk::arc4::MAX_APP_ARGS_BYTES],
-                spans: &[(usize, usize); ::avm_sdk::arc4::MAX_APP_ARGS],
-            ) -> bool {
-                #(#decode)*
-                ::avm_sdk::Approve::approve(<#self_ty>::new().#ident(#(#args),*))
+            // The argument types in order: each separate parameter, then the tuple
+            // of packed ones.
+            let mut types: Vec<Type> = separate.iter().map(|param| param.ty.clone()).collect();
+            if !packed.is_empty() {
+                let packed_types = packed.iter().map(|param| &param.ty);
+                types.push(syn::parse_quote!((#(#packed_types,)*)));
             }
-        });
-        quote! {
-            [#b0, #b1, #b2, #b3] => {
-                if (app_id == 0) != #create || num_args != #num_args {
-                    return false;
+            let descs = types
+                .iter()
+                .map(|ty| quote! { &<#ty as ::avm_sdk::arc4::Decode>::DESC });
+
+            let mut reads = Vec::new();
+            let mut args = Vec::new();
+            for (i, param) in separate.iter().enumerate() {
+                let arg = format_ident!("arg{i}");
+                let ty = &param.ty;
+                let index = i + 1;
+                reads.push(quote! {
+                    let #arg: #ty = unsafe { args.decode(#index) };
+                });
+                args.push(arg);
+            }
+            if !packed.is_empty() {
+                let offset = separate.len();
+                let names: Vec<_> = (0..packed.len())
+                    .map(|i| format_ident!("arg{}", offset + i))
+                    .collect();
+                let ty = types.last();
+                let index = MAX_SEPARATE_ARGS;
+                reads.push(quote! {
+                    let (#(#names,)*): #ty = unsafe { args.decode(#index) };
+                });
+                args.extend(names);
+            }
+            entries.push(quote! {
+                /// # Safety
+                ///
+                /// `args` must have validated against this method's descriptors.
+                #[inline(never)]
+                unsafe fn #entry(args: &::avm_sdk::arc4::Args) -> bool {
+                    #(#reads)*
+                    ::avm_sdk::Approve::approve(<#self_ty>::new().#ident(#(#args),*))
                 }
-                #entry(&buf, &spans)
+            });
+            quote! {
+                #selector => {
+                    if (app_id == 0) != #create || num_args != #num_args {
+                        return false;
+                    }
+                    if !args.validate(&[#(#descs),*]) {
+                        return false;
+                    }
+                    // SAFETY: just validated.
+                    unsafe { #entry(&args) }
+                }
             }
-        }
-    }).collect();
+        })
+        .collect();
     quote! {
         #(#entries)*
 
@@ -726,12 +742,16 @@ fn arc4_route(self_ty: &Type, methods: &[AbiMethod], has_approve: bool) -> Token
             if on_completion != ::avm_sdk::arc4::NO_OP {
                 return false;
             }
-            let mut buf = [0u8; ::avm_sdk::arc4::MAX_APP_ARGS_BYTES];
-            let mut spans = [(0usize, 0usize); ::avm_sdk::arc4::MAX_APP_ARGS];
-            if !::avm_sdk::arc4::read_app_args(&mut buf, num_args, &mut spans) {
+            let mut args = ::avm_sdk::arc4::Args::new();
+            if !args.read(num_args) {
                 return false;
             }
-            match ::avm_sdk::arc4::app_arg(&buf, &spans, 0) {
+            // One load and compare per method, rather than four.
+            let selector = match *args.get(0) {
+                [b0, b1, b2, b3] => u32::from_le_bytes([b0, b1, b2, b3]),
+                _ => return false,
+            };
+            match selector {
                 #(#arms)*
                 _ => false,
             }

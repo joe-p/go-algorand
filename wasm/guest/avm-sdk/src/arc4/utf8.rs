@@ -22,34 +22,36 @@
 
 /// Whether `bytes` is well-formed UTF-8 (Unicode Table 3-7): no overlong
 /// encodings, no surrogates, nothing above U+10FFFF.
+///
+/// It decodes each scalar and checks its range, which is smaller than
+/// matching lead bytes against second-byte ranges.
 pub(crate) fn is_valid(bytes: &[u8]) -> bool {
     let mut i = 0;
-    while i < bytes.len() {
-        let lead = bytes[i];
+    while let Some(&lead) = bytes.get(i) {
+        i += 1;
         if lead < 0x80 {
-            i += 1;
             continue;
         }
-        let (width, second) = match lead {
-            0xC2..=0xDF => (2, 0x80..=0xBF),
-            0xE0 => (3, 0xA0..=0xBF),
-            0xE1..=0xEC | 0xEE..=0xEF => (3, 0x80..=0xBF),
-            0xED => (3, 0x80..=0x9F),
-            0xF0 => (4, 0x90..=0xBF),
-            0xF1..=0xF3 => (4, 0x80..=0xBF),
-            0xF4 => (4, 0x80..=0x8F),
+        // Continuation bytes, and the smallest scalar the width may encode.
+        let (width, min) = match lead {
+            0xC0..=0xDF => (1, 0x80),
+            0xE0..=0xEF => (2, 0x800),
+            0xF0..=0xF7 => (3, 0x1_0000),
             _ => return false,
         };
-        let Some(sequence) = bytes.get(i..i + width) else {
-            return false;
-        };
-        let [_, b1, rest @ ..] = sequence else {
-            return false;
-        };
-        if !second.contains(b1) || rest.iter().any(|&b| b & 0xC0 != 0x80) {
+        let mut scalar = u32::from(lead) & (0x3F >> width);
+        for _ in 0..width {
+            match bytes.get(i) {
+                Some(&byte) if byte & 0xC0 == 0x80 => {
+                    scalar = scalar << 6 | u32::from(byte & 0x3F);
+                }
+                _ => return false,
+            }
+            i += 1;
+        }
+        if scalar < min || (0xD800..=0xDFFF).contains(&scalar) || scalar > 0x10_FFFF {
             return false;
         }
-        i += width;
     }
     true
 }

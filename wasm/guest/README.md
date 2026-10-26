@@ -139,6 +139,13 @@ This is a separate Cargo workspace from the host executor so `make wasmlib`
     even though the panic handler ignores the message. Use `get` and trap or
     return an error instead, as the SDK does.
 
+  Argument decoding is built to the same rule. Each ARC-4 type has a `const`
+  `arc4::Desc` describing its shape, and the router validates every argument
+  with the handful of shared checkers those descriptors point to, so a new
+  parameter type costs 16 bytes of data rather than a generic copy of the
+  validator, and a contract links only the checkers its types use. The
+  method entry then reads the validated arguments without any checks.
+
   `#[program_entry]` is the same export for a free function, for programs
   without declared state.
 
@@ -201,8 +208,10 @@ This is a separate Cargo workspace from the host executor so `make wasmlib`
 - **`examples/avm-sdk-arc4-types/`** — ARC-4 methods taking dynamic arrays,
   nested tuples with packed bools, and 17 parameters (packed past the 15th).
   The Go test `TestWasmAppArc4Types` calls its fixture with `avm-abi`
-  encodings. Its `record` method uses nearly the full 16-call pooled budget,
-  which shows how quickly rich types add up under the current setup pricing.
+  encodings.
+
+  `examples/README.md` tabulates every example's size, initial memory, setup
+  cost, and call cost.
 
 - **`runner/`** — host-side tests that run the committed guest `.wasm` fixtures
   through the real executor with a stub `ed25519verify_bare`.

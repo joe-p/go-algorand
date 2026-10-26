@@ -2572,6 +2572,25 @@ mod tests {
             )
             .to_vec(),
         ));
+        cases.push((
+            "avm_sdk_counter",
+            include_bytes!("../../data/transactions/logic/testdata/wasm/app_avm_sdk_counter.wasm")
+                .to_vec(),
+        ));
+        cases.push((
+            "avm_sdk_arc4_counter",
+            include_bytes!(
+                "../../data/transactions/logic/testdata/wasm/app_avm_sdk_arc4_counter.wasm"
+            )
+            .to_vec(),
+        ));
+        cases.push((
+            "avm_sdk_arc4_types",
+            include_bytes!(
+                "../../data/transactions/logic/testdata/wasm/app_avm_sdk_arc4_types.wasm"
+            )
+            .to_vec(),
+        ));
 
         // Independent size sweeps used to calibrate deterministic setup fuel.
         let mut sweep = Vec::new();

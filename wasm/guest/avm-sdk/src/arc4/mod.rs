@@ -27,6 +27,12 @@
 //! `&str`) borrow from it. Decoding is strict: every length, offset, and
 //! static size must match the encoding exactly, or the call is rejected.
 //!
+//! Validation is driven by data, not code. Each type has a `const` [`Desc`]
+//! describing its shape, which [`validate`] checks with a few shared checkers,
+//! so a contract pays for validation once rather than per type, and links
+//! only the checkers its types use. A type's own code is only its
+//! [`Decode::read`], which trusts the validated encoding.
+//!
 //! | ABI type | Rust type |
 //! |---|---|
 //! | `uint8` … `uint128` | `u8`, `u16`, `u32`, `u64`, `u128` |
@@ -47,13 +53,14 @@
 //! `application`) and transaction types are not supported.
 
 mod array;
-mod layout;
+mod desc;
 mod tuple;
 mod utf8;
 
 pub use array::{DynArray, Iter};
+pub use desc::{validate, Desc};
 
-use crate::Error;
+use crate::{trap, Error};
 
 /// The AVM's limit on the number of application arguments (`MaxAppArgs`).
 pub const MAX_APP_ARGS: usize = 16;
@@ -81,63 +88,113 @@ impl From<DecodeError> for Error {
     }
 }
 
-/// Decodes one ARC-4 value from exactly its encoding.
+/// An ARC-4 value type: a [`Desc`] of its encoding, and a read of a validated
+/// encoding.
 ///
 /// Implemented for every supported parameter type (see the [module
-/// docs](self)). Dynamic values borrow from `bytes`.
+/// docs](self)). Dynamic values borrow from `bytes`. Use [`Decode::decode`]
+/// to validate and read in one step.
 pub trait Decode<'a>: Sized {
+    /// The shape of the encoding, which [`validate`] checks.
+    const DESC: Desc;
+
     /// The encoded size of a static type, or `None` for a dynamic one.
-    const STATIC_LEN: Option<usize>;
+    const STATIC_LEN: Option<usize> = Self::DESC.static_len();
 
     /// Whether this is `bool`, which packs into bits inside tuples and arrays.
     #[doc(hidden)]
-    const IS_BOOL: bool = false;
+    const IS_BOOL: bool = Self::DESC.is_bool();
 
-    /// A tuple's element layouts, kept in static data rather than built by code.
-    #[doc(hidden)]
-    const ELEMS: &'static [layout::Layout] = &[];
-
-    /// Decodes `bytes`, which must be exactly one encoded value.
-    fn decode(bytes: &'a [u8]) -> Result<Self, DecodeError>;
+    /// Reads a value from `bytes`, which must be exactly one encoded value.
+    ///
+    /// # Safety
+    ///
+    /// [`validate`]`(bytes, &Self::DESC)` must have returned `true`. A read
+    /// does not check structure; on an invalid encoding it may return garbage
+    /// or trap, and `&str` would be unsound.
+    unsafe fn read(bytes: &'a [u8]) -> Self;
 
     /// Builds a packed `bool`. Only called when [`Decode::IS_BOOL`] is true.
     #[doc(hidden)]
     fn from_packed_bit(_bit: bool) -> Self {
-        crate::trap()
+        trap()
+    }
+
+    /// Validates `bytes` as exactly one encoded value and reads it.
+    #[inline]
+    fn decode(bytes: &'a [u8]) -> Result<Self, DecodeError> {
+        if validate(bytes, &Self::DESC) {
+            // SAFETY: just validated.
+            Ok(unsafe { Self::read(bytes) })
+        } else {
+            Err(DecodeError)
+        }
     }
 }
 
+/// `bytes` as an array, trapping on a length mismatch.
 #[inline]
-fn exact<const N: usize>(bytes: &[u8]) -> Result<[u8; N], DecodeError> {
-    bytes.try_into().map_err(|_| DecodeError)
+fn exact<const N: usize>(bytes: &[u8]) -> [u8; N] {
+    match bytes.try_into() {
+        Ok(array) => array,
+        Err(_) => trap(),
+    }
+}
+
+/// Big-endian bytes to a `u64`. wasm has no byte swap, so `from_be_bytes` is
+/// about 80 bytes of shifts per width; one loop shared by every width is
+/// smaller.
+#[inline(never)]
+fn be_u64(bytes: &[u8]) -> u64 {
+    bytes.iter().fold(0, |acc, &b| acc << 8 | u64::from(b))
+}
+
+impl Decode<'_> for u8 {
+    const DESC: Desc = Desc::fixed(1);
+
+    #[inline]
+    unsafe fn read(bytes: &[u8]) -> Self {
+        match bytes.first() {
+            Some(&byte) => byte,
+            None => trap(),
+        }
+    }
 }
 
 macro_rules! decode_uint {
     ($($ty:ty),*) => {$(
         impl Decode<'_> for $ty {
-            const STATIC_LEN: Option<usize> = Some(core::mem::size_of::<$ty>());
+            const DESC: Desc = Desc::fixed(core::mem::size_of::<$ty>());
 
             #[inline]
-            fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
-                Ok(<$ty>::from_be_bytes(exact(bytes)?))
+            unsafe fn read(bytes: &[u8]) -> Self {
+                be_u64(bytes) as $ty
             }
         }
     )*};
 }
 
-decode_uint!(u8, u16, u32, u64, u128);
+decode_uint!(u16, u32, u64);
 
-impl Decode<'_> for bool {
-    const STATIC_LEN: Option<usize> = Some(1);
-    const IS_BOOL: bool = true;
+impl Decode<'_> for u128 {
+    const DESC: Desc = Desc::fixed(16);
 
     #[inline]
-    fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
-        match exact::<1>(bytes)? {
-            [0x80] => Ok(true),
-            [0x00] => Ok(false),
-            _ => Err(DecodeError),
-        }
+    unsafe fn read(bytes: &[u8]) -> Self {
+        let (high, low) = match bytes.split_first_chunk::<8>() {
+            Some(halves) => halves,
+            None => trap(),
+        };
+        u128::from(be_u64(high)) << 64 | u128::from(be_u64(low))
+    }
+}
+
+impl Decode<'_> for bool {
+    const DESC: Desc = Desc::BOOL;
+
+    #[inline]
+    unsafe fn read(bytes: &[u8]) -> Self {
+        bytes.first() == Some(&0x80)
     }
 
     #[inline]
@@ -152,11 +209,12 @@ impl Decode<'_> for bool {
 pub struct Byte(pub u8);
 
 impl Decode<'_> for Byte {
-    const STATIC_LEN: Option<usize> = Some(1);
+    const DESC: Desc = Desc::fixed(1);
 
     #[inline]
-    fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
-        Ok(Byte(exact::<1>(bytes)?[0]))
+    unsafe fn read(bytes: &[u8]) -> Self {
+        // SAFETY: the same encoding as `u8`.
+        Byte(unsafe { u8::read(bytes) })
     }
 }
 
@@ -165,11 +223,11 @@ impl Decode<'_> for Byte {
 pub struct Address(pub [u8; 32]);
 
 impl Decode<'_> for Address {
-    const STATIC_LEN: Option<usize> = Some(32);
+    const DESC: Desc = Desc::fixed(32);
 
     #[inline]
-    fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
-        exact(bytes).map(Address)
+    unsafe fn read(bytes: &[u8]) -> Self {
+        Address(exact(bytes))
     }
 }
 
@@ -194,16 +252,16 @@ impl<const BYTES: usize> Uint<BYTES> {
         if high.iter().any(|&byte| byte != 0) {
             return None;
         }
-        Some(low.iter().fold(0, |acc, &byte| acc << 8 | u64::from(byte)))
+        Some(be_u64(low))
     }
 }
 
 impl<const BYTES: usize> Decode<'_> for Uint<BYTES> {
-    const STATIC_LEN: Option<usize> = Some(BYTES);
+    const DESC: Desc = Desc::fixed(BYTES);
 
     #[inline]
-    fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
-        exact(bytes).map(Uint)
+    unsafe fn read(bytes: &[u8]) -> Self {
+        Uint(exact(bytes))
     }
 }
 
@@ -213,97 +271,112 @@ impl<const BYTES: usize> Decode<'_> for Uint<BYTES> {
 pub struct UFixed<const BYTES: usize, const PRECISION: u8>(pub Uint<BYTES>);
 
 impl<const BYTES: usize, const PRECISION: u8> Decode<'_> for UFixed<BYTES, PRECISION> {
-    const STATIC_LEN: Option<usize> = Some(BYTES);
+    const DESC: Desc = Desc::fixed(BYTES);
 
     #[inline]
-    fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
-        Uint::decode(bytes).map(UFixed)
+    unsafe fn read(bytes: &[u8]) -> Self {
+        UFixed(Uint(exact(bytes)))
     }
 }
 
 impl<'a> Decode<'a> for &'a [u8] {
-    const STATIC_LEN: Option<usize> = None;
+    const DESC: Desc = Desc::dyn_array(&[u8::DESC]);
 
     #[inline]
-    fn decode(bytes: &'a [u8]) -> Result<Self, DecodeError> {
-        let Some((prefix, rest)) = bytes.split_first_chunk::<2>() else {
-            return Err(DecodeError);
-        };
-        let len = u16::from_be_bytes(*prefix) as usize;
-        if rest.len() != len {
-            return Err(DecodeError);
+    unsafe fn read(bytes: &'a [u8]) -> Self {
+        match desc::dyn_prefix(bytes) {
+            Some((_, rest)) => rest,
+            None => trap(),
         }
-        Ok(rest)
     }
 }
 
 impl<'a> Decode<'a> for &'a str {
-    const STATIC_LEN: Option<usize> = None;
+    const DESC: Desc = Desc::STR;
 
     #[inline]
-    fn decode(bytes: &'a [u8]) -> Result<Self, DecodeError> {
-        let bytes = <&[u8]>::decode(bytes)?;
-        if !utf8::is_valid(bytes) {
-            return Err(DecodeError);
-        }
-        // SAFETY: `is_valid` accepts exactly the well-formed UTF-8 sequences;
-        // the tests check it against `core::str::from_utf8`.
-        Ok(unsafe { core::str::from_utf8_unchecked(bytes) })
+    unsafe fn read(bytes: &'a [u8]) -> Self {
+        // SAFETY: `Desc::STR` validates as UTF-8, with `utf8::is_valid`,
+        // which the tests check against `core::str::from_utf8`.
+        unsafe { core::str::from_utf8_unchecked(<&[u8]>::read(bytes)) }
     }
 }
 
-/// Reads application arguments `0..count` into `buf`, recording each one's
-/// range in `spans`. Used by the `#[contract]` router.
-#[doc(hidden)]
-pub fn read_app_args(
-    buf: &mut [u8; MAX_APP_ARGS_BYTES],
-    count: u32,
-    spans: &mut [(usize, usize); MAX_APP_ARGS],
-) -> bool {
-    if count as usize > MAX_APP_ARGS {
-        return false;
-    }
-    let mut pos = 0;
-    for (index, span) in (0..count).zip(spans.iter_mut()) {
-        let Some(rest) = buf.get_mut(pos..) else {
-            return false;
-        };
-        let Ok(arg) = crate::txn::app_arg_into(index, rest) else {
-            return false;
-        };
-        let end = pos + arg.len();
-        *span = (pos, end);
-        pos = end;
-    }
-    true
-}
-
-/// Application argument `index`, as read by [`read_app_args`]. Used by the
+/// An application call's arguments, read into one buffer. Used by the
 /// `#[contract]` router.
 #[doc(hidden)]
-#[inline]
-pub fn app_arg<'a>(
-    buf: &'a [u8; MAX_APP_ARGS_BYTES],
-    spans: &[(usize, usize); MAX_APP_ARGS],
-    index: usize,
-) -> &'a [u8] {
-    match spans.get(index) {
-        Some(&(start, end)) => layout::slice(buf, start, end),
-        None => crate::trap(),
+pub struct Args {
+    buf: [u8; MAX_APP_ARGS_BYTES],
+    /// Argument `i` is `buf[bounds[i]..bounds[i + 1]]`.
+    bounds: [u16; MAX_APP_ARGS + 1],
+}
+
+impl Default for Args {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
-/// Decodes application argument `index` as a `T`. Used by the `#[contract]`
-/// router; not inlined, so a method with several parameters of one type shares
-/// a single copy of its decoding.
-#[doc(hidden)]
-#[inline(never)]
-pub fn decode_arg<'a, T: Decode<'a>>(
-    buf: &'a [u8; MAX_APP_ARGS_BYTES],
-    spans: &[(usize, usize); MAX_APP_ARGS],
-    index: usize,
-) -> Result<T, DecodeError> {
-    T::decode(app_arg(buf, spans, index))
+impl Args {
+    /// An empty set of arguments, to be filled by [`Args::read`].
+    #[inline(always)]
+    pub const fn new() -> Args {
+        Args {
+            buf: [0; MAX_APP_ARGS_BYTES],
+            bounds: [0; MAX_APP_ARGS + 1],
+        }
+    }
+
+    /// Reads application arguments `0..count`, returning whether they fit.
+    pub fn read(&mut self, count: u32) -> bool {
+        if count as usize > MAX_APP_ARGS {
+            return false;
+        }
+        let mut pos = 0;
+        for index in 0..count {
+            let Some(rest) = self.buf.get_mut(pos..) else {
+                return false;
+            };
+            let Ok(arg) = crate::txn::app_arg_into(index, rest) else {
+                return false;
+            };
+            pos += arg.len();
+            match self.bounds.get_mut(index as usize + 1) {
+                Some(end) => *end = pos as u16,
+                None => trap(),
+            }
+        }
+        true
+    }
+
+    /// Application argument `index`, as read by [`Args::read`].
+    #[inline]
+    pub fn get(&self, index: usize) -> &[u8] {
+        match self.bounds.get(index..index + 2) {
+            Some(&[start, end]) => desc::slice(&self.buf, usize::from(start), usize::from(end)),
+            _ => trap(),
+        }
+    }
+
+    /// Whether arguments `1..` are valid encodings of `descs`, in order.
+    #[inline(never)]
+    pub fn validate(&self, descs: &[&Desc]) -> bool {
+        descs
+            .iter()
+            .enumerate()
+            .all(|(i, desc)| validate(self.get(i + 1), desc))
+    }
+
+    /// Reads application argument `index` as a `T`.
+    ///
+    /// # Safety
+    ///
+    /// [`Args::validate`] must have accepted argument `index` as a `T::DESC`.
+    #[inline]
+    pub unsafe fn decode<'a, T: Decode<'a>>(&'a self, index: usize) -> T {
+        // SAFETY: the caller's contract.
+        unsafe { T::read(self.get(index)) }
+    }
 }
 
 /// One `#[abimethod]`, as described to off-chain tooling.

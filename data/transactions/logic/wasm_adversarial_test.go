@@ -341,6 +341,7 @@ func TestWasmRustContractBudget(t *testing.T) {
 	}{
 		{"rust counter", "app_rust_counter.wasm", [][]byte{amount[:]}, basics.StateSchema{NumUint: 2}},
 		{"rust signed claim", "app_rust_signed_claim.wasm", [][]byte{sig[:], amount[:]}, basics.StateSchema{NumUint: 2}},
+		{"avm-sdk counter", "app_avm_sdk_counter.wasm", [][]byte{amount[:]}, basics.StateSchema{NumUint: 2}},
 	}
 
 	params := func(n int, args [][]byte, schema basics.StateSchema) *EvalParams {

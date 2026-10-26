@@ -187,9 +187,10 @@ func TestWasmEd25519DalekGuest(t *testing.T) {
 	sig := c.SignBytes(data)
 	program := loadWasm(t, "ed25519_dalek.wasm")
 
-	pass, _, err := EvalSignatureProgram(program, [][]byte{data, sig[:], c.SignatureVerifier[:]}, 0, optSigParams(wasmProto))
+	pass, cx, err := EvalSignatureProgram(program, [][]byte{data, sig[:], c.SignatureVerifier[:]}, 0, optSigParams(wasmProto))
 	require.NoError(t, err)
 	require.True(t, pass)
+	t.Logf("cost %d (fuel %d)", cx.Cost(), cx.wasmFuelUsed)
 
 	// A tampered message fails verification, so the program rejects.
 	badData := append([]byte(nil), data...)

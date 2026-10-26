@@ -18,14 +18,13 @@
 
 use core::marker::PhantomData;
 
-use super::layout::{array_span, check_array, decode_at, layout};
+use super::desc::{dyn_prefix, read_array_elem, Desc};
 use super::Decode;
-use super::DecodeError;
 use crate::trap;
 
 /// An ARC-4 dynamic array `T[]`, borrowed from its encoding.
 ///
-/// Decoding validates every element, so [`DynArray::get`] and iteration decode
+/// Decoding validates every element, so [`DynArray::get`] and iteration read
 /// on access without failing.
 pub struct DynArray<'a, T> {
     bytes: &'a [u8],
@@ -69,8 +68,9 @@ impl<'a, T: Decode<'a>> DynArray<'a, T> {
         if index >= self.len {
             return None;
         }
-        let span = array_span(self.bytes, self.len, layout::<T>(), index);
-        Some(decode_at(self.bytes, span).unwrap_or_else(|_| trap()))
+        // SAFETY: a `DynArray` is only built from a validated encoding, and
+        // `index` is in range.
+        Some(unsafe { read_array_elem(self.bytes, self.len, index) })
     }
 
     /// Iterates over the elements.
@@ -90,19 +90,18 @@ impl<'a, T: Decode<'a>> DynArray<'a, T> {
 }
 
 impl<'a, T: Decode<'a>> Decode<'a> for DynArray<'a, T> {
-    const STATIC_LEN: Option<usize> = None;
+    const DESC: Desc = Desc::dyn_array(&[T::DESC]);
 
-    fn decode(bytes: &'a [u8]) -> Result<Self, DecodeError> {
-        let Some((prefix, bytes)) = bytes.split_first_chunk::<2>() else {
-            return Err(DecodeError);
+    #[inline]
+    unsafe fn read(bytes: &'a [u8]) -> Self {
+        let Some((len, bytes)) = dyn_prefix(bytes) else {
+            trap()
         };
-        let len = usize::from(u16::from_be_bytes(*prefix));
-        check_elements::<T>(bytes, len)?;
-        Ok(DynArray {
+        DynArray {
             bytes,
             len,
             marker: PhantomData,
-        })
+        }
     }
 }
 
@@ -140,31 +139,11 @@ impl<'a, T: Decode<'a>> Iterator for Iter<'a, T> {
 
 impl<'a, T: Decode<'a>> ExactSizeIterator for Iter<'a, T> {}
 
-/// Checks the array structure and that every element decodes.
-fn check_elements<'a, T: Decode<'a>>(bytes: &'a [u8], len: usize) -> Result<(), DecodeError> {
-    let elem = layout::<T>();
-    check_array(bytes, len, elem)?;
-    for i in 0..len {
-        decode_at::<T>(bytes, array_span(bytes, len, elem, i))?;
-    }
-    Ok(())
-}
-
 impl<'a, T: Decode<'a>, const N: usize> Decode<'a> for [T; N] {
-    const STATIC_LEN: Option<usize> = if T::IS_BOOL {
-        Some(N.div_ceil(8))
-    } else {
-        match T::STATIC_LEN {
-            Some(n) => Some(n * N),
-            None => None,
-        }
-    };
+    const DESC: Desc = Desc::array(&[T::DESC], N);
 
-    fn decode(bytes: &'a [u8]) -> Result<Self, DecodeError> {
-        check_elements::<T>(bytes, N)?;
-        let elem = layout::<T>();
-        Ok(core::array::from_fn(|i| {
-            decode_at(bytes, array_span(bytes, N, elem, i)).unwrap_or_else(|_| trap())
-        }))
+    unsafe fn read(bytes: &'a [u8]) -> Self {
+        // SAFETY: the caller validated `bytes` as this array.
+        core::array::from_fn(|i| unsafe { read_array_elem(bytes, N, i) })
     }
 }

@@ -261,7 +261,7 @@ is `MaxAbsoluteLogicSigProgramSize`, 16000 in `vFuture`). The LSig cost budget i
 is 4 MiB.
 
 These limits are tighter for application programs. The compiler-generated
-`app_rust_signed_claim.wasm` is 4,522 bytes (three pages) and has a 4,821
+`app_rust_signed_claim.wasm` is 4,522 bytes (three pages) and has a 4,506
 deterministic setup cost, so even deploying it needs a pooled group; see
 `../../WASM_CONTRACTS.md`.
 

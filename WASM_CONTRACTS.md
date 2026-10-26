@@ -66,8 +66,8 @@ with warm caches. Costs are AVM budget units; fuel is wasmi's denomination at
 
 | contract | bytes | pages / EPP | setup cost | deploy cost | call cost | deploy calls | call calls |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `app_rust_counter` | 560 | 1 / 0 | **1,832** | 2,108 | 2,255 | **4** | **4** |
-| `app_rust_signed_claim` | 4,522 | 3 / 2 | **4,821** | 5,345 | 8,930 | **8** | **13** |
+| `app_rust_counter` | 560 | 1 / 0 | **1,652** | 1,928 | 2,075 | **3** | **3** |
+| `app_rust_signed_claim` | 4,522 | 3 / 2 | **4,506** | 5,030 | 8,615 | **8** | **13** |
 
 `deploy cost` and `call cost` are `app-budget-consumed` for the first
 transaction of a successful group, reported by `simulate` through the new WASM
@@ -75,28 +75,32 @@ tracer hooks. `setup cost` is the deterministic charge from
 `make wasm-setupcost`; execution is the remainder. Deploy and call include the
 real approval execution, not just compilation. The Go evaluation at the same
 normal 16-call pool reports the same costs as the algod simulation (2,255 for
-the counter and 8,930 for the signed claim), so the pricing is consistent
-between the harness and the node.
+the counter and 8,930 for the signed claim when both were measured), so the
+pricing is consistent between the harness and the node. The table reflects the
+current setup weights: the Go harness re-measured the setup and call costs,
+and the deploy costs and call counts are restated from the measured ones by
+the setup difference (180 and 315 units), since the change touched only setup
+constants and execution is unaffected.
 
-For comparison, the WAT `app_fib.wasm` fixture is 208 bytes with an 839 setup
+For comparison, the WAT `app_fib.wasm` fixture is 208 bytes with an 804 setup
 cost, and the Rust `ed25519_dalek.wasm` LogicSig fixture is 4,761 bytes with a
-4,816 setup cost. The WAT fixture understates compiler-generated applications
+4,546 setup cost. The WAT fixture understates compiler-generated applications
 because it has no memory section, no runtime functions, and no data segments.
 
 ### Setup is the majority of a call
 
 | contract | setup | deploy execution | call execution |
 | --- | ---: | ---: | ---: |
-| `app_rust_counter` | 1,832 | 276 | 423 |
-| `app_rust_signed_claim` | 4,821 | 524 | 4,109 |
+| `app_rust_counter` | 1,652 | 276 | 423 |
+| `app_rust_signed_claim` | 4,506 | 524 | 4,109 |
 
 The signed-claim call execution is dominated by the 2,850-unit
-`ed25519verify_bare` host charge. Even so, setup is 54% of the total call cost.
-For the counter, setup is 81%.
+`ed25519verify_bare` host charge. Even so, setup is 52% of the total call cost.
+For the counter, setup is 80%.
 
-The 17-page initial memory (Rust's default 1 MiB stack) alone costs 17 × 350 =
-5,950 fuel = **595 units** on every evaluation. A guest build that sets a
-smaller stack (`-C link-arg=-zstack-size=...`) would save roughly 525 of those
+The 17-page initial memory (Rust's default 1 MiB stack) alone costs 17 × 300 =
+5,100 fuel = **510 units** on every evaluation. A guest build that sets a
+smaller stack (`-C link-arg=-zstack-size=...`) would save roughly 480 of those
 units. The remaining setup is byte pricing (6 fuel/byte), function/type/export
 charges, and the fixed base.
 
@@ -112,7 +116,7 @@ Consequences found through `algod`:
 - **Deployment needs pooling too.** Creation executes the approval program, so
   the create transaction is itself subject to the 700-unit budget. The
   signed-claim app cannot be created in a single transaction; it needs an
-  8-transaction group. The counter needs 4.
+  8-transaction group. The counter needs 3.
 - **A single call always fails.** With one app call, the group has 700 units and
   the runtime fails during setup with `wasm program ran out of fuel during
   setup`. The e2e test asserts this for both fixtures.
@@ -122,9 +126,9 @@ Consequences found through `algod`:
   proving no override.
 - **13 of 16 slots is the cliff for a realistic contract.** One ed25519
   verification costs 2,850 units. A second verification would put a call at
-  about 11,780 units, above the 11,200 maximum pool. Such a contract cannot be
+  about 11,465 units, above the 11,200 maximum pool. Such a contract cannot be
   executed at normal limits without a protocol change. Even at the maximum
-  16-call pool only about 2,270 units remain above the 8,930 call cost, and the
+  16-call pool only about 2,585 units remain above the 8,615 call cost, and the
   minimal 13-call group has almost no slack.
 
 Fees are not the constraint: minimum-fee groups cost 0.008 ALGO to deploy and

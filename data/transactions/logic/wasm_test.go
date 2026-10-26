@@ -354,7 +354,7 @@ func TestWasmSetupFuel(t *testing.T) {
 	pass, cx, err := EvalSignatureProgram(program, nil, 0, optSigParams(wasmProto))
 	require.NoError(t, err)
 	require.True(t, pass)
-	require.GreaterOrEqual(t, cx.wasmFuelUsed, uint64(6_124))
+	require.GreaterOrEqual(t, cx.wasmFuelUsed, uint64(5_974))
 
 	// Add a valid custom section with an empty name and 64 uninterpreted bytes.
 	// No execution changes; every added byte must still pay setup fuel.

@@ -20,7 +20,9 @@ operator table under "Call-stack cost" is a separate change). Host charges are
 calibrated toward **1 ns/fuel**, with an explicit 28,500-fuel host charge for
 `ed25519verify_bare` (2850 AVM budget units, versus the TEAL opcode's 1900; the
 whole call is 28,527 fuel under the prototype operator table). Outside the prototype operator
-table, host and setup weights remain unchanged from the 15:1 calibration.
+table, host weights remain unchanged from the 15:1 calibration; the setup
+type, global, and memory-page weights were later lowered (see "Setup fuel
+pricing").
 Consumed fuel is converted back to AVM cost with rounding up per evaluation,
 so shared budgets remain in AVM units, including mixed TEAL/WASM groups.
 Total fuel now includes a deterministic setup charge reserved before compilation
@@ -75,9 +77,10 @@ WASM has higher fixed evaluation overhead (including module compile and
 instantiate, no cache yet); these samples cross between N=50 and N=100.
 Short-run timing varies, so this is not a precise, stable crossover N.
 
-Each WASM row includes **8,382 setup fuel** (839 AVM units before execution).
-At N=50, the remaining 1,938 fuel is execution/lazy translation, so the total
-cost is `ceil((8382 + 1938) / 10) = 1032`, versus 688 at 15:1.
+Each WASM row includes **8,382 setup fuel** (839 AVM units before execution)
+at the weights in force when measured; the fixture is 8,032 fuel at the current
+weights. At N=50, the remaining 1,938 fuel is execution/lazy translation, so
+the total cost was `ceil((8382 + 1938) / 10) = 1032`, versus 688 at 15:1.
 Setup is charged once per evaluation, not per iteration. This fixture no longer
 fits a single default 700-unit app budget even at N=0; it needs pooled budget.
 
@@ -400,18 +403,25 @@ compiling the module, building the linker, or allocating guest memory/tables:
 setup fuel = 5000
            + 6   × module bytes (including custom sections and data)
            + 180 × functions (defined + imported)
-           + 300 × function types
+           + 150 × function types
            + 4   × signature values (params + results, per function/import)
-           + 150 × globals
+           + 100 × globals
            + 400 × exports
            + 100 × data/element segments (active, passive, or declared)
-           + 350 × initial 64 KiB memory pages
+           + 300 × initial 64 KiB memory pages
            + 4   × initial table entries
            + 10  × element-segment items (including overlapping segments)
 ```
 
 These are conservative, rounded **consensus constants**, not runtime timers or
-cache-dependent discounts. The base covers fixed work and teardown; byte pricing
+cache-dependent discounts. Each weight keeps the size sweep that isolates it at
+or under about 0.8 ns/fuel. The type, global, and memory-page weights were
+lowered from 300, 150, and 350 after the sweeps below measured them at about
+124, 91, and 245 ns per entity, which had left those terms at 0.40, 0.51, and
+0.68 ns/fuel; the other weights were already within 0.7 to 0.8 on their sweeps.
+Timing tables elsewhere in this document that include a setup charge predate
+that change: subtract 150 per type, 50 per global, and 50 per memory page to
+restate them. The base covers fixed work and teardown; byte pricing
 covers scanning and eager validation. Entity counts account for work not captured
 by encoded length: many tiny functions, globals, exports, repeated large
 signatures, and zero-length segments. Charging all module bytes deliberately
@@ -457,31 +467,35 @@ are **microseconds per module**. Setup total also includes engine/linker creatio
 
 | module | bytes | preflight | compile | instantiate | setup total | teardown | setup fuel | ns/fuel |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| minimal `program` | 40 | 0.21 | 1.42 | 0.34 | 2.65 | 0.55 | 6,124 | 0.52 |
-| 1 memory page | 45 | 0.23 | 1.53 | 0.73 | 3.16 | 0.60 | 6,504 | 0.58 |
-| 16 memory pages | 45 | 0.21 | 1.47 | 4.45 | 6.78 | 0.55 | 11,754 | 0.62 |
-| 64 memory pages (4 MiB) | 45 | 0.21 | 1.43 | 16.21 | 18.49 | 0.55 | 28,554 | 0.67 |
-| 15,000 active data bytes | 15,055 | 0.26 | 1.99 | 0.90 | 3.85 | 0.60 | 96,664 | 0.05 |
-| 100 unused functions | 641 | 1.89 | 14.89 | 1.23 | 18.70 | 0.82 | 28,130 | 0.69 |
-| 1,000 unused functions | 6,045 | 16.66 | 135.76 | 8.96 | 162.35 | 3.37 | 226,154 | 0.73 |
-| 2,000 unused functions | 12,045 | 33.24 | 269.96 | 17.60 | 321.59 | 4.90 | 446,154 | 0.73 |
-| 12,000 nops | 12,042 | 0.21 | 25.54 | 0.35 | 26.81 | 0.56 | 78,136 | 0.35 |
-| 4,000 nested blocks | 12,042 | 0.21 | 60.61 | 0.38 | 61.95 | 0.66 | 78,136 | 0.80 |
-| 1,000 globals | 5,045 | 0.23 | 88.34 | 7.05 | 96.28 | 0.98 | 186,154 | 0.52 |
-| 1,000 extra types | 3,043 | 26.18 | 102.94 | 0.38 | 130.05 | 0.59 | 324,142 | 0.40 |
-| 1,000 empty data segments | 5,050 | 0.26 | 85.56 | 10.19 | 96.53 | 1.38 | 136,534 | 0.72 |
-| 100 functions sharing 256 params | 715 | 2.73 | 68.51 | 1.23 | 73.24 | 0.90 | 130,874 | 0.57 |
-| 1,000 extra exports | 6,952 | 0.32 | 170.54 | 138.94 | 312.17 | 18.62 | 448,076 | 0.74 |
-| 1,024 null table entries | 47 | 0.22 | 1.50 | 0.45 | 2.85 | 0.58 | 10,262 | 0.33 |
-| 1,024 active element items | 1,101 | 0.66 | 8.75 | 2.96 | 13.03 | 0.88 | 27,406 | 0.51 |
-| 32,768 compressed locals | 44 | 0.21 | 1.90 | 0.34 | 3.12 | 0.57 | 6,148 | 0.60 |
-| `app_fib.wasm` | 208 | 0.36 | 2.49 | 0.83 | 4.41 | 0.62 | 8,382 | 0.60 |
-| `ed25519_dalek.wasm` | 4,761 | 1.40 | 19.89 | 5.57 | 27.59 | 0.91 | 48,160 | 0.59 |
-| `app_rust_counter.wasm` | 560 | 0.63 | 4.90 | 5.39 | 11.64 | 0.75 | 18,312 | 0.64 |
-| `app_rust_signed_claim.wasm` | 4,522 | 1.64 | 20.33 | 6.02 | 28.71 | 0.94 | 48,202 | 0.60 |
+| minimal `program` | 40 | 0.19 | 1.36 | 0.32 | 2.56 | 0.50 | 5,974 | 0.51 |
+| 1 memory page | 45 | 0.21 | 1.49 | 0.65 | 3.03 | 0.55 | 6,304 | 0.57 |
+| 16 memory pages | 45 | 0.21 | 1.42 | 4.30 | 6.61 | 0.53 | 10,804 | 0.66 |
+| 64 memory pages (4 MiB) | 45 | 0.24 | 1.47 | 16.18 | 18.52 | 0.55 | 25,204 | 0.76 |
+| 15,000 active data bytes | 15,055 | 0.24 | 1.95 | 0.87 | 3.78 | 0.57 | 96,464 | 0.05 |
+| 100 unused functions | 641 | 1.78 | 14.44 | 1.14 | 18.06 | 0.80 | 27,980 | 0.67 |
+| 1,000 unused functions | 6,045 | 16.06 | 130.75 | 8.70 | 156.26 | 3.25 | 226,004 | 0.71 |
+| 2,000 unused functions | 12,045 | 31.94 | 260.09 | 16.96 | 309.80 | 4.74 | 446,004 | 0.71 |
+| 12,000 nops | 12,042 | 0.20 | 24.63 | 0.34 | 25.88 | 0.53 | 77,986 | 0.34 |
+| 4,000 nested blocks | 12,042 | 0.23 | 58.58 | 0.39 | 59.92 | 0.62 | 77,986 | 0.78 |
+| 1,000 globals | 5,045 | 0.24 | 85.72 | 6.82 | 93.45 | 0.97 | 136,004 | 0.69 |
+| 1,000 extra types | 3,043 | 25.56 | 101.23 | 0.36 | 128.01 | 0.65 | 173,992 | 0.74 |
+| 1,000 empty data segments | 5,050 | 0.26 | 82.04 | 9.51 | 92.57 | 1.47 | 136,334 | 0.69 |
+| 100 functions sharing 256 params | 715 | 2.67 | 66.08 | 1.18 | 70.71 | 0.89 | 130,574 | 0.55 |
+| 1,000 extra exports | 6,952 | 0.32 | 148.26 | 144.87 | 294.86 | 26.69 | 447,776 | 0.72 |
+| 1,024 null table entries | 47 | 0.23 | 1.51 | 0.44 | 2.90 | 0.57 | 10,112 | 0.34 |
+| 1,024 active element items | 1,101 | 0.65 | 8.36 | 2.88 | 12.62 | 0.88 | 27,106 | 0.50 |
+| 32,768 compressed locals | 44 | 0.20 | 1.83 | 0.33 | 3.05 | 0.60 | 5,998 | 0.61 |
+| `app_fib.wasm` | 208 | 0.36 | 2.37 | 0.85 | 4.34 | 0.63 | 8,032 | 0.62 |
+| `ed25519_dalek.wasm` | 4,761 | 1.35 | 18.90 | 5.33 | 26.36 | 0.87 | 45,460 | 0.60 |
+| `app_rust_counter.wasm` | 560 | 0.63 | 4.78 | 5.33 | 11.37 | 0.71 | 16,512 | 0.73 |
+| `app_rust_signed_claim.wasm` | 4,522 | 1.54 | 19.49 | 5.84 | 27.68 | 0.92 | 45,052 | 0.63 |
+| `app_avm_sdk_counter.wasm` | 5,242 | 1.80 | 25.73 | 5.87 | 34.17 | 0.95 | 51,650 | 0.68 |
+| `app_avm_sdk_arc4_counter.wasm` | 1,589 | 1.10 | 10.19 | 1.63 | 13.64 | 0.85 | 20,158 | 0.72 |
+| `app_avm_sdk_arc4_types.wasm` | 5,797 | 1.78 | 27.39 | 1.73 | 31.63 | 0.96 | 49,966 | 0.65 |
 
-Across all 150 case/run combinations, the highest measured setup-plus-teardown
-ratio was **0.98 ns/fuel**. This is empirical headroom on this machine, not a
+Across all 165 case/run combinations at the current weights, the highest
+measured setup-plus-teardown ratio was **0.84 ns/fuel**, for 4,000 nested
+blocks; the lowered type, global, and memory-page terms peak at 0.77. This is empirical headroom on this machine, not a
 proof of a universal bound. Some synthetic cases intentionally exceed a normal
 LogicSig/app allowance; the harness supplies a large budget to measure them.
 The data-heavy row shows the deliberate conservatism of uniform byte pricing.

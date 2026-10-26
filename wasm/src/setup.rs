@@ -23,16 +23,17 @@ use wasmparser::{ElementItems, Encoding, Parser, Payload, TypeRef};
 pub(crate) const MAX_MODULE_BYTES: usize = 16 * 1024;
 
 // Fixed consensus weights, calibrated conservatively from the size sweeps in
-// WASM_PERF.md at approximately 1 ns/fuel. Never depend on clocks or caches.
+// WASM_PERF.md at approximately 1 ns/fuel: each weight keeps the sweep that
+// isolates it at or under 0.8 ns/fuel. Never depend on clocks or caches.
 const BASE: u64 = 5_000;
 const BYTE: u64 = 6;
 const FUNCTION: u64 = 180; // imports as well as definitions
-const TYPE: u64 = 300;
+const TYPE: u64 = 150; // measured ~124 ns each
 const SIGNATURE_VALUE: u64 = 4; // params/results revalidated per function/import
-const GLOBAL: u64 = 150;
+const GLOBAL: u64 = 100; // measured ~91 ns each
 const EXPORT: u64 = 400;
 const SEGMENT: u64 = 100; // data and element segments, including passive ones
-const MEMORY_PAGE: u64 = 350;
+const MEMORY_PAGE: u64 = 300; // measured ~245 ns each after the first
 const TABLE_ENTRY: u64 = 4;
 const ELEMENT_ITEM: u64 = 10; // includes passive/declared/overlapping segments
 

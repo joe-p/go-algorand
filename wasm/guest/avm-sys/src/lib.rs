@@ -14,14 +14,13 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with go-algorand.  If not, see <https://www.gnu.org/licenses/>.
 
-//! Idiomatic, safe Rust bindings for the WASM `env` host functions.
+//! Unopinionated Rust declarations for the AVM WASM `env` host ABI.
 //!
-//! A WASM program is a WebAssembly module whose bytes begin with the `\0asm`
-//! magic. It can be a LogicSig's `Logic` or an application's approval /
-//! clear-state program. The module must export `program`, and may import a small
-//! set of functions from the `env` module. This crate wraps those imports in
-//! typed, safe Rust so a guest never has to touch raw pointers or error
-//! sentinels.
+//! This crate is a 1:1 binding layer: each function corresponds to one import,
+//! with typed error sentinels and the raw `TxnField` discriminants. It contains
+//! no policy, no allocator, and no approval or entry-point abstractions. Most
+//! programs should use `avm-sdk`, which re-exports these items and adds typed
+//! state, transaction helpers, and the `program_entry` macro.
 //!
 //! The guest ABI (see `wasm/README.md`) is:
 //!
@@ -43,9 +42,8 @@
 //! `arg`/`arg_count` are signature-only, like the AVM's `arg` opcodes: they
 //! trap when the module runs as an application program. An application reads its
 //! arguments from the transaction instead, with [`txna_bytes`] and
-//! [`TxnField::ApplicationArgs`] (or the [`app_args_count`] / [`app_arg_into`]
-//! helpers). The `app_global_*` functions are the reverse: application-only,
-//! and they trap when the module runs as a LogicSig.
+//! [`TxnField::ApplicationArgs`]. The `app_global_*` functions are the reverse:
+//! application-only, and they trap when the module runs as a LogicSig.
 //!
 //! Some host functions *trap* rather than return an error (an invalid or
 //! out-of-version transaction field, an integer field read as bytes, or an
@@ -57,24 +55,25 @@
 //!
 //! ```ignore
 //! #![no_std]
-//! use wasm_guest::{arg_into, ed25519_verify_bare, entry};
+//! use avm_sys::{arg_into, ed25519_verify_bare};
 //!
-//! entry!(|| {
+//! #[no_mangle]
+//! pub extern "C" fn program() -> i32 {
 //!     let mut data = [0u8; 4096];
 //!     let mut sig = [0u8; 64];
 //!     let mut pk = [0u8; 32];
 //!     let data_len = match arg_into(0, &mut data) {
 //!         Ok(d) => d.len(),
-//!         Err(_) => return false,
+//!         Err(_) => return 0,
 //!     };
 //!     if arg_into(1, &mut sig).is_err() || arg_into(2, &mut pk).is_err() {
-//!         return false;
+//!         return 0;
 //!     }
-//!     ed25519_verify_bare(&data[..data_len], &sig, &pk)
-//! });
+//!     if ed25519_verify_bare(&data[..data_len], &sig, &pk) { 1 } else { 0 }
+//! }
 //! ```
 //!
-//! This crate is `no_std`; it does not allocate.
+//! This crate is `no_std` and does not allocate.
 
 #![no_std]
 
@@ -135,7 +134,7 @@ mod sys {
     macro_rules! unavailable {
         ($name:literal) => {
             panic!(concat!(
-                "wasm_guest::",
+                "avm_sys::",
                 $name,
                 " is only available on wasm32 (inside a WASM LogicSig)"
             ))
@@ -337,7 +336,7 @@ pub fn arg_count() -> u32 {
 /// pass a buffer at least as large as the argument (`MAX_ARG_BYTES` always
 /// suffices). On error nothing is written and the argument is not marked read.
 #[inline]
-pub fn arg_into<'a>(index: u32, buf: &'a mut [u8]) -> Result<&'a [u8], ArgError> {
+pub fn arg_into(index: u32, buf: &mut [u8]) -> Result<&[u8], ArgError> {
     let ret = unsafe {
         sys::arg(
             index as i32,
@@ -427,30 +426,6 @@ pub fn txna_bytes(field: TxnField, index: u32, buf: &mut [u8]) -> Result<usize, 
             _ => TxnError::Unknown,
         })
     }
-}
-
-/// The number of application arguments, for an application program.
-///
-/// Equivalent to the AVM's `txn NumAppArgs`.
-#[inline]
-pub fn app_args_count() -> u32 {
-    txn_uint(TxnField::NumAppArgs) as u32
-}
-
-/// Copies application argument `index` into `buf`, returning the bytes written.
-///
-/// An application reads its arguments here: `arg`/`arg_into` are signature-only
-/// and trap in an application. The index is resolved by the host, so an
-/// out-of-range index traps the guest; check [`app_args_count`] first when the
-/// index is untrusted. If `buf` is too small the call returns
-/// [`TxnError::BufferTooSmall`] and nothing is written.
-#[inline]
-pub fn app_arg_into<'a>(index: u32, buf: &'a mut [u8]) -> Result<&'a [u8], TxnError> {
-    let len = txna_bytes(TxnField::ApplicationArgs, index, buf)?;
-    if len > buf.len() {
-        return Err(TxnError::BufferTooSmall);
-    }
-    Ok(&buf[..len])
 }
 
 /// Reads the uint64 global `key` from the current application, the AVM's
@@ -543,54 +518,4 @@ pub fn ed25519_verify_bare(data: &[u8], sig: &[u8; 64], pk: &[u8; 32]) -> bool {
         )
     };
     ret == 1
-}
-
-/// Defines the module's `program` export from a fallible body.
-///
-/// The body is an expression callable as `FnOnce() -> R`, where `R` implements
-/// [`Approve`]. It may be a closure or a function path. `true` / `Ok(())`
-/// approves; `false` / `Err(_)` rejects.
-///
-/// ```ignore
-/// wasm_guest::entry!(|| {
-///     let mut buf = [0u8; 4096];
-///     arg_into(0, &mut buf).is_ok()
-/// });
-/// ```
-#[macro_export]
-macro_rules! entry {
-    ($body:expr) => {
-        #[no_mangle]
-        pub extern "C" fn program() -> i32 {
-            let approve: bool = $crate::Approve::approve(($body)());
-            if approve {
-                1
-            } else {
-                0
-            }
-        }
-    };
-}
-
-/// Converts a `Result<(), E>`-shaped value into an approval decision.
-///
-/// Used by [`entry!`]: `Ok(())` approves and `Err(_)` rejects. Exposed as a
-/// trait so guest bodies can return either a `bool` or a `Result`.
-pub trait Approve {
-    /// Whether the guest approves the transaction.
-    fn approve(self) -> bool;
-}
-
-impl Approve for bool {
-    #[inline]
-    fn approve(self) -> bool {
-        self
-    }
-}
-
-impl<E> Approve for Result<(), E> {
-    #[inline]
-    fn approve(self) -> bool {
-        self.is_ok()
-    }
 }

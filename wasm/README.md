@@ -161,7 +161,8 @@ to `.wasm` with:
 cargo run --example wat2wasm -- <input.wat> <output.wasm>
 ```
 
-Guest programs can also be written in Rust. The guest SDK lives in `wasm/guest`
-(safe host bindings, the host-backed `ed25519-dalek`, and an example); see
-`wasm/guest/README.md`. `make wasm-guest-fixtures` rebuilds the committed Rust
-guest fixture `data/transactions/logic/testdata/wasm/ed25519_dalek.wasm`.
+Guest programs can also be written in Rust. `wasm/guest/` contains `avm-sys`
+(the unopinionated `env` ABI bindings) and `avm-sdk` (typed helpers, the
+host-backed `ed25519-dalek`, and examples); see `wasm/guest/README.md`. `make
+wasm-guest-fixtures` rebuilds the committed Rust guest fixtures under
+`data/transactions/logic/testdata/wasm/`.

@@ -171,7 +171,7 @@ wasmlib:
 	@command -v cargo >/dev/null 2>&1 || { echo "cargo (Rust toolchain) is required to build the WASM LogicSig executor: https://rustup.rs"; exit 1; }
 	cargo build --release --locked --manifest-path wasm/Cargo.toml
 
-# Build the Rust guest WASM fixtures loaded by the Go tests.
+# Build the Rust guest WASM fixtures loaded by the Rust and Go tests.
 wasm-guest-fixtures:
 	@command -v cargo >/dev/null 2>&1 || { echo "cargo (Rust toolchain) is required to build the WASM LogicSig guest fixtures: https://rustup.rs"; exit 1; }
 	cargo build --release --locked --manifest-path wasm/guest/Cargo.toml -p ed25519-verify --target wasm32-unknown-unknown
@@ -179,6 +179,8 @@ wasm-guest-fixtures:
 	cargo build --release --locked --manifest-path wasm/guest/Cargo.toml -p rust-counter -p rust-signed-claim --target wasm32-unknown-unknown
 	cp wasm/guest/target/wasm32-unknown-unknown/release/rust_counter.wasm data/transactions/logic/testdata/wasm/app_rust_counter.wasm
 	cp wasm/guest/target/wasm32-unknown-unknown/release/rust_signed_claim.wasm data/transactions/logic/testdata/wasm/app_rust_signed_claim.wasm
+	cargo build --release --locked --manifest-path wasm/guest/Cargo.toml -p avm-sdk-counter --target wasm32-unknown-unknown
+	cp wasm/guest/target/wasm32-unknown-unknown/release/avm_sdk_counter.wasm data/transactions/logic/testdata/wasm/app_avm_sdk_counter.wasm
 
 # Print the per-opcode wall-clock/fuel table (metering calibration harness).
 # The host-function table is the gated Go test:

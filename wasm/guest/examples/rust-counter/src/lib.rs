@@ -25,7 +25,7 @@
 
 #![cfg_attr(target_arch = "wasm32", no_std)]
 
-use wasm_guest::{
+use avm_sdk::{
     app_arg_into, app_global_get_uint, app_global_put_uint, entry, txn_bytes, txn_uint, TxnField,
 };
 

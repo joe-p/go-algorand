@@ -27,7 +27,8 @@ use wasm_lsig::{wasm_lsig_run, WasmLsigArg};
 const DATA: &[u8] = b"wasm ed25519-dalek guest end to end";
 const SIG_BYTE: u8 = 0xAB;
 const PK_BYTE: u8 = 0xCD;
-const FUEL: u64 = 20000;
+// A 20,000-cost LogicSig budget is 200,000 fuel at the executor's 10:1 rate.
+const FUEL: u64 = 200_000;
 
 // Matches `ARGS_READ_WORDS` in the executor (255 args / 64 bits per word).
 const ARGS_READ_WORDS: usize = 4;

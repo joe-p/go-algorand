@@ -27,4 +27,4 @@ name = "rust_counter"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-wasm-guest = { path = "../../host" }
+avm-sdk = { path = "../../avm-sdk" }

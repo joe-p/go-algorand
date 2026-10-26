@@ -594,7 +594,7 @@ impl VerifyingKey {
         message: &[u8],
         signature: &ed25519::Signature,
     ) -> Result<(), SignatureError> {
-        if wasm_guest::ed25519_verify_bare(message, &signature.to_bytes(), &self.to_bytes()) {
+        if avm_sys::ed25519_verify_bare(message, &signature.to_bytes(), &self.to_bytes()) {
             Ok(())
         } else {
             Err(InternalError::Verify.into())

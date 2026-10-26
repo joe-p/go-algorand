@@ -27,6 +27,6 @@ name = "ed25519_verify"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-wasm-guest = { path = "../../host" }
+avm-sdk = { path = "../../avm-sdk" }
 # Resolved to the host-backed fork via [patch.crates-io] in the workspace root.
 ed25519-dalek = { version = "2.2", default-features = false }

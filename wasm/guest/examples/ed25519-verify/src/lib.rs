@@ -26,8 +26,8 @@
 
 #![cfg_attr(target_arch = "wasm32", no_std)]
 
+use avm_sdk::{arg_into, entry};
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
-use wasm_guest::{arg_into, entry};
 
 entry!(|| {
     let mut data = [0u8; 4096];

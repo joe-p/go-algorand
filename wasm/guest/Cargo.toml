@@ -19,8 +19,11 @@
 [workspace]
 resolver = "2"
 members = [
-    "host",
     "ed25519-dalek",
+    "avm-sys",
+    "avm-sdk",
+    "avm-sdk-macros",
+    "examples/avm-sdk-counter",
     "examples/ed25519-verify",
     "examples/rust-counter",
     "examples/rust-signed-claim",

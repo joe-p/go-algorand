@@ -15,13 +15,17 @@
 # along with go-algorand.  If not, see <https://www.gnu.org/licenses/>.
 
 [package]
-name = "wasm-guest"
+name = "avm-sdk-macros"
 version = "0.1.0"
 edition = "2021"
 publish = false
 license = "AGPL-3.0-or-later"
-description = "Idiomatic, safe Rust bindings for the WASM LogicSig `env` host functions."
+description = "Proc macros for the avm-sdk WASM guest SDK."
 
 [lib]
-name = "wasm_guest"
-crate-type = ["rlib"]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1.0"
+quote = "1.0"
+syn = { version = "2.0", features = ["full"] }

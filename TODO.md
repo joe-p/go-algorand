@@ -168,11 +168,13 @@ Still to do:
 - [ ] Add `goal`/clerk tooling to create, compile-to-WASM, and submit WASM
       LogicSigs, mirroring the existing TEAL lsig flow.
 - [x] Provide a small guest-authoring SDK / ABI doc and example contracts.
-      `wasm/guest` contains safe host bindings (`wasm-guest`), a host-backed
-      `ed25519-dalek` fork selected via `[patch.crates-io]`, and an example guest
-      with both Rust and Go end-to-end tests. Still to do: expose the full
-      opcode/txn surface through the SDK, and build the guest fixture in CI
-      (today only `make wasm-guest-fixtures` produces it).
+      `wasm/guest` contains the unopinionated `avm-sys` ABI bindings, the
+      `avm-sdk` layer (typed global state, transaction helpers, an `Avm` trait
+      for native tests, and an optional guest-side bump allocator), a host-backed
+      `ed25519-dalek` fork selected via `[patch.crates-io]`, and example guests
+      with Rust and Go end-to-end tests. Still to do: expose the full
+      opcode/txn surface through the SDK, and build the guest fixtures in CI
+      (today only `make wasm-guest-fixtures` produces them).
 
 ## Build & packaging
 

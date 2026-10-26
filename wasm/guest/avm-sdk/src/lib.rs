@@ -16,36 +16,59 @@
 
 //! An opinionated SDK for authoring WASM programs for the AVM.
 //!
-//! `avm-sdk` wraps the raw [`avm_sys`] ABI bindings (the `arg`, `txn`,
+//! `avm-sdk` wraps the [`avm_sys`] ABI bindings (the `arg`, `txn`,
 //! global-state, and `ed25519verify_bare` imports) and adds:
 //!
-//! - [`Avm`], a trait abstracting the host, so guest logic can be tested with a
-//!   native mock instead of the executor.
-//! - [`GlobalUint`] and [`GlobalBytes`], typed handles for the current
-//!   application's global state.
-//! - [`AvmExt`], typed transaction helpers (`sender`, `application_id`,
-//!   application arguments, and `ed25519verify_bare`).
-//! - [`program_entry`], an attribute macro that exports `program() -> i32` and
-//!   can optionally install a guest-side bump allocator.
+//! - [`arg`], [`txn`], and [`global`]: the host operations as free functions,
+//!   plus typed helpers (`txn::sender`, `txn::app_arg_into`, ...).
+//! - [`GlobalUint`] and [`GlobalBytes`], `const`-constructible handles for the
+//!   current application's global state.
+//! - [`contract`], an attribute macro for a contract's state struct and its
+//!   `impl` block. On the struct it derives each key from the field name and
+//!   computes the global-state schema ([`Contract`]); on the impl it exports
+//!   `program() -> i32` calling `approve(&self)`.
+//! - [`arc4`]: `#[abimethod]`s in a `#[contract]` impl are routed by ARC-4
+//!   method selector, with their arguments decoded into Rust types.
+//! - [`program_entry`], the same export for a free function.
+//! - Both macros can install a guest-side bump allocator with `alloc`.
 //! - [`entry!`], the lower-level macro for a closure body.
 //!
-//! The crate is `no_std` (except when running its own tests) and does not
-//! allocate unless the guest opts in with `#[program_entry(alloc)]`.
+//! Every helper reaches the host through [`host`]. On wasm that is the concrete
+//! [`HostAvm`], so calls compile to direct imports. On native builds it is the
+//! mock installed with `avm_sdk::testing::set_host`, so the same program code
+//! runs in unit tests. The SDK does not re-export the raw `avm_sys` functions,
+//! which would bypass the mock; depend on `avm-sys` directly to use them.
+//!
+//! The crate is `no_std` on wasm and does not allocate unless the guest opts in
+//! with `#[program_entry(alloc)]`.
 //!
 //! # Example
 //!
 //! ```ignore
-//! use avm_sdk::{ActiveAvm, AvmExt, Error, GlobalUint, program_entry};
+//! use avm_sdk::{contract, txn, Error, GlobalUint};
 //!
-//! #[program_entry]
-//! fn approve(avm: ActiveAvm) -> Result<(), Error> {
-//!     if avm.application_id() == 0 {
-//!         return Ok(());
-//!     }
-//!     let count = GlobalUint::<u64>::new(avm, b"count");
-//!     count.set(count.get() + 1);
-//!     Ok(())
+//! #[contract]
+//! pub struct Counter {
+//!     count: GlobalUint,
 //! }
+//!
+//! #[contract]
+//! impl Counter {
+//!     pub fn approve(&self) -> Result<(), Error> {
+//!         if txn::application_id() == 0 {
+//!             return Ok(());
+//!         }
+//!         self.count.set(self.count.get() + 1);
+//!         Ok(())
+//!     }
+//! }
+//! ```
+//!
+//! Native tests install a mock host and run the same code:
+//!
+//! ```ignore
+//! let _host = avm_sdk::testing::set_host(MockAvm::default());
+//! assert!(Counter::new().approve().is_ok());
 //! ```
 //!
 //! The host ABI copies into caller-provided buffers and supports length queries
@@ -53,30 +76,49 @@
 //! program benefits from `Vec`/`String`; the allocator is a bump arena and
 //! `dealloc` is a no-op, matching the per-invocation lifetime of the VM.
 
-#![cfg_attr(not(test), no_std)]
+#![cfg_attr(target_arch = "wasm32", no_std)]
 
 mod avm;
 #[cfg(any(target_arch = "wasm32", test))]
 mod bump;
 mod error;
-mod state;
-mod txn;
+
+pub mod arc4;
+pub mod arg;
+pub mod global;
+pub mod txn;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub mod testing;
 
 #[cfg(target_arch = "wasm32")]
 mod alloc;
 #[cfg(target_arch = "wasm32")]
 pub use alloc::BumpAllocator;
 
-pub use avm::{host, ActiveAvm, Avm, HostAvm, HOST_AVM};
-pub use avm_sdk_macros::program_entry;
-pub use avm_sys::{
-    app_global_del, app_global_get_bytes, app_global_get_uint, app_global_put_bytes,
-    app_global_put_uint, arg_count, arg_into, ed25519_verify_bare, txn_bytes, txn_uint, txna_bytes,
-    txna_uint, ArgError, TxnError, TxnField, MAX_ARG_BYTES,
-};
+pub use avm::{host, Avm, Host, HostAvm};
+pub use avm_sdk_macros::{contract, program_entry};
+pub use avm_sys::{ArgError, TxnError, TxnField, MAX_ARG_BYTES};
 pub use error::Error;
-pub use state::{GlobalBytes, GlobalUint};
-pub use txn::{app_arg_into, app_args_count, AvmExt};
+pub use global::{GlobalBytes, GlobalUint, StateField};
+
+/// A contract's global-state schema, implemented by `#[contract]`.
+///
+/// An application declares how many global uint64 and byte-string slots it
+/// uses when it is created; these are the counts from the struct's fields.
+pub trait Contract {
+    /// Global uint64 slots the contract uses.
+    const GLOBAL_UINTS: u32;
+    /// Global byte-string slots the contract uses.
+    const GLOBAL_BYTES: u32;
+}
+
+/// Verifies an ed25519 signature with the AVM's `ed25519verify_bare`
+/// semantics.
+#[inline]
+pub fn ed25519_verify_bare(data: &[u8], sig: &[u8; 64], pk: &[u8; 32]) -> bool {
+    host().ed25519_verify_bare(data, sig, pk)
+}
 
 /// Runtime trap used when the AVM would fail the program.
 ///
@@ -94,7 +136,7 @@ pub fn trap() -> ! {
 /// Converts a guest body's return value into an approval decision.
 ///
 /// `true` and `Ok(())` approve; `false` and `Err(_)` reject. Used by
-/// [`program_entry`].
+/// [`contract`] and [`program_entry`].
 pub trait Approve {
     /// Whether the program approves the transaction.
     fn approve(self) -> bool;
@@ -104,6 +146,13 @@ impl Approve for bool {
     #[inline]
     fn approve(self) -> bool {
         self
+    }
+}
+
+impl Approve for () {
+    #[inline]
+    fn approve(self) -> bool {
+        true
     }
 }
 
@@ -123,7 +172,7 @@ impl<E> Approve for Result<(), E> {
 /// ```ignore
 /// avm_sdk::entry!(|| {
 ///     let mut buf = [0u8; 4096];
-///     arg_into(0, &mut buf).is_ok()
+///     avm_sdk::arg::get(0, &mut buf).is_ok()
 /// });
 /// ```
 #[macro_export]

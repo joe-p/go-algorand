@@ -11,6 +11,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "avm-sdk-arc4-counter"
+version = "0.1.0"
+dependencies = [
+ "avm-sdk",
+]
+
+[[package]]
+name = "avm-sdk-arc4-types"
+version = "0.1.0"
+dependencies = [
+ "avm-sdk",
+]
+
+[[package]]
 name = "avm-sdk-counter"
 version = "0.1.0"
 dependencies = [
@@ -23,6 +37,7 @@ version = "0.1.0"
 dependencies = [
  "proc-macro2",
  "quote",
+ "sha2",
  "syn 2.0.119",
 ]
 
@@ -188,6 +203,7 @@ name = "ed25519-verify"
 version = "0.1.0"
 dependencies = [
  "avm-sdk",
+ "avm-sys",
  "ed25519-dalek",
 ]
 
@@ -354,6 +370,7 @@ name = "rust-counter"
 version = "0.1.0"
 dependencies = [
  "avm-sdk",
+ "avm-sys",
 ]
 
 [[package]]
@@ -361,6 +378,7 @@ name = "rust-signed-claim"
 version = "0.1.0"
 dependencies = [
  "avm-sdk",
+ "avm-sys",
  "ed25519-dalek",
 ]
 

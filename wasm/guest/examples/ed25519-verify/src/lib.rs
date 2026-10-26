@@ -26,7 +26,8 @@
 
 #![cfg_attr(target_arch = "wasm32", no_std)]
 
-use avm_sdk::{arg_into, entry};
+use avm_sdk::entry;
+use avm_sys::arg_into;
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 
 entry!(|| {

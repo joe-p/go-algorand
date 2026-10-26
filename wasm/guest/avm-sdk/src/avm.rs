@@ -18,13 +18,11 @@
 
 use avm_sys::{self, ArgError, TxnError, TxnField};
 
-/// A borrowed handle to the active host implementation.
-///
-/// Program entry points receive one and pass it to typed helpers; tests can
-/// supply a mock instead.
-pub type ActiveAvm = &'static dyn Avm;
-
 /// Every host operation the current ABI exposes.
+///
+/// Program code does not take a host; the SDK helpers resolve it through
+/// [`host`]. The trait exists so native tests can install a mock with
+/// [`crate::testing::set_host`].
 ///
 /// The methods mirror the raw bindings one-for-one. Cases the host traps (an
 /// invalid transaction field, an oversized value, a type mismatch) are not
@@ -70,17 +68,39 @@ pub trait Avm {
     fn ed25519_verify_bare(&self, data: &[u8], sig: &[u8; 64], pk: &[u8; 32]) -> bool;
 }
 
-/// The host implementation backed by the real `env` imports.
-pub struct HostAvm;
+/// The active host type.
+///
+/// On wasm this is the concrete [`HostAvm`], so the compiler can inline the host
+/// wrappers. Native tests install a mock with [`crate::testing::set_host`], and
+/// `Host` is then `dyn Avm`.
+#[cfg(target_arch = "wasm32")]
+pub type Host = HostAvm;
 
-/// The process-wide [`HostAvm`] value.
-pub static HOST_AVM: HostAvm = HostAvm;
+#[cfg(not(target_arch = "wasm32"))]
+pub type Host = dyn Avm;
 
 /// Returns the active host.
-#[inline]
-pub fn host() -> ActiveAvm {
+///
+/// On wasm this is a constant reference to the [`HostAvm`]. On native builds it
+/// reads the thread-local test host installed by [`crate::testing::set_host`].
+#[cfg(target_arch = "wasm32")]
+pub fn host() -> &'static Host {
     &HOST_AVM
 }
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn host() -> &'static Host {
+    crate::testing::current_host()
+}
+
+/// The production host backed by the real `env` imports.
+///
+/// On wasm this is the only [`Host`]. Native tests swap in a mock via
+/// [`crate::testing::set_host`].
+pub struct HostAvm;
+
+#[cfg(target_arch = "wasm32")]
+static HOST_AVM: HostAvm = HostAvm;
 
 impl Avm for HostAvm {
     #[inline]

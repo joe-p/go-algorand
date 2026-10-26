@@ -14,93 +14,93 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with go-algorand.  If not, see <https://www.gnu.org/licenses/>.
 
-//! Typed transaction helpers.
+//! The current transaction's fields.
 
-use avm_sys::{txn_uint, txna_bytes, TxnError, TxnField, MAX_ARG_BYTES};
+use avm_sys::{TxnError, TxnField, MAX_ARG_BYTES};
 
-use crate::{Avm, Error};
+#[cfg(target_arch = "wasm32")]
+use crate::Avm;
+use crate::{host, Error};
+
+/// Reads a uint64 transaction field. Traps if the field is invalid or is a
+/// byte-string field.
+#[inline]
+pub fn uint(field: TxnField) -> u64 {
+    host().txn_uint(field)
+}
+
+/// Copies a byte-string transaction field into `buf`, returning its length.
+///
+/// A returned length greater than `buf.len()` means the buffer was too small and
+/// nothing was written.
+#[inline]
+pub fn bytes(field: TxnField, buf: &mut [u8]) -> Result<usize, TxnError> {
+    host().txn_bytes(field, buf)
+}
+
+/// Reads element `index` of a uint64 array transaction field.
+#[inline]
+pub fn array_uint(field: TxnField, index: u32) -> u64 {
+    host().txna_uint(field, index)
+}
+
+/// Copies element `index` of a byte-string array transaction field into `buf`,
+/// returning its length.
+#[inline]
+pub fn array_bytes(field: TxnField, index: u32, buf: &mut [u8]) -> Result<usize, TxnError> {
+    host().txna_bytes(field, index, buf)
+}
+
+/// Reads the current transaction's sender, which is always 32 bytes.
+#[inline]
+pub fn sender() -> Result<[u8; 32], Error> {
+    let mut buf = [0u8; 32];
+    let len = bytes(TxnField::Sender, &mut buf)?;
+    if len != buf.len() {
+        return Err(Error::WrongLength {
+            expected: buf.len(),
+            got: len,
+        });
+    }
+    Ok(buf)
+}
+
+/// The current application's ID, or 0 during creation.
+#[inline]
+pub fn application_id() -> u64 {
+    uint(TxnField::ApplicationID)
+}
 
 /// The number of application arguments, for an application program.
 ///
 /// Equivalent to the AVM's `txn NumAppArgs`.
 #[inline]
 pub fn app_args_count() -> u32 {
-    txn_uint(TxnField::NumAppArgs) as u32
+    uint(TxnField::NumAppArgs) as u32
 }
 
 /// Copies application argument `index` into `buf`, returning the bytes written.
 ///
-/// An application reads its arguments here: `arg`/`arg_into` are signature-only
-/// and trap in an application. The index is resolved by the host, so an
-/// out-of-range index traps the guest; check [`app_args_count`] first when the
-/// index is untrusted. If `buf` is too small the call returns
+/// Equivalent to the AVM's `txna ApplicationArgs index`. An application reads
+/// its arguments this way; LogicSig arguments come from [`crate::arg`].
+///
+/// If the argument is larger than `buf`, the call returns
 /// [`TxnError::BufferTooSmall`] and nothing is written.
 #[inline]
 pub fn app_arg_into(index: u32, buf: &mut [u8]) -> Result<&[u8], TxnError> {
-    let len = txna_bytes(TxnField::ApplicationArgs, index, buf)?;
+    let len = array_bytes(TxnField::ApplicationArgs, index, buf)?;
     if len > buf.len() {
         return Err(TxnError::BufferTooSmall);
     }
     Ok(&buf[..len])
 }
 
-/// Convenience methods on top of [`Avm`].
-pub trait AvmExt {
-    /// Reads the current transaction's sender, which is always 32 bytes.
-    fn sender(&self) -> Result<[u8; 32], Error>;
-
-    /// The current application's ID, or 0 during creation.
-    fn application_id(&self) -> u64;
-
-    /// The number of application arguments.
-    fn app_args_count(&self) -> u32;
-
-    /// Copies application argument `index` into `buf`.
-    fn app_arg_into<'buf>(&self, index: u32, buf: &'buf mut [u8]) -> Result<&'buf [u8], TxnError>;
-
-    /// Returns whether application argument `index` equals `expected`.
-    fn app_arg_eq(&self, index: u32, expected: &[u8]) -> bool;
-}
-
-impl<T: Avm + ?Sized> AvmExt for T {
-    #[inline]
-    fn sender(&self) -> Result<[u8; 32], Error> {
-        let mut buf = [0u8; 32];
-        let len = self.txn_bytes(TxnField::Sender, &mut buf)?;
-        if len != buf.len() {
-            return Err(Error::WrongLength {
-                expected: buf.len(),
-                got: len,
-            });
-        }
-        Ok(buf)
-    }
-
-    #[inline]
-    fn application_id(&self) -> u64 {
-        self.txn_uint(TxnField::ApplicationID)
-    }
-
-    #[inline]
-    fn app_args_count(&self) -> u32 {
-        self.txn_uint(TxnField::NumAppArgs) as u32
-    }
-
-    #[inline]
-    fn app_arg_into<'buf>(&self, index: u32, buf: &'buf mut [u8]) -> Result<&'buf [u8], TxnError> {
-        let len = self.txna_bytes(TxnField::ApplicationArgs, index, buf)?;
-        if len > buf.len() {
-            return Err(TxnError::BufferTooSmall);
-        }
-        Ok(&buf[..len])
-    }
-
-    #[inline]
-    fn app_arg_eq(&self, index: u32, expected: &[u8]) -> bool {
-        let mut buf = [0u8; MAX_ARG_BYTES];
-        match self.app_arg_into(index, &mut buf) {
-            Ok(value) => value == expected,
-            Err(_) => false,
-        }
+/// Returns whether application argument `index` equals `expected`.
+#[inline]
+pub fn app_arg_eq(index: u32, expected: &[u8]) -> bool {
+    let mut buf = [0u8; MAX_ARG_BYTES];
+    match app_arg_into(index, &mut buf) {
+        Ok(value) => value == expected,
+        Err(_) => false,
     }
 }

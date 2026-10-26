@@ -23,6 +23,8 @@ members = [
     "avm-sys",
     "avm-sdk",
     "avm-sdk-macros",
+    "examples/avm-sdk-arc4-counter",
+    "examples/avm-sdk-arc4-types",
     "examples/avm-sdk-counter",
     "examples/ed25519-verify",
     "examples/rust-counter",

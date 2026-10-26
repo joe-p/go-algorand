@@ -33,9 +33,8 @@
 
 #![cfg_attr(target_arch = "wasm32", no_std)]
 
-use avm_sdk::{
-    app_arg_into, app_global_get_uint, app_global_put_uint, entry, txn_bytes, txn_uint, TxnField,
-};
+use avm_sdk::{entry, txn::app_arg_into};
+use avm_sys::{app_global_get_uint, app_global_put_uint, txn_bytes, txn_uint, TxnField};
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 
 /// Issuer public key derived from the seed `[0x42; 32]`.

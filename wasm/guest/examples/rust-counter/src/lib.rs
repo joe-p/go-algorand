@@ -25,9 +25,8 @@
 
 #![cfg_attr(target_arch = "wasm32", no_std)]
 
-use avm_sdk::{
-    app_arg_into, app_global_get_uint, app_global_put_uint, entry, txn_bytes, txn_uint, TxnField,
-};
+use avm_sdk::{entry, txn::app_arg_into};
+use avm_sys::{app_global_get_uint, app_global_put_uint, txn_bytes, txn_uint, TxnField};
 
 /// Largest total the counter will reach. A real contract would use a
 /// consensus-visible limit instead of a compiled-in one.

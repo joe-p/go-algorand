@@ -28,5 +28,6 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 avm-sdk = { path = "../../avm-sdk" }
+avm-sys = { path = "../../avm-sys" }
 # Resolved to the host-backed fork via [patch.crates-io] in the workspace root.
 ed25519-dalek = { version = "2.2", default-features = false }

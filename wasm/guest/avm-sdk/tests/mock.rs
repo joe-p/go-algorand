@@ -23,8 +23,10 @@
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 
+use avm_sdk::testing::set_host;
 use avm_sdk::{
-    ActiveAvm, ArgError, Avm, AvmExt, Error, GlobalBytes, GlobalUint, TxnError, TxnField,
+    arg, ed25519_verify_bare, global, txn, ArgError, Avm, Error, GlobalBytes, GlobalUint, TxnError,
+    TxnField,
 };
 
 #[derive(Clone)]
@@ -43,10 +45,6 @@ struct MockAvm {
 }
 
 impl MockAvm {
-    fn leak(self) -> ActiveAvm {
-        Box::leak(Box::new(self))
-    }
-
     fn set_uint(&self, field: TxnField, value: u64) {
         self.txn_uints.borrow_mut().insert(field as i32, value);
     }
@@ -151,22 +149,33 @@ impl Avm for MockAvm {
     }
 }
 
+/// A handle declared before any host exists; it resolves the host per access.
+const COUNT: GlobalUint = GlobalUint::new(b"count");
+
 #[test]
 fn global_uint_round_trip() {
-    let avm = MockAvm::default().leak();
-    let counter = GlobalUint::new(avm, b"count");
+    let _host = set_host(MockAvm::default());
 
-    assert_eq!(counter.get(), 0);
-    counter.set(7u64);
-    assert_eq!(counter.get(), 7);
-    counter.delete();
-    assert_eq!(counter.get(), 0);
+    assert_eq!(COUNT.get(), 0);
+    COUNT.set(7);
+    assert_eq!(COUNT.get(), 7);
+    COUNT.delete();
+    assert_eq!(COUNT.get(), 0);
+}
+
+#[test]
+fn global_uint_typed() {
+    let _host = set_host(MockAvm::default());
+    let slot = GlobalUint::<u64>::new_typed(b"typed");
+
+    slot.set(3);
+    assert_eq!(global::get_uint(b"typed"), 3);
 }
 
 #[test]
 fn global_bytes_round_trip() {
-    let avm = MockAvm::default().leak();
-    let slot = GlobalBytes::new(avm, b"name");
+    let _host = set_host(MockAvm::default());
+    let slot = GlobalBytes::new(b"name");
 
     let mut buf = [0u8; 16];
     assert_eq!(slot.try_read(&mut buf).unwrap(), b"");
@@ -181,55 +190,91 @@ fn global_bytes_round_trip() {
 }
 
 #[test]
+fn global_runtime_keys() {
+    let host = set_host(MockAvm::default());
+
+    global::put_uint(b"n", 5);
+    global::put_bytes(b"b", b"xyz");
+    assert_eq!(global::get_uint(b"n"), 5);
+    let mut buf = [0u8; 8];
+    assert_eq!(global::get_bytes(b"b", &mut buf).unwrap(), b"xyz");
+
+    global::delete(b"n");
+    assert_eq!(global::get_uint(b"n"), 0);
+    assert!(host.globals.borrow().contains_key(b"b".as_slice()));
+}
+
+#[test]
 fn transaction_helpers() {
     let avm = MockAvm::default();
     avm.set_uint(TxnField::ApplicationID, 888);
     avm.set_uint(TxnField::NumAppArgs, 2);
     avm.set_bytes(TxnField::Sender, &[0x11; 32]);
     *avm.app_args.borrow_mut() = vec![b"first".to_vec(), b"second".to_vec()];
-    let avm = avm.leak();
+    let _host = set_host(avm);
 
-    assert_eq!(avm.application_id(), 888);
-    assert_eq!(avm.app_args_count(), 2);
-    assert_eq!(avm.sender().unwrap(), [0x11; 32]);
-    assert!(avm.app_arg_eq(0, b"first"));
-    assert!(!avm.app_arg_eq(0, b"second"));
+    assert_eq!(txn::application_id(), 888);
+    assert_eq!(txn::uint(TxnField::ApplicationID), 888);
+    assert_eq!(txn::app_args_count(), 2);
+    assert_eq!(txn::sender().unwrap(), [0x11; 32]);
+    assert!(txn::app_arg_eq(0, b"first"));
+    assert!(!txn::app_arg_eq(0, b"second"));
 
     let mut buf = [0u8; 16];
-    assert_eq!(avm.app_arg_into(1, &mut buf).unwrap(), b"second");
+    assert_eq!(txn::app_arg_into(1, &mut buf).unwrap(), b"second");
 }
 
 #[test]
 fn logic_sig_arguments() {
     let avm = MockAvm::default();
     *avm.args.borrow_mut() = vec![b"signature".to_vec()];
-    let avm = avm.leak();
+    let _host = set_host(avm);
 
-    assert_eq!(avm.arg_count(), 1);
+    assert_eq!(arg::count(), 1);
     let mut buf = [0u8; 16];
-    assert_eq!(avm.arg_into(0, &mut buf).unwrap(), b"signature");
-    assert_eq!(avm.arg_into(1, &mut buf), Err(ArgError::OutOfRange));
+    assert_eq!(arg::get(0, &mut buf).unwrap(), b"signature");
+    assert_eq!(arg::get(1, &mut buf), Err(ArgError::OutOfRange));
 }
 
 #[test]
 fn crypto_helper() {
-    let avm = MockAvm::default().leak();
+    let _host = set_host(MockAvm::default());
 
-    assert!(avm.ed25519_verify_bare(b"message", &[0xAB; 64], &[0xCD; 32]));
-    assert!(!avm.ed25519_verify_bare(b"other", &[0xAB; 64], &[0xCD; 32]));
+    assert!(ed25519_verify_bare(b"message", &[0xAB; 64], &[0xCD; 32]));
+    assert!(!ed25519_verify_bare(b"other", &[0xAB; 64], &[0xCD; 32]));
 }
 
 #[test]
 fn wrong_sender_length_is_an_error() {
     let avm = MockAvm::default();
     avm.set_bytes(TxnField::Sender, &[0x11; 16]);
-    let avm = avm.leak();
+    let _host = set_host(avm);
 
     assert_eq!(
-        avm.sender(),
+        txn::sender(),
         Err(Error::WrongLength {
             expected: 32,
             got: 16
         })
     );
+}
+
+#[test]
+fn guard_restores_previous_host() {
+    let outer = MockAvm::default();
+    outer.set_uint(TxnField::ApplicationID, 1);
+    let _outer = set_host(outer);
+    {
+        let inner = MockAvm::default();
+        inner.set_uint(TxnField::ApplicationID, 2);
+        let _inner = set_host(inner);
+        assert_eq!(txn::application_id(), 2);
+    }
+    assert_eq!(txn::application_id(), 1);
+}
+
+#[test]
+#[should_panic(expected = "no AVM test host installed")]
+fn no_host_panics() {
+    txn::application_id();
 }

@@ -19,8 +19,9 @@
 //! This crate is a 1:1 binding layer: each function corresponds to one import,
 //! with typed error sentinels and the raw `TxnField` discriminants. It contains
 //! no policy, no allocator, and no approval or entry-point abstractions. Most
-//! programs should use `avm-sdk`, which re-exports these items and adds typed
-//! state, transaction helpers, and the `program_entry` macro.
+//! programs should use `avm-sdk`, which wraps these functions behind a mockable
+//! host and adds typed state, transaction helpers, and the `program_entry`
+//! macro.
 //!
 //! The guest ABI (see `wasm/README.md`) is:
 //!

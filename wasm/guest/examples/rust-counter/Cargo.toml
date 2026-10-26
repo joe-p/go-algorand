@@ -28,3 +28,4 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 avm-sdk = { path = "../../avm-sdk" }
+avm-sys = { path = "../../avm-sys" }

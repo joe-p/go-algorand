@@ -322,7 +322,13 @@ fn bootstrap_creates_pool_and_opt_ins_and_returns_id() {
         [RETURN_PREFIX.as_slice(), &POOL.to_be_bytes()].concat()
     );
     drop(inner);
-    host.rejects(|amm| amm.bootstrap(PaymentTxn::resolve(0, 1).unwrap(), Asset(A), Asset(B)));
+    host.rejects(|amm| {
+        amm.bootstrap(
+            PaymentTxn::resolve(0, 1).unwrap(),
+            Asset { id: A },
+            Asset { id: B },
+        )
+    });
 }
 
 #[test]
@@ -508,8 +514,8 @@ fn reject_malformed_deposits_before_any_inner_transaction() {
         host.rejects(|amm| {
             amm.swap(
                 AssetTransferTxn::resolve(0, 1).ok_or(Error::InvalidValue)?,
-                Asset(A),
-                Asset(B),
+                Asset { id: A },
+                Asset { id: B },
             )
         });
         assert!(host.inner.borrow().is_empty());
@@ -568,7 +574,11 @@ fn bootstrap_rejects_missing_or_oversized_unit_names() {
             }
             *host.group.borrow_mut() = vec![seed(300_000)];
             host.rejects(|amm| {
-                amm.bootstrap(PaymentTxn::resolve(0, 1).unwrap(), Asset(A), Asset(B))
+                amm.bootstrap(
+                    PaymentTxn::resolve(0, 1).unwrap(),
+                    Asset { id: A },
+                    Asset { id: B },
+                )
             });
             assert!(host.inner.borrow().is_empty());
         }

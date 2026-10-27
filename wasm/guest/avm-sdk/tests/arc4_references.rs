@@ -38,18 +38,18 @@ impl References {
         app: Application,
         transfer: AssetTransferTxn,
     ) {
-        assert_eq!(a.0, u64::MAX);
+        assert_eq!(a.id, u64::MAX);
         assert_eq!(pay.group_index(), 1);
-        assert_eq!(account.0, [7; 32]);
-        assert_eq!(app.0, 999);
+        assert_eq!(account.address, [7; 32]);
+        assert_eq!(app.id, 999);
         assert_eq!(transfer.group_index(), 2);
         self.calls.set(1);
     }
     #[abimethod]
     fn current(&self, account: Account, app: Application, a: Asset) {
-        assert_eq!(account.0, [42; 32]);
-        assert_eq!(app.0, 888);
-        assert_eq!(a.0, 777);
+        assert_eq!(account.address, [42; 32]);
+        assert_eq!(app.id, 888);
+        assert_eq!(a.id, 777);
         self.calls.set(1);
     }
     #[abimethod]
@@ -80,8 +80,8 @@ impl References {
         account: Account,
     ) {
         assert_eq!([a, b, c, d, e, f, g, h, i, j, k, l, m, n], [0; 14]);
-        assert_eq!(asset.0, 777);
-        assert_eq!(account.0, [42; 32]);
+        assert_eq!(asset.id, 777);
+        assert_eq!(account.address, [42; 32]);
         assert_eq!(tx.group_index(), 0);
     }
 }

@@ -35,11 +35,14 @@ impl Resources {
         receiver: Account,
         application: Application,
     ) -> Result<u64, Error> {
-        if asset.0 != transfer.uint(TxnField::XferAsset) || application.0 != txn::application_id() {
+        if asset.id != transfer.uint(TxnField::XferAsset) || application.id != txn::application_id()
+        {
             return Err(Error::InvalidValue);
         }
         let mut address = [0; 32];
-        if transfer.bytes(TxnField::AssetReceiver, &mut address)? != 32 || address != receiver.0 {
+        if transfer.bytes(TxnField::AssetReceiver, &mut address)? != 32
+            || address != receiver.address
+        {
             return Err(Error::InvalidValue);
         }
         Ok(transfer.uint(TxnField::AssetAmount))

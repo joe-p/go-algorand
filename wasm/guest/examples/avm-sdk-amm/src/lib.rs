@@ -72,15 +72,15 @@ impl ConstantProductAMM {
     ) -> Result<u64, Error> {
         self.assert_governor()?;
         assert!(self.pool_token.get() == 0 && globals::group_size() == 2);
-        assert!(a_asset.0 != 0 && a_asset.0 < b_asset.0);
+        assert!(a_asset.id != 0 && a_asset.id < b_asset.id);
         let app = globals::application_address()?;
         assert_eq!(seed.address(TxnField::Receiver)?, app);
         assert!(seed.uint(TxnField::Amount) >= 300_000);
         assert_eq!(seed.address(TxnField::CloseRemainderTo)?, [0; 32]);
         assert_eq!(seed.address(TxnField::RekeyTo)?, [0; 32]);
 
-        let a_unit = asset::unit_name(a_asset.0)?.ok_or(Error::InvalidValue)?;
-        let b_unit = asset::unit_name(b_asset.0)?.ok_or(Error::InvalidValue)?;
+        let a_unit = asset::unit_name(a_asset.id)?.ok_or(Error::InvalidValue)?;
+        let b_unit = asset::unit_name(b_asset.id)?.ok_or(Error::InvalidValue)?;
         let name = pool_token_name(&a_unit, &b_unit);
         let pool = itxn::AssetCreation {
             total: TOTAL_SUPPLY,
@@ -93,10 +93,10 @@ impl ConstantProductAMM {
         }
         .submit();
         assert_ne!(pool, 0);
-        itxn::asset_opt_in(a_asset.0)?;
-        itxn::asset_opt_in(b_asset.0)?;
-        self.asset_a.set(a_asset.0);
-        self.asset_b.set(b_asset.0);
+        itxn::asset_opt_in(a_asset.id)?;
+        itxn::asset_opt_in(b_asset.id)?;
+        self.asset_a.set(a_asset.id);
+        self.asset_b.set(b_asset.id);
         self.pool_token.set(pool);
         Ok(pool)
     }
@@ -111,19 +111,19 @@ impl ConstantProductAMM {
         b_asset: Asset,
     ) -> Result<(), Error> {
         self.assert_assets(pool_asset, a_asset, b_asset);
-        let a_amount = verify_transfer(a_xfer, a_asset.0)?;
-        let b_amount = verify_transfer(b_xfer, b_asset.0)?;
-        let a_supply = sub(balance(a_asset.0)?, a_amount)?;
-        let b_supply = sub(balance(b_asset.0)?, b_amount)?;
-        let issued = sub(TOTAL_SUPPLY, balance(pool_asset.0)?)?;
+        let a_amount = verify_transfer(a_xfer, a_asset.id)?;
+        let b_amount = verify_transfer(b_xfer, b_asset.id)?;
+        let a_supply = sub(balance(a_asset.id)?, a_amount)?;
+        let b_supply = sub(balance(b_asset.id)?, b_amount)?;
+        let issued = sub(TOTAL_SUPPLY, balance(pool_asset.id)?)?;
         let to_mint = if issued == 0 {
             assert!(a_supply == 0 && b_supply == 0);
             initial_tokens(a_amount, b_amount)
         } else {
             mint_tokens(issued, a_supply, b_supply, a_amount, b_amount)?
         };
-        assert!(to_mint > 0 && to_mint <= balance(pool_asset.0)?);
-        itxn::asset_transfer(pool_asset.0, &txn::sender()?, to_mint);
+        assert!(to_mint > 0 && to_mint <= balance(pool_asset.id)?);
+        itxn::asset_transfer(pool_asset.id, &txn::sender()?, to_mint);
         Ok(())
     }
 
@@ -136,14 +136,14 @@ impl ConstantProductAMM {
         b_asset: Asset,
     ) -> Result<(), Error> {
         self.assert_assets(pool_asset, a_asset, b_asset);
-        let amount = verify_transfer(pool_xfer, pool_asset.0)?;
-        let issued = sub(TOTAL_SUPPLY, sub(balance(pool_asset.0)?, amount)?)?;
+        let amount = verify_transfer(pool_xfer, pool_asset.id)?;
+        let issued = sub(TOTAL_SUPPLY, sub(balance(pool_asset.id)?, amount)?)?;
         assert!(amount <= issued);
-        let a_amount = mul_div(balance(a_asset.0)?, amount, issued)?;
-        let b_amount = mul_div(balance(b_asset.0)?, amount, issued)?;
+        let a_amount = mul_div(balance(a_asset.id)?, amount, issued)?;
+        let b_amount = mul_div(balance(b_asset.id)?, amount, issued)?;
         let sender = txn::sender()?;
-        itxn::asset_transfer(a_asset.0, &sender, a_amount);
-        itxn::asset_transfer(b_asset.0, &sender, b_amount);
+        itxn::asset_transfer(a_asset.id, &sender, a_amount);
+        itxn::asset_transfer(b_asset.id, &sender, b_amount);
         self.update_ratio()
     }
 
@@ -154,14 +154,20 @@ impl ConstantProductAMM {
         a_asset: Asset,
         b_asset: Asset,
     ) -> Result<(), Error> {
-        self.assert_assets(Asset(self.pool_token.get()), a_asset, b_asset);
+        self.assert_assets(
+            Asset {
+                id: self.pool_token.get(),
+            },
+            a_asset,
+            b_asset,
+        );
         let in_id = swap_xfer.uint(TxnField::XferAsset);
-        assert!(in_id == a_asset.0 || in_id == b_asset.0);
+        assert!(in_id == a_asset.id || in_id == b_asset.id);
         let amount = verify_transfer(swap_xfer, in_id)?;
-        let out_id = if in_id == a_asset.0 {
-            b_asset.0
+        let out_id = if in_id == a_asset.id {
+            b_asset.id
         } else {
-            a_asset.0
+            a_asset.id
         };
         let to_swap = swap_tokens(amount, sub(balance(in_id)?, amount)?, balance(out_id)?)?;
         assert!(to_swap > 0);
@@ -178,9 +184,9 @@ impl ConstantProductAMM {
 
     fn assert_assets(&self, pool: Asset, a: Asset, b: Asset) {
         assert_ne!(self.pool_token.get(), 0);
-        assert_eq!(pool.0, self.pool_token.get());
-        assert_eq!(a.0, self.asset_a.get());
-        assert_eq!(b.0, self.asset_b.get());
+        assert_eq!(pool.id, self.pool_token.get());
+        assert_eq!(a.id, self.asset_a.get());
+        assert_eq!(b.id, self.asset_b.get());
     }
 
     fn update_ratio(&self) -> Result<(), Error> {

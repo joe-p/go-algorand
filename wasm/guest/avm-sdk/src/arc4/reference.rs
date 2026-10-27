@@ -18,7 +18,7 @@
 
 #[cfg(feature = "alloc")]
 use crate::rust_alloc::vec::Vec;
-use crate::{address::Address, txn, Error, TxnError, TxnField};
+use crate::{address::Address, txn, TxnField};
 
 /// A resolved ARC-4 `account`; index 0 means the sender, indices 1.. select
 /// this call's foreign accounts. This is distinct from an ARC-4 `address`.
@@ -33,7 +33,7 @@ impl Account {
             return None;
         }
         let mut address = [0; 32];
-        (txn::array_bytes(TxnField::Accounts, u32::from(index), &mut address).ok()? == 32)
+        (txn::try_array_bytes(TxnField::Accounts, u32::from(index), &mut address).ok()? == 32)
             .then_some(Self {
                 address: Address(address),
             })
@@ -77,18 +77,21 @@ impl<const KIND: u64> Transaction<KIND> {
     pub fn uint(self, field: TxnField) -> u64 {
         txn::group_uint(self.group_index, field)
     }
-    pub fn bytes(self, field: TxnField, out: &mut [u8]) -> Result<usize, TxnError> {
+    /// Copies a byte field into `out`, returning its length. A field that does
+    /// not fit, or cannot be read, returns 0.
+    pub fn bytes(self, field: TxnField, out: &mut [u8]) -> usize {
         txn::group_bytes(self.group_index, field, out)
     }
 
-    /// Returns an owned byte field. Allocates 4 KiB; see [`txn::group_bytes_owned`].
+    /// Returns an owned byte field, or an empty vector if it cannot be read.
+    /// Allocates 4 KiB; see [`txn::group_bytes_owned`].
     #[cfg(feature = "alloc")]
-    pub fn bytes_owned(self, field: TxnField) -> Result<Vec<u8>, TxnError> {
+    pub fn bytes_owned(self, field: TxnField) -> Vec<u8> {
         txn::group_bytes_owned(self.group_index, field)
     }
 
     /// Reads an address field without allocating; see [`txn::group_address`].
-    pub fn address(self, field: TxnField) -> Result<Address, Error> {
+    pub fn address(self, field: TxnField) -> Address {
         txn::group_address(self.group_index, field)
     }
 }

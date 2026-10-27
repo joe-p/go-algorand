@@ -94,8 +94,10 @@ const ARG_ERR_INDEX: i32 = -1;
 const ARG_ERR_BUFFER: i32 = -2;
 const ARG_ERR_MEMORY: i32 = -3;
 
-// Error sentinels returned by `env.txn_bytes`. Invalid or unavailable fields
-// trap the guest instead of returning a sentinel.
+// Error sentinels returned by `env.txn_bytes`. The production host reports zero
+// for invalid or unavailable fields; a short destination still reports
+// TXN_ERR_BUFFER. TXN_ERR_MEMORY is only observable from native mocks or a
+// non-conforming embedder.
 const TXN_ERR_BUFFER: i32 = -2;
 const TXN_ERR_MEMORY: i32 = -3;
 
@@ -287,7 +289,9 @@ impl core::fmt::Display for ArgError {
     }
 }
 
-/// Why [`txn_bytes`] failed. Invalid transaction fields trap instead.
+/// Why [`txn_bytes`] failed. The production host reports zero instead of an
+/// error for invalid fields; a destination buffer that is too small still
+/// reports [`TxnError::BufferTooSmall`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum TxnError {
@@ -489,7 +493,7 @@ pub fn sqrtw(high: u64, low: u64) -> u64 {
 /// Reads a uint64 transaction field, like the AVM's `txn`.
 ///
 /// An invalid or out-of-version field, or a field whose value is a byte string,
-/// traps the guest, as an invalid `txn` fails the AVM.
+/// reads as 0. Transaction field reads never trap.
 #[inline]
 pub fn txn_uint(field: TxnField) -> i64 {
     unsafe { sys::txn_uint(field as i32) }
@@ -500,7 +504,9 @@ pub fn txn_uint(field: TxnField) -> i64 {
 /// Returns the field's length, which may exceed `buf.len()` if the buffer was
 /// too small; in that case nothing is written and callers can retry with a
 /// larger buffer. Passing an empty `buf` returns the length without copying.
-/// An invalid or out-of-version field, or an integer field, traps the guest.
+/// An invalid field, an unavailable field, an integer field, a bad pointer, or
+/// missing memory reads as 0 with nothing written. A destination that is too
+/// small returns [`TxnError::BufferTooSmall`].
 #[inline]
 pub fn txn_bytes(field: TxnField, buf: &mut [u8]) -> Result<usize, TxnError> {
     let ret = unsafe {
@@ -524,7 +530,7 @@ pub fn txn_bytes(field: TxnField, buf: &mut [u8]) -> Result<usize, TxnError> {
 /// Reads a uint64 array transaction field element, like the AVM's `txna`.
 ///
 /// An invalid or out-of-version field, a field that is not an array field, an
-/// out-of-range index, or a byte-string element traps the guest.
+/// out-of-range index, or a byte-string element reads as 0.
 #[inline]
 pub fn txna_uint(field: TxnField, index: u32) -> i64 {
     unsafe { sys::txna_uint(field as i32, index as i32) }
@@ -534,9 +540,9 @@ pub fn txna_uint(field: TxnField, index: u32) -> i64 {
 ///
 /// Returns the element's length, which may exceed `buf.len()` if the buffer was
 /// too small; in that case nothing is written and callers can retry. Passing an
-/// empty `buf` returns the length without copying. An invalid or out-of-version
-/// field, a field that is not an array field, an out-of-range index, or an
-/// integer element traps the guest.
+/// empty `buf` returns the length without copying. Invalid fields, non-array
+/// fields, out-of-range indices, and integer elements read as 0. A destination
+/// that is too small returns [`TxnError::BufferTooSmall`].
 #[inline]
 pub fn txna_bytes(field: TxnField, index: u32, buf: &mut [u8]) -> Result<usize, TxnError> {
     let ret = unsafe {
@@ -559,14 +565,15 @@ pub fn txna_bytes(field: TxnField, index: u32, buf: &mut [u8]) -> Result<usize, 
 }
 
 /// Reads a scalar uint64 field from transaction `group_index`. Invalid indices,
-/// unavailable effects, array fields, and wrong-typed fields trap as in the AVM.
+/// unavailable effects, array fields, and wrong-typed fields read as 0.
 #[inline]
 pub fn gtxn_uint(group_index: u32, field: TxnField) -> u64 {
     unsafe { sys::gtxn_uint(group_index as i32, field as i32) as u64 }
 }
 
 /// Copies a scalar byte field from transaction `group_index`. An empty buffer
-/// queries the length without copying. Invalid fields or indices trap.
+/// queries the length without copying. Invalid fields and indices read as
+/// empty; a destination that is too small returns [`TxnError::BufferTooSmall`].
 #[inline]
 pub fn gtxn_bytes(group_index: u32, field: TxnField, buf: &mut [u8]) -> Result<usize, TxnError> {
     let ret = unsafe {
@@ -580,14 +587,15 @@ pub fn gtxn_bytes(group_index: u32, field: TxnField, buf: &mut [u8]) -> Result<u
     field_bytes_result(ret)
 }
 
-/// Reads a uint64 context field. Wrong types and unavailable modes trap.
+/// Reads a uint64 context field. Wrong types and unavailable fields read as 0.
 #[inline]
 pub fn global_uint(field: GlobalField) -> u64 {
     unsafe { sys::global_uint(field as i32) as u64 }
 }
 
 /// Copies a context byte field. An empty buffer queries its length without
-/// copying. Wrong types and unavailable modes trap.
+/// copying. Wrong types and unavailable fields read as empty; a destination
+/// that is too small returns [`TxnError::BufferTooSmall`].
 #[inline]
 pub fn global_bytes(field: GlobalField, buf: &mut [u8]) -> Result<usize, TxnError> {
     let ret = unsafe {

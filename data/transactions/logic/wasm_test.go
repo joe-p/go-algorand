@@ -225,14 +225,15 @@ func TestWasmEd25519DalekGuest(t *testing.T) {
 }
 
 // TestWasmTxnFieldTypeError checks that asking for a field with the wrong type
-// traps, just as an invalid field would in the AVM.
+// reads as the zero value rather than trapping. Transaction field reads are
+// infallible.
 func TestWasmTxnFieldTypeError(t *testing.T) {
 	partitiontest.PartitionTest(t)
 
 	ep := optSigParams(wasmProto, transactions.SignedTxn{Txn: transactions.Transaction{Type: protocol.PaymentTx}})
-	_, _, err := EvalSignatureProgram(loadWasm(t, "txn_bad_type.wasm"), nil, 0, ep)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "not a uint")
+	pass, _, err := EvalSignatureProgram(loadWasm(t, "txn_bad_type.wasm"), nil, 0, ep)
+	require.NoError(t, err)
+	require.False(t, pass)
 }
 
 func TestWasmTxnBytesLimits(t *testing.T) {
@@ -245,7 +246,7 @@ func TestWasmTxnBytesLimits(t *testing.T) {
 			ep := optSigParams(wasmProto, txn)
 			pass, _, err := EvalSignatureProgram(program, [][]byte{{byte(ApprovalProgram)}}, 0, ep)
 			if size > maxStringSize {
-				require.ErrorContains(t, err, "too big")
+				require.ErrorContains(t, err, "exceeds AVM size limit")
 			} else {
 				require.NoError(t, err)
 				require.True(t, pass)
@@ -259,16 +260,18 @@ func TestWasmTxnFieldRestrictions(t *testing.T) {
 	for _, field := range []TxnField{ApplicationArgs, Accounts, NumLogs, LastLog, invalidTxnField} {
 		t.Run(field.String(), func(t *testing.T) {
 			ep := optSigParams(wasmProto)
-			_, _, err := EvalSignatureProgram(loadWasm(t, "txn_bytes_field.wasm"), [][]byte{{byte(field)}}, 0, ep)
-			require.Error(t, err)
+			pass, _, err := EvalSignatureProgram(loadWasm(t, "txn_bytes_field.wasm"), [][]byte{{byte(field)}}, 0, ep)
+			require.NoError(t, err)
+			require.True(t, pass)
 		})
 	}
 	ep := optSigParams(func(p *config.ConsensusParams) {
 		wasmProto(p)
 		p.LogicSigVersion = 1
 	})
-	_, _, err := EvalSignatureProgram(loadWasm(t, "txn_bytes_field.wasm"), [][]byte{{byte(RekeyTo)}}, 0, ep)
-	require.ErrorContains(t, err, "invalid txn field RekeyTo")
+	pass, _, err := EvalSignatureProgram(loadWasm(t, "txn_bytes_field.wasm"), [][]byte{{byte(RekeyTo)}}, 0, ep)
+	require.NoError(t, err)
+	require.True(t, pass)
 }
 
 func TestWasmTxnConcurrentContexts(t *testing.T) {

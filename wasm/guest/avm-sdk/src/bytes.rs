@@ -16,21 +16,36 @@
 
 //! Shared buffer handling for public SDK byte readers.
 
-use crate::{address::Address, Error, TxnError};
+use crate::address::Address;
+#[cfg(test)]
+use crate::TxnError;
 
+/// Reads a fixed 32-byte address, returning [`Address::ZERO`] for any failed or
+/// mis-sized read. Transaction and context field reads are infallible.
 #[inline]
-pub(crate) fn read_address(
-    read: impl FnOnce(&mut [u8]) -> Result<usize, TxnError>,
-) -> Result<Address, Error> {
+pub(crate) fn read_address(read: impl FnOnce(&mut [u8]) -> usize) -> Address {
     let mut address = [0; 32];
-    let len = read(&mut address)?;
-    if len != address.len() {
-        return Err(Error::WrongLength {
-            expected: address.len(),
-            got: len,
-        });
+    if read(&mut address) == address.len() {
+        Address(address)
+    } else {
+        Address::ZERO
     }
-    Ok(Address(address))
+}
+
+/// Reads an owned byte value, returning an empty vector if the read fails or
+/// reports a value larger than the buffer. Bounded by [`crate::MAX_ARG_BYTES`].
+#[cfg(feature = "alloc")]
+#[inline]
+pub(crate) fn read_owned_or_empty(
+    read: impl FnOnce(&mut [u8]) -> usize,
+) -> crate::rust_alloc::vec::Vec<u8> {
+    let mut bytes = crate::rust_alloc::vec![0; crate::MAX_ARG_BYTES];
+    let len = read(&mut bytes);
+    if len > bytes.len() {
+        return crate::rust_alloc::vec::Vec::new();
+    }
+    bytes.truncate(len);
+    bytes
 }
 
 #[cfg(feature = "alloc")]
@@ -55,24 +70,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn reported_address_length_is_checked_even_if_host_did_not_copy() {
+    fn address_reads_require_exactly_32_bytes() {
         assert_eq!(
             read_address(|buf| {
                 buf.copy_from_slice(&[7; 32]);
-                Ok(32)
+                32
             }),
-            Ok(Address([7; 32]))
+            Address([7; 32])
         );
         for len in [0, 31, 33, usize::MAX] {
-            assert_eq!(
-                read_address(|_| Ok(len)),
-                Err(Error::WrongLength {
-                    expected: 32,
-                    got: len
-                })
-            );
+            assert_eq!(read_address(|_| len), Address::ZERO);
         }
-        assert_eq!(read_address(|_| Err(TxnError::Memory)), Err(Error::Memory));
     }
 
     #[cfg(feature = "alloc")]
@@ -86,18 +94,30 @@ mod tests {
                 buf[..2].copy_from_slice(b"ok");
                 Ok(2)
             },
-            TxnError::BufferTooSmall,
+            crate::TxnError::BufferTooSmall,
         )
         .unwrap();
         assert_eq!(calls, 1);
         assert_eq!(value, b"ok");
         assert_eq!(
             read_owned(|_| Ok(usize::MAX), TxnError::BufferTooSmall),
-            Err(TxnError::BufferTooSmall)
+            Err(crate::TxnError::BufferTooSmall)
         );
         assert_eq!(
             read_owned(|_| Err(TxnError::Memory), TxnError::BufferTooSmall),
-            Err(TxnError::Memory)
+            Err(crate::TxnError::Memory)
         );
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn infallible_owned_reader_returns_empty_on_failure() {
+        let value = read_owned_or_empty(|buf| {
+            buf[..3].copy_from_slice(b"abc");
+            3
+        });
+        assert_eq!(value, b"abc");
+        assert!(read_owned_or_empty(|_| 0).is_empty());
+        assert!(read_owned_or_empty(|_| usize::MAX).is_empty());
     }
 }

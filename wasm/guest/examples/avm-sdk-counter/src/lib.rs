@@ -56,7 +56,7 @@ impl Counter {
         }
 
         let mut delta_bytes = [0u8; 8];
-        let delta_bytes = txn::app_arg_into(0, &mut delta_bytes)?;
+        let delta_bytes = txn::app_arg_into(0, &mut delta_bytes);
         if delta_bytes.len() != 8 {
             return Err(Error::WrongLength {
                 expected: 8,
@@ -77,7 +77,7 @@ impl Counter {
             return Err(Error::InvalidValue);
         }
 
-        let sender = txn::sender()?;
+        let sender = txn::sender();
 
         // A heap-allocated key proves the optional bump allocator is working.
         let mut sender_key = Vec::with_capacity(sender.as_ref().len());

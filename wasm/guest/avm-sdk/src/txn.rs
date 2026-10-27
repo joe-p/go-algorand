@@ -15,6 +15,13 @@
 // along with go-algorand.  If not, see <https://www.gnu.org/licenses/>.
 
 //! The current transaction's fields.
+//!
+//! Transaction field reads are infallible. A field that is invalid, out of
+//! version, unavailable for the transaction's type, or otherwise unreadable
+//! returns its zero value: `0` for a uint, [`Address::ZERO`] for an address,
+//! and an empty value for bytes. A destination buffer that is too small also
+//! reads as empty; query the length first with an empty buffer when the value
+//! might not fit.
 
 use avm_sys::{TxnError, TxnField, MAX_ARG_BYTES};
 
@@ -22,10 +29,9 @@ use avm_sys::{TxnError, TxnField, MAX_ARG_BYTES};
 use crate::rust_alloc::vec::Vec;
 #[cfg(target_arch = "wasm32")]
 use crate::Avm;
-use crate::{address::Address, application::Application, host, Error};
+use crate::{address::Address, application::Application, host};
 
-/// Reads a uint64 transaction field. Traps if the field is invalid or is a
-/// byte-string field.
+/// Reads a uint64 transaction field. Invalid or non-uint fields read as 0.
 #[inline]
 pub fn uint(field: TxnField) -> u64 {
     host().txn_uint(field)
@@ -33,95 +39,102 @@ pub fn uint(field: TxnField) -> u64 {
 
 /// Copies a byte-string transaction field into `buf`, returning its length.
 ///
-/// A returned length greater than `buf.len()` means the buffer was too small and
-/// nothing was written.
+/// An empty buffer queries the field's length without copying. A field that
+/// does not fit in `buf`, or cannot be read, returns 0 and writes nothing.
 #[inline]
-pub fn bytes(field: TxnField, buf: &mut [u8]) -> Result<usize, TxnError> {
-    host().txn_bytes(field, buf)
+pub fn bytes(field: TxnField, buf: &mut [u8]) -> usize {
+    host().txn_bytes(field, buf).unwrap_or(0)
 }
 
-/// Returns an owned byte-string transaction field. Allocates a 4 KiB buffer,
-/// reads once, and truncates to the returned length. Requires a guest allocator.
-/// Invalid fields and host resource failures still trap. Use [`bytes`] to
-/// control buffer capacity or avoid allocation.
+/// Returns an owned byte-string transaction field, or an empty vector if the
+/// field cannot be read. Allocates a 4 KiB buffer and reads once. Requires a
+/// guest allocator. Use [`bytes`] to control buffer capacity or avoid
+/// allocation.
 #[cfg(feature = "alloc")]
 #[inline]
-pub fn bytes_owned(field: TxnField) -> Result<Vec<u8>, TxnError> {
-    crate::bytes::read_owned(|buf| bytes(field, buf), TxnError::BufferTooSmall)
+pub fn bytes_owned(field: TxnField) -> Vec<u8> {
+    crate::bytes::read_owned_or_empty(|buf| bytes(field, buf))
 }
 
-/// Reads an address-valued transaction field without allocating. A successful
-/// read of any other length returns [`Error::WrongLength`]; host read errors
-/// propagate. The caller selects the field; this does not validate its type.
+/// Reads an address-valued transaction field without allocating. Returns
+/// [`Address::ZERO`] if the field is not a readable 32-byte value. The caller
+/// selects the field; this does not validate its type.
 #[inline]
-pub fn address(field: TxnField) -> Result<Address, Error> {
+pub fn address(field: TxnField) -> Address {
     crate::bytes::read_address(|buf| bytes(field, buf))
 }
 
-/// Reads element `index` of a uint64 array transaction field.
+/// Reads element `index` of a uint64 array transaction field. Invalid fields
+/// and out-of-range indices read as 0.
 #[inline]
 pub fn array_uint(field: TxnField, index: u32) -> u64 {
     host().txna_uint(field, index)
 }
 
 /// Copies element `index` of a byte-string array transaction field into `buf`,
-/// returning its length.
+/// returning its length. See [`bytes`] for the failure behavior.
 #[inline]
-pub fn array_bytes(field: TxnField, index: u32, buf: &mut [u8]) -> Result<usize, TxnError> {
+pub fn array_bytes(field: TxnField, index: u32, buf: &mut [u8]) -> usize {
+    host().txna_bytes(field, index, buf).unwrap_or(0)
+}
+
+#[inline]
+pub(crate) fn try_array_bytes(
+    field: TxnField,
+    index: u32,
+    buf: &mut [u8],
+) -> Result<usize, TxnError> {
     host().txna_bytes(field, index, buf)
 }
 
-/// Returns an owned byte-string array element. Like [`bytes_owned`], allocates
-/// 4 KiB and reads once. Invalid fields/indices follow the underlying host API.
+/// Returns an owned byte-string array element, or an empty vector if it cannot
+/// be read. Like [`bytes_owned`], allocates 4 KiB and reads once.
 #[cfg(feature = "alloc")]
 #[inline]
-pub fn array_bytes_owned(field: TxnField, index: u32) -> Result<Vec<u8>, TxnError> {
-    crate::bytes::read_owned(
-        |buf| array_bytes(field, index, buf),
-        TxnError::BufferTooSmall,
-    )
+pub fn array_bytes_owned(field: TxnField, index: u32) -> Vec<u8> {
+    crate::bytes::read_owned_or_empty(|buf| array_bytes(field, index, buf))
 }
 
 /// Reads an address array element without allocating; see [`address`].
 #[inline]
-pub fn array_address(field: TxnField, index: u32) -> Result<Address, Error> {
+pub fn array_address(field: TxnField, index: u32) -> Address {
     crate::bytes::read_address(|buf| array_bytes(field, index, buf))
 }
 
-/// Reads a scalar uint field from transaction `group_index` in the current group.
+/// Reads a scalar uint field from transaction `group_index` in the current
+/// group. Invalid indices and fields read as 0.
 #[inline]
 pub fn group_uint(group_index: u32, field: TxnField) -> u64 {
     host().gtxn_uint(group_index, field)
 }
 
 /// Copies a scalar byte field from transaction `group_index`. An empty buffer
-/// queries the field's length without copying. Invalid indices or fields trap.
+/// queries the field's length without copying. See [`bytes`] for the failure
+/// behavior.
 #[inline]
-pub fn group_bytes(group_index: u32, field: TxnField, buf: &mut [u8]) -> Result<usize, TxnError> {
-    host().gtxn_bytes(group_index, field, buf)
+pub fn group_bytes(group_index: u32, field: TxnField, buf: &mut [u8]) -> usize {
+    host().gtxn_bytes(group_index, field, buf).unwrap_or(0)
 }
 
-/// Returns an owned byte field from a group transaction. Like [`bytes_owned`],
-/// allocates 4 KiB and reads once. Invalid indices or fields trap.
+/// Returns an owned byte field from a group transaction, or an empty vector if
+/// it cannot be read. Like [`bytes_owned`], allocates 4 KiB and reads once.
 #[cfg(feature = "alloc")]
 #[inline]
-pub fn group_bytes_owned(group_index: u32, field: TxnField) -> Result<Vec<u8>, TxnError> {
-    crate::bytes::read_owned(
-        |buf| group_bytes(group_index, field, buf),
-        TxnError::BufferTooSmall,
-    )
+pub fn group_bytes_owned(group_index: u32, field: TxnField) -> Vec<u8> {
+    crate::bytes::read_owned_or_empty(|buf| group_bytes(group_index, field, buf))
 }
 
 /// Reads an address-valued group transaction field without allocating; see
 /// [`address`].
 #[inline]
-pub fn group_address(group_index: u32, field: TxnField) -> Result<Address, Error> {
+pub fn group_address(group_index: u32, field: TxnField) -> Address {
     crate::bytes::read_address(|buf| group_bytes(group_index, field, buf))
 }
 
-/// Reads the current transaction's sender, which is always 32 bytes.
+/// Reads the current transaction's sender. Returns [`Address::ZERO`] if it
+/// cannot be read.
 #[inline]
-pub fn sender() -> Result<Address, Error> {
+pub fn sender() -> Address {
     address(TxnField::Sender)
 }
 
@@ -144,22 +157,32 @@ pub fn app_args_count() -> u32 {
 /// Equivalent to the AVM's `txna ApplicationArgs index`. An application reads
 /// its arguments this way; LogicSig arguments come from [`crate::arg`].
 ///
-/// If the argument is larger than `buf`, the call returns
-/// [`TxnError::BufferTooSmall`] and nothing is written.
+/// If the argument is larger than `buf`, or cannot be read, the result is empty
+/// and nothing is written.
 #[inline]
-pub fn app_arg_into(index: u32, buf: &mut [u8]) -> Result<&[u8], TxnError> {
-    let len = array_bytes(TxnField::ApplicationArgs, index, buf)?;
+pub fn app_arg_into(index: u32, buf: &mut [u8]) -> &[u8] {
+    let len = array_bytes(TxnField::ApplicationArgs, index, buf);
+    if len > buf.len() {
+        return &[];
+    }
+    &buf[..len]
+}
+
+#[inline]
+pub(crate) fn try_app_arg_into(index: u32, buf: &mut [u8]) -> Result<&[u8], TxnError> {
+    let len = try_array_bytes(TxnField::ApplicationArgs, index, buf)?;
     if len > buf.len() {
         return Err(TxnError::BufferTooSmall);
     }
     Ok(&buf[..len])
 }
 
-/// Returns an owned application argument. Allocates 4 KiB and reads once;
-/// requires a guest allocator. See [`app_arg_into`] for the buffer-based API.
+/// Returns an owned application argument, or an empty vector if it cannot be
+/// read. Allocates 4 KiB and reads once; requires a guest allocator. See
+/// [`app_arg_into`] for the buffer-based API.
 #[cfg(feature = "alloc")]
 #[inline]
-pub fn app_arg(index: u32) -> Result<Vec<u8>, TxnError> {
+pub fn app_arg(index: u32) -> Vec<u8> {
     array_bytes_owned(TxnField::ApplicationArgs, index)
 }
 
@@ -167,7 +190,7 @@ pub fn app_arg(index: u32) -> Result<Vec<u8>, TxnError> {
 #[inline]
 pub fn app_arg_eq(index: u32, expected: &[u8]) -> bool {
     let mut buf = [0u8; MAX_ARG_BYTES];
-    match app_arg_into(index, &mut buf) {
+    match try_app_arg_into(index, &mut buf) {
         Ok(value) => value == expected,
         Err(_) => false,
     }

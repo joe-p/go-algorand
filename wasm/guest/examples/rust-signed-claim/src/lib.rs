@@ -55,12 +55,12 @@ entry!(|| {
     }
 
     let mut sig_bytes = [0u8; 64];
-    if app_arg_into(0, &mut sig_bytes).map(<[u8]>::len) != Ok(64) {
+    if app_arg_into(0, &mut sig_bytes).len() != 64 {
         return false;
     }
 
     let mut amount_bytes = [0u8; 8];
-    if app_arg_into(1, &mut amount_bytes).map(<[u8]>::len) != Ok(8) {
+    if app_arg_into(1, &mut amount_bytes).len() != 8 {
         return false;
     }
     let amount = u64::from_be_bytes(amount_bytes);

@@ -82,12 +82,6 @@ func goWasmTxnField(ctx C.uintptr_t, source C.uint32_t, groupIndex C.uint32_t, f
 		writeWasmErr(errBuf, errCap, err.Error())
 		return -1
 	}
-	// The AVM normally checks this after the opcode returns. WASM bypasses
-	// that stack check, so enforce the same limit at the host boundary.
-	if len(sv.Bytes) > maxStringSize {
-		writeWasmErr(errBuf, errCap, fmt.Sprintf("txn produced a too big (%d) byte-array", len(sv.Bytes)))
-		return -1
-	}
 
 	if sv.Bytes == nil {
 		// A uint64 field, encoded as 8 little-endian bytes.

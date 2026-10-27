@@ -68,24 +68,25 @@ The module may import, from the `env` module:
   application program. An application reads its arguments with `txna_bytes`
   below.
 - `txn_uint(field: i32) -> i64`: the value of a uint64 transaction field, i.e.
-  the AVM's `txn` for fields that push an integer. Invalid, out-of-version, or
-  byte-string fields trap the guest, as an invalid field would fail the AVM.
+  the AVM's `txn` for fields that push an integer. Unreadable fields — invalid,
+  out-of-version, unavailable for the transaction type, or byte-string fields —
+  read as `0`; transaction and context reads never trap.
 - `txn_bytes(field: i32, out: i32, len: i32) -> i32`: copy a byte-string
   transaction field into linear memory at `out`, up to `len` bytes. Returns the
   number of bytes copied. Passing `len == 0` returns the field's length without
-  copying. A negative value reports an ABI error (`-2` buffer too small, `-3`
-  bad pointer or missing `memory` export); invalid, out-of-version, or
-  integer fields trap the guest.
+  copying. Unreadable fields, bad pointers, and missing `memory` read as an
+  empty value (`0`) and write nothing; a destination that is too small returns
+  `-2` and writes nothing. The `avm-sdk` wrappers treat both as an empty value.
 - `txna_uint(field: i32, index: i32) -> i64`: like `txn_uint`, but for an array
-  field element, i.e. the AVM's `txna`. A non-array field, an out-of-range
-  index, or a byte-string element traps the guest.
+  field element, i.e. the AVM's `txna`. Non-array fields, out-of-range indices,
+  and byte-string elements read as `0`.
 - `txna_bytes(field: i32, index: i32, out: i32, len: i32) -> i32`: like
   `txn_bytes`, but for an array field element. The application arguments are
   `txna_bytes(ApplicationArgs=26, i, ...)`; the argument count is
    `txn_uint(NumAppArgs=27)`.
 - `gtxn_uint(group_index: i32, field: i32) -> i64`: scalar uint field of a
-  transaction in the current group, with the AVM's group-index, type, mode,
-  version, and past-transaction-only effects checks.
+  transaction in the current group. Invalid indices, types, modes, versions,
+  and unavailable effects read as `0`.
 - `gtxn_bytes(group_index: i32, field: i32, out: i32, len: i32) -> i32`:
   scalar byte field of a group transaction; buffer and length-query semantics
   match `txn_bytes`. Array group reads are not yet exposed.
@@ -93,9 +94,10 @@ The module may import, from the `env` module:
   len: i32) -> i32`: selected AVM context fields, **not application state**.
   Currently supports `GroupSize=4`, `CurrentApplicationID=8`, and
   `CurrentApplicationAddress=10`. The latter two are application-only and use
-  the assigned app ID even during creation. Other fields trap; in particular,
-  `OpcodeBudget` is deferred until live WASM fuel can be reflected accurately.
-  Types and byte-buffer semantics match the transaction reads.
+  the assigned app ID even during creation. Unsupported fields read as `0` or
+  empty; in particular, `OpcodeBudget` is deferred until live WASM fuel can be
+  reflected accurately. Types and byte-buffer semantics match the transaction
+  reads.
 - `asset_balance(account: i32, asset: i64, out: i32) -> i32`: application-only
   holding query. `account` points to a 32-byte address; `out` must be valid for
   8 bytes. Returns 1 and writes the balance as an unsigned little-endian uint64

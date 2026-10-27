@@ -40,9 +40,7 @@ entry!(|| {
     }
 
     let mut amount_bytes = [0u8; 8];
-    let Ok(amount_bytes) = app_arg_into(0, &mut amount_bytes) else {
-        return false;
-    };
+    let amount_bytes = app_arg_into(0, &mut amount_bytes);
     if amount_bytes.len() != 8 {
         return false;
     }

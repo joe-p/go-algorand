@@ -253,42 +253,27 @@ fn grouped_transactions_and_context_helpers() {
     assert_eq!(txn::group_uint(0, TxnField::Amount), u64::MAX);
     assert_eq!(globals::group_size(), 3);
     assert_eq!(globals::application_id(), Application::from(888));
-    assert_eq!(globals::application_address().unwrap(), Address([0x12; 32]));
+    assert_eq!(globals::application_address(), Address([0x12; 32]));
+    assert_eq!(txn::group_bytes(0, TxnField::Receiver, &mut []), 32);
     assert_eq!(
-        txn::group_bytes(0, TxnField::Receiver, &mut []).unwrap(),
-        32
-    );
-    assert_eq!(
-        globals::bytes(GlobalField::CurrentApplicationAddress, &mut []).unwrap(),
+        globals::bytes(GlobalField::CurrentApplicationAddress, &mut []),
         32
     );
     let mut buf = [0; 32];
-    assert_eq!(
-        txn::group_bytes(0, TxnField::Receiver, &mut buf).unwrap(),
-        32
-    );
+    assert_eq!(txn::group_bytes(0, TxnField::Receiver, &mut buf), 32);
     assert_eq!(buf, [0x12; 32]);
     let mut small = [0xFF; 31];
-    assert_eq!(
-        txn::group_bytes(0, TxnField::Receiver, &mut small),
-        Err(TxnError::BufferTooSmall)
-    );
+    assert_eq!(txn::group_bytes(0, TxnField::Receiver, &mut small), 0);
     assert_eq!(small, [0xFF; 31]);
 }
 
 #[test]
-fn wrong_application_address_length_is_an_error() {
+fn wrong_application_address_length_reads_zero() {
     let mut avm = MockAvm::default();
     avm.context_bytes
         .insert(GlobalField::CurrentApplicationAddress as i32, vec![0; 31]);
     let _host = set_host(avm);
-    assert!(matches!(
-        globals::application_address(),
-        Err(Error::WrongLength {
-            expected: 32,
-            got: 31
-        })
-    ));
+    assert_eq!(globals::application_address(), Address::ZERO);
 }
 
 #[test]
@@ -447,12 +432,12 @@ fn transaction_helpers() {
     assert_eq!(txn::application_id(), Application::from(888));
     assert_eq!(txn::uint(TxnField::ApplicationID), 888);
     assert_eq!(txn::app_args_count(), 2);
-    assert_eq!(txn::sender().unwrap(), Address([0x11; 32]));
+    assert_eq!(txn::sender(), Address([0x11; 32]));
     assert!(txn::app_arg_eq(0, b"first"));
     assert!(!txn::app_arg_eq(0, b"second"));
 
     let mut buf = [0u8; 16];
-    assert_eq!(txn::app_arg_into(1, &mut buf).unwrap(), b"second");
+    assert_eq!(txn::app_arg_into(1, &mut buf), b"second");
 }
 
 #[cfg(feature = "alloc")]
@@ -475,15 +460,12 @@ fn owned_byte_reads_cover_empty_binary_and_maximum_lengths() {
         let slot = GlobalBytes::new(b"owned");
         slot.write(&value);
 
-        assert_eq!(txn::bytes_owned(TxnField::Note).unwrap(), value);
-        assert_eq!(
-            txn::array_bytes_owned(TxnField::ApplicationArgs, 0).unwrap(),
-            value
-        );
-        assert_eq!(txn::app_arg(0).unwrap(), value);
-        assert_eq!(txn::group_bytes_owned(0, TxnField::Note).unwrap(), value);
+        assert_eq!(txn::bytes_owned(TxnField::Note), value);
+        assert_eq!(txn::array_bytes_owned(TxnField::ApplicationArgs, 0), value);
+        assert_eq!(txn::app_arg(0), value);
+        assert_eq!(txn::group_bytes_owned(0, TxnField::Note), value);
         let payment = PaymentTxn::resolve(0, 1).unwrap();
-        assert_eq!(payment.bytes_owned(TxnField::Note).unwrap(), value);
+        assert_eq!(payment.bytes_owned(TxnField::Note), value);
         assert_eq!(arg::get_owned(0).unwrap(), value);
         assert_eq!(global::get_bytes_owned(b"owned").unwrap(), value);
         assert_eq!(slot.try_read_owned().unwrap(), value);
@@ -499,7 +481,7 @@ fn owned_byte_reads_cover_empty_binary_and_maximum_lengths() {
 
 #[cfg(feature = "alloc")]
 #[test]
-fn owned_byte_reads_propagate_errors_and_reject_oversized_values() {
+fn owned_byte_reads_propagate_state_and_argument_errors() {
     use avm_sdk::MAX_ARG_BYTES;
     let value = vec![0; MAX_ARG_BYTES + 1];
     let mut avm = MockAvm::default();
@@ -513,25 +495,22 @@ fn owned_byte_reads_propagate_errors_and_reject_oversized_values() {
     let slot = GlobalBytes::new(b"oversized");
     slot.write(&value);
 
-    assert_eq!(
-        txn::bytes_owned(TxnField::Note),
-        Err(TxnError::BufferTooSmall)
-    );
-    assert_eq!(txn::app_arg(0), Err(TxnError::BufferTooSmall));
-    assert_eq!(
-        txn::group_bytes_owned(0, TxnField::Note),
-        Err(TxnError::BufferTooSmall)
-    );
+    // Transaction and context reads are infallible: unreadable or oversized
+    // values read as empty.
+    assert!(txn::bytes_owned(TxnField::Note).is_empty());
+    assert!(txn::app_arg(0).is_empty());
+    assert!(txn::group_bytes_owned(0, TxnField::Note).is_empty());
+    assert!(txn::app_arg(1).is_empty());
+    assert!(txn::bytes_owned(TxnField::Sender).is_empty());
+    // Application state and LogicSig arguments stay fallible.
     assert_eq!(arg::get_owned(0), Err(ArgError::BufferTooSmall));
     assert_eq!(slot.try_read_owned(), Err(TxnError::BufferTooSmall));
     assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| slot.read_owned())).is_err());
     assert_eq!(arg::get_owned(1), Err(ArgError::OutOfRange));
-    assert_eq!(txn::app_arg(1), Err(TxnError::Unknown));
-    assert_eq!(txn::bytes_owned(TxnField::Sender), Err(TxnError::Unknown));
 }
 
 #[test]
-fn address_helpers_validate_lengths_and_propagate_read_errors() {
+fn address_helpers_read_zero_on_missing_or_wrong_length() {
     use avm_sdk::arc4::PaymentTxn;
 
     for len in [0, 31, 32, 33] {
@@ -545,13 +524,10 @@ fn address_helpers_validate_lengths_and_propagate_read_errors() {
         pay.set_bytes(TxnField::Receiver, &value);
         avm.group.push(pay);
         let _host = set_host(avm);
-        let expected = match len {
-            32 => Ok(Address([0x12; 32])),
-            33 => Err(Error::BufferTooSmall),
-            _ => Err(Error::WrongLength {
-                expected: 32,
-                got: len,
-            }),
+        let expected = if len == 32 {
+            Address([0x12; 32])
+        } else {
+            Address::ZERO
         };
         assert_eq!(txn::address(TxnField::Receiver), expected);
         assert_eq!(txn::array_address(TxnField::Accounts, 0), expected);
@@ -562,7 +538,7 @@ fn address_helpers_validate_lengths_and_propagate_read_errors() {
                 .address(TxnField::Receiver),
             expected
         );
-        assert_eq!(txn::address(TxnField::Sender), Err(Error::Unknown));
+        assert_eq!(txn::address(TxnField::Sender), Address::ZERO);
     }
 }
 
@@ -587,18 +563,12 @@ fn crypto_helper() {
 }
 
 #[test]
-fn wrong_sender_length_is_an_error() {
+fn wrong_sender_length_reads_zero() {
     let avm = MockAvm::default();
     avm.set_bytes(TxnField::Sender, &[0x11; 16]);
     let _host = set_host(avm);
 
-    assert_eq!(
-        txn::sender(),
-        Err(Error::WrongLength {
-            expected: 32,
-            got: 16
-        })
-    );
+    assert_eq!(txn::sender(), Address::ZERO);
 }
 
 #[test]
@@ -644,7 +614,7 @@ fn inner_asset_helpers_use_zero_fees_and_correct_fields() {
         .borrow()
         .contains(&(3, TxnField::ConfigAssetName as i32, 0, b"pool".to_vec())));
     calls.borrow_mut().clear();
-    itxn::asset_opt_in(777.into()).unwrap();
+    itxn::asset_opt_in(777.into());
     assert_eq!(
         *calls.borrow(),
         vec![

@@ -24,9 +24,10 @@ use avm_sys::{self, ArgError, GlobalField, TxnError, TxnField};
 /// [`host`]. The trait exists so native tests can install a mock with
 /// [`crate::testing::set_host`].
 ///
-/// The methods mirror the raw bindings one-for-one. Cases the host traps (an
-/// invalid transaction field, an oversized value, a type mismatch) are not
-/// `Result`; a trap ends the program, as in the AVM.
+/// The methods mirror the raw bindings one-for-one. Transaction and context
+/// field reads are still `Result` at this layer because the raw ABI and native
+/// mocks can report errors, but the production host and SDK helpers treat them
+/// as infallible and substitute zero values. Other host failures still trap.
 pub trait Avm {
     /// Full unsigned product as (high, low), matching AVM mulw.
     fn mulw(&self, _a: u64, _b: u64) -> (u64, u64) {
@@ -92,13 +93,14 @@ pub trait Avm {
         unimplemented!("asset_unit_name")
     }
 
-    /// Reads a scalar uint field from a group transaction. Mocks that do not
-    /// model group reads fail explicitly rather than silently returning zero.
+    /// Reads a scalar uint field from a group transaction. Unreadable fields
+    /// and invalid indices read as 0.
     fn gtxn_uint(&self, _group_index: u32, _field: TxnField) -> u64 {
         unimplemented!("gtxn_uint")
     }
 
-    /// Copies a scalar byte field from a group transaction.
+    /// Copies a scalar byte field from a group transaction. Unreadable fields
+    /// read as empty.
     fn gtxn_bytes(
         &self,
         _group_index: u32,

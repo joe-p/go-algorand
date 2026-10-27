@@ -408,7 +408,12 @@ enum FieldSource {
 }
 
 /// Fetches a field once into a caller-owned buffer. A short buffer still
-/// reports the type and required length. Invalid or unavailable fields trap.
+/// reports the type and required length.
+///
+/// `Ok(None)` means the field is invalid, out of version, unavailable in this
+/// mode, or otherwise unreadable. Transaction and context reads are infallible:
+/// callers turn `None` into their zero value instead of trapping.
+///
 /// `index` selects the element for an array field and is meaningful only when
 /// `expect_array` is true.
 fn fetch_txn_field(
@@ -418,7 +423,7 @@ fn fetch_txn_field(
     index: i32,
     expect_array: bool,
     buf: &mut [u8],
-) -> Result<(bool, usize), wasmi::Error> {
+) -> Result<Option<(bool, usize)>, wasmi::Error> {
     let cb = caller.data().host.txn_field;
     let ctx = caller.data().host.ctx;
     let Some(cb) = cb else {
@@ -426,21 +431,14 @@ fn fetch_txn_field(
             "txn host functions are not available in this build",
         ));
     };
-    if field < 0 {
-        return Err(wasmi::Error::new(format!("invalid txn field {field}")));
-    }
-    if expect_array && index < 0 {
-        return Err(wasmi::Error::new(format!(
-            "invalid txn array index {index}"
-        )));
+    if field < 0 || (expect_array && index < 0) {
+        return Ok(None);
     }
     let index = if index < 0 { 0 } else { index as u32 };
     let (source, group_index) = match source {
         FieldSource::Current => (0, 0),
         FieldSource::Group(i) if i >= 0 => (1, i as u32),
-        FieldSource::Group(i) => {
-            return Err(wasmi::Error::new(format!("invalid txn group index {i}")));
-        }
+        FieldSource::Group(_) => return Ok(None),
         FieldSource::Global => (2, 0),
     };
 
@@ -466,20 +464,14 @@ fn fetch_txn_field(
     };
 
     if ret != 0 && ret != TXN_ERR_BUFFER {
-        return Err(wasmi::Error::new(format!(
-            "txn field {field} error: {}",
-            cstr(&err)
-        )));
+        return Ok(None);
     }
 
-    if is_bytes != 0 && len > MAX_AVM_BYTES {
-        return Err(wasmi::Error::new("txn byte field exceeds AVM size limit"));
-    }
-    Ok((is_bytes != 0, len))
+    Ok(Some((is_bytes != 0, len)))
 }
 
 /// Shared implementation of the scalar (`txn`) and array (`txna`) uint field
-/// reads.
+/// reads. Unreadable or non-uint fields read as 0.
 fn read_txn_uint(
     caller: &mut Caller<'_, HostState>,
     source: FieldSource,
@@ -490,16 +482,13 @@ fn read_txn_uint(
     // Charge before validation, buffer preparation, or Go callbacks.
     charge_fuel(caller, TXN_UINT_FUEL_COST)?;
     let mut bytes = [0u8; 8];
-    let (is_bytes, len) = fetch_txn_field(caller, source, field, index, expect_array, &mut bytes)?;
-    if is_bytes {
-        return Err(wasmi::Error::new(format!(
-            "txn field {field} is not a uint"
-        )));
-    }
-    if len != bytes.len() {
-        return Err(wasmi::Error::new(format!(
-            "txn uint field {field} had {len} bytes"
-        )));
+    let Some((is_bytes, len)) =
+        fetch_txn_field(caller, source, field, index, expect_array, &mut bytes)?
+    else {
+        return Ok(0);
+    };
+    if is_bytes || len != bytes.len() {
+        return Ok(0);
     }
     Ok(i64::from_le_bytes(bytes))
 }
@@ -517,7 +506,10 @@ fn txna_uint(
 }
 
 /// Shared implementation of the scalar (`txn`) and array (`txna`) byte-string
-/// field reads.
+/// field reads. Unreadable or non-byte-string fields read as empty. A short
+/// destination reports [`TXN_ERR_BUFFER`] so the raw ABI and strict internal
+/// readers can distinguish it from an empty field. An empty destination
+/// (`len == 0`) still queries the required length.
 fn read_txn_bytes(
     mut caller: &mut Caller<'_, HostState>,
     source: FieldSource,
@@ -544,28 +536,35 @@ fn read_txn_bytes(
     } else {
         (out_len as usize).min(buf.len())
     };
-    let (is_bytes, len) = fetch_txn_field(
+    let Some((is_bytes, len)) = fetch_txn_field(
         caller,
         source,
         field,
         index,
         expect_array,
         &mut buf[..capacity],
-    )?;
+    )?
+    else {
+        return Ok(0);
+    };
     if !is_bytes {
-        return Err(wasmi::Error::new(format!(
-            "txn field {field} is not a byte string"
-        )));
+        return Ok(0);
     }
+    if len > MAX_AVM_BYTES {
+        return Err(wasmi::Error::new("txn byte field exceeds AVM size limit"));
+    }
+    // A zero-length destination queries the required length without touching
+    // memory. Negative lengths, bad pointers, and bad memory read as an empty
+    // value; a short destination reports `-2` so the raw ABI and strict
+    // internal callers can distinguish it from an empty field.
     if out_len < 0 {
-        return Ok(TXN_ERR_MEMORY);
+        return Ok(0);
     }
-    // A zero-length buffer queries the required length without touching memory.
     if out_len == 0 {
         return Ok(len as i32);
     }
     if out_ptr < 0 {
-        return Ok(TXN_ERR_MEMORY);
+        return Ok(0);
     }
     if len > out_len as usize {
         return Ok(TXN_ERR_BUFFER);
@@ -573,13 +572,13 @@ fn read_txn_bytes(
 
     let memory: Option<wasmi::Memory> = caller.get_export("memory").and_then(|e| e.into_memory());
     let Some(memory) = memory else {
-        return Ok(TXN_ERR_MEMORY);
+        return Ok(0);
     };
     if memory
         .write(&mut caller, out_ptr as usize, &buf[..len])
         .is_err()
     {
-        return Ok(TXN_ERR_MEMORY);
+        return Ok(0);
     }
     Ok(len as i32)
 }
@@ -2320,19 +2319,19 @@ mod tests {
     }
 
     #[test]
-    fn txn_uint_on_byte_field_traps() {
+    fn txn_uint_on_byte_field_reads_zero() {
         let wat = r#"
             (module
                 (import "env" "txn_uint" (func $txn_uint (param i32) (result i64)))
                 (func (export "program") (result i32)
                     (i32.wrap_i64 (call $txn_uint (i32.const 0)))))
         "#;
-        let err = run_wat_with_txn(wat, 1000).unwrap_err();
-        assert!(err.contains("not a uint"), "{err}");
+        let out = run_wat_with_txn(wat, 1000).unwrap();
+        assert!(!out.pass);
     }
 
     #[test]
-    fn txn_bytes_on_uint_field_traps() {
+    fn txn_bytes_on_uint_field_reads_empty() {
         let wat = r#"
             (module
                 (import "env" "txn_bytes" (func $txn_bytes (param i32 i32 i32) (result i32)))
@@ -2340,20 +2339,20 @@ mod tests {
                 (func (export "program") (result i32)
                     (call $txn_bytes (i32.const 1) (i32.const 0) (i32.const 32))))
         "#;
-        let err = run_wat_with_txn(wat, 1000).unwrap_err();
-        assert!(err.contains("not a byte string"), "{err}");
+        let out = run_wat_with_txn(wat, 1000).unwrap();
+        assert!(!out.pass);
     }
 
     #[test]
-    fn txn_invalid_field_traps() {
+    fn txn_invalid_field_reads_zero() {
         let wat = r#"
             (module
                 (import "env" "txn_uint" (func $txn_uint (param i32) (result i64)))
                 (func (export "program") (result i32)
                     (i32.wrap_i64 (call $txn_uint (i32.const 999)))))
         "#;
-        let err = run_wat_with_txn(wat, 1000).unwrap_err();
-        assert!(err.contains("error"), "{err}");
+        let out = run_wat_with_txn(wat, 1000).unwrap();
+        assert!(!out.pass);
     }
 
     #[test]
@@ -2880,7 +2879,7 @@ mod tests {
         for inputs in [(-1, 1), (0, -1)] {
             let before = calls.len();
             store.set_fuel(TXN_UINT_FUEL_COST).unwrap();
-            assert!(uint.call(&mut store, inputs).is_err());
+            assert_eq!(uint.call(&mut store, inputs).unwrap(), 0);
             assert_eq!(store.get_fuel().unwrap(), 0);
             assert_eq!(calls.len(), before);
         }
@@ -2918,10 +2917,10 @@ mod tests {
                 (-1, 0, 32, false),
                 (0, 0, 32, true),
                 (0, 31, TXN_ERR_BUFFER, true),
-                (-1, 32, TXN_ERR_MEMORY, true),
-                (0, -1, TXN_ERR_MEMORY, true),
-                (65505, 32, TXN_ERR_MEMORY, true),
-                (0, 32, TXN_ERR_MEMORY, false),
+                (-1, 32, 0, true),
+                (0, -1, 0, true),
+                (65505, 32, 0, true),
+                (0, 32, 0, false),
                 (65504, 32, 32, true),
             ] {
                 let memory = if memory {
@@ -2978,7 +2977,7 @@ mod tests {
         let bytes = wasmi::Func::wrap(&mut store, txn_bytes)
             .typed::<(i32, i32, i32), i32>(&store)
             .unwrap();
-        for (len, expected) in [(0, 32), (-1, TXN_ERR_MEMORY)] {
+        for (len, expected) in [(0, 32), (-1, 0)] {
             store.set_fuel(TXN_BYTES_FUEL_COST).unwrap();
             let before = calls;
             assert_eq!(bytes.call(&mut store, (0, 0, len)).unwrap(), expected);
@@ -2991,7 +2990,7 @@ mod tests {
         // Even a field rejected before invoking Go pays the host cost.
         store.set_fuel(TXN_UINT_FUEL_COST).unwrap();
         let before = calls;
-        assert!(uint.call(&mut store, -1).is_err());
+        assert_eq!(uint.call(&mut store, -1).unwrap(), 0);
         assert_eq!(store.get_fuel().unwrap(), 0);
         assert_eq!(calls, before);
 
@@ -3004,7 +3003,7 @@ mod tests {
         assert_eq!(calls, before);
         store.set_fuel(200).unwrap();
         // Invalid array fields still pay the calibrated charge.
-        assert!(array.call(&mut store, (-1, 0, 0, 0)).is_err());
+        assert_eq!(array.call(&mut store, (-1, 0, 0, 0)).unwrap(), 0);
         assert_eq!(store.get_fuel().unwrap(), 0);
         assert_eq!(calls, before);
     }
@@ -3014,10 +3013,10 @@ mod tests {
         for (field, ptr, len, expected, memory) in [
             (5, 0, 32, 0, true),
             (5, -1, 0, 0, false),
-            (0, -1, 32, TXN_ERR_MEMORY, true),
-            (0, 0, -1, TXN_ERR_MEMORY, true),
-            (0, 65505, 32, TXN_ERR_MEMORY, true),
-            (0, 0, 32, TXN_ERR_MEMORY, false),
+            (0, -1, 32, 0, true),
+            (0, 0, -1, 0, true),
+            (0, 65505, 32, 0, true),
+            (0, 0, 32, 0, false),
             (0, 0, 31, TXN_ERR_BUFFER, true),
         ] {
             let memory = if memory {

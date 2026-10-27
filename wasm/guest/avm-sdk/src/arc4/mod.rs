@@ -352,7 +352,7 @@ impl Args {
             let Some(rest) = self.buf.get_mut(pos..) else {
                 return false;
             };
-            let Ok(arg) = crate::txn::app_arg_into(index, rest) else {
+            let Ok(arg) = crate::txn::try_app_arg_into(index, rest) else {
                 return false;
             };
             pos += arg.len();

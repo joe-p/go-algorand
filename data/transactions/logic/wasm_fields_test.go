@@ -50,46 +50,46 @@ func wasmFieldParams(field, groupIndex, expected uint64) *EvalParams {
 	return wasmAppParams(pay, app, axfer, app, app)
 }
 
+// TestWasmGroupAndGlobalFields checks that grouped and context reads expose
+// their values in application mode and read as zero/empty when the field is
+// invalid or unavailable. Uint fixtures compare against the expected value, so
+// a zero read approves when the expectation is zero. Byte fixtures require a
+// full-length value, so an empty read rejects.
 func TestWasmGroupAndGlobalFields(t *testing.T) {
 	partitiontest.PartitionTest(t)
 	for _, tc := range []struct {
 		fixture                string
 		field, index, expected uint64
-		err                    string
+		pass                   bool
 	}{
-		{"gtxn_uint.wasm", uint64(Amount), 0, 300_000, ""},
-		{"gtxn_uint.wasm", uint64(XferAsset), 2, 777, ""},
-		{"gtxn_uint.wasm", uint64(AssetAmount), 2, 123, ""},
-		{"gtxn_uint.wasm", uint64(GroupIndex), 1, 1, ""},
-		{"gtxn_uint.wasm", uint64(GroupIndex), 4, 4, ""},
-		{"gtxn_uint.wasm", uint64(Amount), 5, 0, "txn index 5"},
-		{"gtxn_uint.wasm", uint64(Sender), 0, 0, "not a uint"},
-		{"gtxn_uint.wasm", uint64(Assets), 0, 0, "invalid txn field Assets"},
-		{"gtxn_uint.wasm", uint64(CreatedAssetID), 2, 0, "past txns"},
-		{"gtxn_uint.wasm", uint64(CreatedAssetID), 1, 0, "past txns"},
-		{"gtxn_uint.wasm", 999, 0, 0, "invalid txn field"},
-		{"gtxn_bytes.wasm", uint64(Receiver), 0, 0, ""},
-		{"gtxn_bytes.wasm", uint64(AssetReceiver), 2, 0, ""},
-		{"gtxn_bytes.wasm", uint64(Sender), 1, 0, ""},
-		{"gtxn_bytes.wasm", uint64(Amount), 0, 0, "not a byte string"},
-		{"gtxn_bytes.wasm", uint64(Receiver), 5, 0, "txn index 5"},
-		{"global_uint.wasm", uint64(GroupSize), 0, 5, ""},
-		{"global_uint.wasm", uint64(CurrentApplicationID), 0, 888, ""},
-		{"global_uint.wasm", uint64(CurrentApplicationAddress), 0, 0, "not a uint"},
-		{"global_uint.wasm", uint64(OpcodeBudget), 0, 0, "unsupported wasm global"},
-		{"global_uint.wasm", 999, 0, 0, "unsupported wasm global"},
-		{"global_bytes.wasm", uint64(CurrentApplicationAddress), 0, 0, ""},
-		{"global_bytes.wasm", uint64(GroupSize), 0, 0, "not a byte string"},
+		{"gtxn_uint.wasm", uint64(Amount), 0, 300_000, true},
+		{"gtxn_uint.wasm", uint64(XferAsset), 2, 777, true},
+		{"gtxn_uint.wasm", uint64(AssetAmount), 2, 123, true},
+		{"gtxn_uint.wasm", uint64(GroupIndex), 1, 1, true},
+		{"gtxn_uint.wasm", uint64(GroupIndex), 4, 4, true},
+		{"gtxn_uint.wasm", uint64(Amount), 5, 0, true},
+		{"gtxn_uint.wasm", uint64(Sender), 0, 0, true},
+		{"gtxn_uint.wasm", uint64(Assets), 0, 0, true},
+		{"gtxn_uint.wasm", uint64(CreatedAssetID), 2, 0, true},
+		{"gtxn_uint.wasm", uint64(CreatedAssetID), 1, 0, true},
+		{"gtxn_uint.wasm", 999, 0, 0, true},
+		{"gtxn_bytes.wasm", uint64(Receiver), 0, 0, true},
+		{"gtxn_bytes.wasm", uint64(AssetReceiver), 2, 0, true},
+		{"gtxn_bytes.wasm", uint64(Sender), 1, 0, true},
+		{"gtxn_bytes.wasm", uint64(Amount), 0, 0, false},
+		{"gtxn_bytes.wasm", uint64(Receiver), 5, 0, false},
+		{"global_uint.wasm", uint64(GroupSize), 0, 5, true},
+		{"global_uint.wasm", uint64(CurrentApplicationID), 0, 888, true},
+		{"global_uint.wasm", uint64(CurrentApplicationAddress), 0, 0, true},
+		{"global_uint.wasm", uint64(OpcodeBudget), 0, 0, true},
+		{"global_uint.wasm", 999, 0, 0, true},
+		{"global_bytes.wasm", uint64(CurrentApplicationAddress), 0, 0, true},
+		{"global_bytes.wasm", uint64(GroupSize), 0, 0, false},
 	} {
 		t.Run(fmt.Sprintf("%s/%d/%d", tc.fixture, tc.field, tc.index), func(t *testing.T) {
 			pass, cx, err := EvalContract(loadWasm(t, tc.fixture), 1, 888, wasmFieldParams(tc.field, tc.index, tc.expected))
-			if tc.err == "" {
-				require.NoError(t, err)
-				require.True(t, pass)
-			} else {
-				require.ErrorContains(t, err, tc.err)
-				require.False(t, pass)
-			}
+			require.NoError(t, err)
+			require.Equal(t, tc.pass, pass)
 			require.Positive(t, cx.Cost())
 		})
 	}
@@ -124,15 +124,18 @@ func TestWasmGroupAndGlobalSignatureFields(t *testing.T) {
 	for _, tc := range []struct {
 		fixture                string
 		field, index, expected uint64
-		err                    string
+		pass                   bool
 	}{
-		{"gtxn_uint.wasm", uint64(Amount), 0, 300_000, ""},
-		{"gtxn_uint.wasm", uint64(XferAsset), 2, 777, ""},
-		{"gtxn_bytes.wasm", uint64(AssetReceiver), 2, 0, ""},
-		{"global_uint.wasm", uint64(GroupSize), 0, 5, ""},
-		{"global_uint.wasm", uint64(CurrentApplicationID), 0, 0, "not allowed in current mode"},
-		{"global_bytes.wasm", uint64(CurrentApplicationAddress), 0, 0, "not allowed in current mode"},
-		{"gtxn_uint.wasm", uint64(CreatedAssetID), 0, 0, "not allowed in current mode"},
+		{"gtxn_uint.wasm", uint64(Amount), 0, 300_000, true},
+		{"gtxn_uint.wasm", uint64(XferAsset), 2, 777, true},
+		{"gtxn_bytes.wasm", uint64(AssetReceiver), 2, 0, true},
+		{"global_uint.wasm", uint64(GroupSize), 0, 5, true},
+		// Mode-restricted fields read as zero/empty in a LogicSig rather than
+		// trapping. Uint fixtures compare against 0, byte fixtures require a
+		// full-length value.
+		{"global_uint.wasm", uint64(CurrentApplicationID), 0, 0, true},
+		{"global_bytes.wasm", uint64(CurrentApplicationAddress), 0, 0, false},
+		{"gtxn_uint.wasm", uint64(CreatedAssetID), 0, 0, true},
 	} {
 		t.Run(fmt.Sprintf("%s/%d", tc.fixture, tc.field), func(t *testing.T) {
 			appParams := wasmFieldParams(tc.field, tc.index, tc.expected)
@@ -141,13 +144,8 @@ func TestWasmGroupAndGlobalSignatureFields(t *testing.T) {
 				txns[i] = appParams.TxnGroup[i].SignedTxn
 			}
 			pass, _, err := EvalSignatureProgram(loadWasm(t, tc.fixture), nil, 1, optSigParams(wasmProto, txns...))
-			if tc.err == "" {
-				require.NoError(t, err)
-				require.True(t, pass)
-			} else {
-				require.ErrorContains(t, err, tc.err)
-				require.False(t, pass)
-			}
+			require.NoError(t, err)
+			require.Equal(t, tc.pass, pass)
 		})
 	}
 }

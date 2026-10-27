@@ -19,7 +19,7 @@
 
 #[cfg(target_arch = "wasm32")]
 use crate::Avm;
-use crate::{address::Address, asset::Asset, globals, host, Error, TxnField};
+use crate::{address::Address, asset::Asset, globals, host, TxnField};
 
 /// Begins a group with one pending transaction; mirrors `itxn_begin` defaults.
 #[inline]
@@ -106,7 +106,6 @@ pub fn asset_transfer(asset: Asset, receiver: &Address, amount: u64) {
 }
 
 /// Opts the application into an asset via a zero-amount transfer to itself.
-pub fn asset_opt_in(asset: Asset) -> Result<(), Error> {
-    asset_transfer(asset, &globals::application_address()?, 0);
-    Ok(())
+pub fn asset_opt_in(asset: Asset) {
+    asset_transfer(asset, &globals::application_address(), 0);
 }

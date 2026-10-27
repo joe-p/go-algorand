@@ -20,7 +20,9 @@
 //! global-state, and `ed25519verify_bare` imports) and adds:
 //!
 //! - [`arg`], [`txn`], and [`global`]: the host operations as free functions,
-//!   plus typed helpers (`txn::sender`, `txn::app_arg_into`, ...).
+//!   plus typed helpers (`txn::sender`, `txn::app_arg_into`, ...). Transaction
+//!   and context reads are infallible: an unreadable field yields its zero
+//!   value (`0`, [`Address::ZERO`], or empty bytes).
 //! - [`GlobalU64`] and [`GlobalBytes`], `const`-constructible handles for the
 //!   current application's global state.
 //! - [`contract`], an attribute macro for a contract's state struct and its

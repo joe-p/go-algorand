@@ -41,8 +41,13 @@ This is a separate Cargo workspace from the host executor so `make wasmlib`
   `txn::app_args_count` / `txn::app_arg_into`). The `app_global_*` functions are
   application-only and trap in a LogicSig.
 
-  Cases the host *traps* on (an invalid transaction field, an oversized value)
-  are not `Result`; a trap ends the guest, as in the AVM.
+  Cases the host traps on (a non-transaction operation, an oversized inner
+  transaction value, a missing host callback) end the guest. Transaction and
+  context field reads do not trap: an invalid, unavailable, wrong-typed, or
+  out-of-version field reads as its zero value (`0` or empty bytes). The raw
+  `avm-sys` byte readers retain `Result` for short destination buffers, which
+  native mocks can report too; the `avm-sdk` helpers turn those errors into an
+  empty value and are infallible.
 
 - **`avm-sdk/`** (`avm-sdk`) — the guest SDK. It depends on `avm-sys` and adds
   host operations grouped into `arg`, `txn`, and `global` modules, typed
@@ -63,11 +68,18 @@ This is a separate Cargo workspace from the host executor so `make wasmlib`
    fields live in **`globals`**, separately from application state in `global`:
    `globals::group_size()`, `globals::application_id()` (returns `Application`;
    the assigned ID, even at creation), and `globals::application_address()`
-   (returns `Address`).
+   (returns `Address`, or `Address::ZERO` if it cannot be read).
    Only those three context fields are currently exposed. Byte reads accept an
    empty buffer to query length without copying. Group array reads remain
    unavailable. Native mocks can override the four new `Avm` methods; their
    defaults panic so an unmodeled read cannot silently pass.
+
+   Transaction and context field helpers are infallible. `txn::uint`,
+   `txn::array_uint`, `txn::group_uint`, and `globals::uint` return `0` for
+   unreadable fields. The byte readers return a length (0 on failure), and the
+   address helpers return `Address::ZERO` for a missing, wrong-length, or
+   unreadable value. A buffer that is too small also reads as empty; query the
+   length with an empty buffer first when the value may not fit.
 
    Application-only inner assets use `itxn::AssetCreation { .. }.submit()`
    (returns the created `Asset`), `itxn::asset_opt_in(asset: Asset)`, and
@@ -99,8 +111,10 @@ This is a separate Cargo workspace from the host executor so `make wasmlib`
    primitive. The public owned wrapper manages allocation and validates the
    returned length; `HostAvm` and native mocks only implement the buffer read.
 
-   The `alloc` feature also provides owned byte readers (all return
-   `Result<Vec<u8>, ...>`; bytes need not be UTF-8):
+   The `alloc` feature also provides owned byte readers (bytes need not be
+   UTF-8). Transaction readers return `Vec<u8>` directly and yield an empty
+   vector when the value cannot be read; application-state and LogicSig readers
+   return `Result<Vec<u8>, ...>`:
 
    | Owned API | Existing buffer-based API |
    | --- | --- |
@@ -115,9 +129,9 @@ This is a separate Cargo workspace from the host executor so `make wasmlib`
 
    `GlobalBytes::read_owned()` traps on errors rather than returning `Result`.
    Missing global-state keys read as empty. LogicSig arguments remain
-   signature-only; state and application-argument operations retain their mode
-   restrictions. All these wrappers share bounded, safe buffer handling and
-   propagate host errors without introducing lossy UTF-8 conversion.
+   signature-only; state operations retain their mode restrictions. All these
+   wrappers share bounded, safe buffer handling without introducing lossy UTF-8
+   conversion.
 
    These general owned readers allocate **4 KiB per call**, make one host read,
    then truncate the vector's length without shrinking capacity. This avoids
@@ -127,13 +141,14 @@ This is a separate Cargo workspace from the host executor so `make wasmlib`
    use existing buffer APIs in allocation-heavy loops or for tighter memory
    control. `asset::unit_name` retains its specialized eight-byte allocation.
 
-   Fixed-size reads need no allocator: `txn::address(field)`,
+   Fixed-size reads need no allocator: `txn::sender()`, `txn::address(field)`,
    `txn::array_address(field, index)`, `txn::group_address(index, field)`, and
-   `Transaction::address(field)` return `Result<Address, Error>`. They check
-   the returned length and propagate read errors. Select an address-valued field;
-   these helpers validate length, not field semantics. The AMM uses
-   `seed.address(TxnField::Receiver)` and `GlobalBytes<Address>::get()` for the
-   governor instead of local buffer-management helpers.
+   `Transaction::address(field)` return `Address`. They check the returned
+   length and yield `Address::ZERO` for a missing, mis-sized, or unreadable
+   value. Select an address-valued field; these helpers validate length, not
+   field semantics. The AMM uses `seed.address(TxnField::Receiver)` and
+   `GlobalBytes<Address>::get()` for the governor instead of local
+   buffer-management helpers.
 
    Both modes can use host-backed arithmetic through `math::mulw(a, b)`
    (returns high/low product words), `math::divmodw(a_hi, a_lo, b_hi, b_lo)`

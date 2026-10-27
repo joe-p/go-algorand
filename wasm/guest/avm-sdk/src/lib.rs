@@ -39,8 +39,9 @@
 //! runs in unit tests. The SDK does not re-export the raw `avm_sys` functions,
 //! which would bypass the mock; depend on `avm-sys` directly to use them.
 //!
-//! The crate is `no_std` on wasm and does not allocate unless the guest opts in
-//! with `#[program_entry(alloc)]`.
+//! The crate is `no_std` on wasm. Owned-value helpers require the Cargo feature
+//! `alloc`; install a guest allocator with `#[program_entry(alloc)]` or
+//! `#[contract(alloc)]` on the impl when using them.
 //!
 //! # Example
 //!
@@ -78,9 +79,13 @@
 
 #![cfg_attr(target_arch = "wasm32", no_std)]
 
+#[cfg(feature = "alloc")]
+extern crate alloc as rust_alloc;
+
 mod avm;
 #[cfg(any(target_arch = "wasm32", test))]
 mod bump;
+mod bytes;
 mod error;
 
 pub mod arc4;

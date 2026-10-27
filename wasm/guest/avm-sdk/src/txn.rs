@@ -18,6 +18,8 @@
 
 use avm_sys::{TxnError, TxnField, MAX_ARG_BYTES};
 
+#[cfg(feature = "alloc")]
+use crate::rust_alloc::vec::Vec;
 #[cfg(target_arch = "wasm32")]
 use crate::Avm;
 use crate::{host, Error};
@@ -38,6 +40,24 @@ pub fn bytes(field: TxnField, buf: &mut [u8]) -> Result<usize, TxnError> {
     host().txn_bytes(field, buf)
 }
 
+/// Returns an owned byte-string transaction field. Allocates a 4 KiB buffer,
+/// reads once, and truncates to the returned length. Requires a guest allocator.
+/// Invalid fields and host resource failures still trap. Use [`bytes`] to
+/// control buffer capacity or avoid allocation.
+#[cfg(feature = "alloc")]
+#[inline]
+pub fn bytes_owned(field: TxnField) -> Result<Vec<u8>, TxnError> {
+    crate::bytes::read_owned(|buf| bytes(field, buf), TxnError::BufferTooSmall)
+}
+
+/// Reads a 32-byte transaction field without allocating. A successful read of
+/// any other length returns [`Error::WrongLength`]; host read errors propagate.
+/// The caller selects an address-valued field; this does not validate its type.
+#[inline]
+pub fn address(field: TxnField) -> Result<[u8; 32], Error> {
+    crate::bytes::read_address(|buf| bytes(field, buf))
+}
+
 /// Reads element `index` of a uint64 array transaction field.
 #[inline]
 pub fn array_uint(field: TxnField, index: u32) -> u64 {
@@ -49,6 +69,23 @@ pub fn array_uint(field: TxnField, index: u32) -> u64 {
 #[inline]
 pub fn array_bytes(field: TxnField, index: u32, buf: &mut [u8]) -> Result<usize, TxnError> {
     host().txna_bytes(field, index, buf)
+}
+
+/// Returns an owned byte-string array element. Like [`bytes_owned`], allocates
+/// 4 KiB and reads once. Invalid fields/indices follow the underlying host API.
+#[cfg(feature = "alloc")]
+#[inline]
+pub fn array_bytes_owned(field: TxnField, index: u32) -> Result<Vec<u8>, TxnError> {
+    crate::bytes::read_owned(
+        |buf| array_bytes(field, index, buf),
+        TxnError::BufferTooSmall,
+    )
+}
+
+/// Reads a 32-byte array element without allocating; see [`address`].
+#[inline]
+pub fn array_address(field: TxnField, index: u32) -> Result<[u8; 32], Error> {
+    crate::bytes::read_address(|buf| array_bytes(field, index, buf))
 }
 
 /// Reads a scalar uint field from transaction `group_index` in the current group.
@@ -64,18 +101,27 @@ pub fn group_bytes(group_index: u32, field: TxnField, buf: &mut [u8]) -> Result<
     host().gtxn_bytes(group_index, field, buf)
 }
 
+/// Returns an owned byte field from a group transaction. Like [`bytes_owned`],
+/// allocates 4 KiB and reads once. Invalid indices or fields trap.
+#[cfg(feature = "alloc")]
+#[inline]
+pub fn group_bytes_owned(group_index: u32, field: TxnField) -> Result<Vec<u8>, TxnError> {
+    crate::bytes::read_owned(
+        |buf| group_bytes(group_index, field, buf),
+        TxnError::BufferTooSmall,
+    )
+}
+
+/// Reads a 32-byte group transaction field without allocating; see [`address`].
+#[inline]
+pub fn group_address(group_index: u32, field: TxnField) -> Result<[u8; 32], Error> {
+    crate::bytes::read_address(|buf| group_bytes(group_index, field, buf))
+}
+
 /// Reads the current transaction's sender, which is always 32 bytes.
 #[inline]
 pub fn sender() -> Result<[u8; 32], Error> {
-    let mut buf = [0u8; 32];
-    let len = bytes(TxnField::Sender, &mut buf)?;
-    if len != buf.len() {
-        return Err(Error::WrongLength {
-            expected: buf.len(),
-            got: len,
-        });
-    }
-    Ok(buf)
+    address(TxnField::Sender)
 }
 
 /// The current application's ID, or 0 during creation.
@@ -106,6 +152,14 @@ pub fn app_arg_into(index: u32, buf: &mut [u8]) -> Result<&[u8], TxnError> {
         return Err(TxnError::BufferTooSmall);
     }
     Ok(&buf[..len])
+}
+
+/// Returns an owned application argument. Allocates 4 KiB and reads once;
+/// requires a guest allocator. See [`app_arg_into`] for the buffer-based API.
+#[cfg(feature = "alloc")]
+#[inline]
+pub fn app_arg(index: u32) -> Result<Vec<u8>, TxnError> {
+    array_bytes_owned(TxnField::ApplicationArgs, index)
 }
 
 /// Returns whether application argument `index` equals `expected`.

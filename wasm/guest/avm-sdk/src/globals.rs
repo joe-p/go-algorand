@@ -47,13 +47,5 @@ pub fn application_id() -> u64 {
 /// Current application's address. Application-only.
 #[inline]
 pub fn application_address() -> Result<[u8; 32], Error> {
-    let mut buf = [0u8; 32];
-    let len = bytes(GlobalField::CurrentApplicationAddress, &mut buf)?;
-    if len != buf.len() {
-        return Err(Error::WrongLength {
-            expected: buf.len(),
-            got: len,
-        });
-    }
-    Ok(buf)
+    crate::bytes::read_address(|buf| bytes(GlobalField::CurrentApplicationAddress, buf))
 }

@@ -16,7 +16,9 @@
 
 //! Top-level ARC-4 references and preceding group transactions.
 
-use crate::{txn, TxnError, TxnField};
+#[cfg(feature = "alloc")]
+use crate::rust_alloc::vec::Vec;
+use crate::{txn, Error, TxnError, TxnField};
 
 /// A resolved ARC-4 `asset` (the actual asset ID, not the encoded uint8 index).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -97,5 +99,16 @@ impl<const KIND: u64> Transaction<KIND> {
     }
     pub fn bytes(self, field: TxnField, out: &mut [u8]) -> Result<usize, TxnError> {
         txn::group_bytes(self.group_index, field, out)
+    }
+
+    /// Returns an owned byte field. Allocates 4 KiB; see [`txn::group_bytes_owned`].
+    #[cfg(feature = "alloc")]
+    pub fn bytes_owned(self, field: TxnField) -> Result<Vec<u8>, TxnError> {
+        txn::group_bytes_owned(self.group_index, field)
+    }
+
+    /// Reads a 32-byte field without allocating; see [`txn::group_address`].
+    pub fn address(self, field: TxnField) -> Result<[u8; 32], Error> {
+        txn::group_address(self.group_index, field)
     }
 }

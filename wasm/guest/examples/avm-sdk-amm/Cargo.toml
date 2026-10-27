@@ -25,4 +25,4 @@ license = "AGPL-3.0-or-later"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-avm-sdk = { path = "../../avm-sdk" }
+avm-sdk = { path = "../../avm-sdk", features = ["alloc"] }

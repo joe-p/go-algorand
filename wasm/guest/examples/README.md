@@ -75,8 +75,8 @@ needs to pool enough budget for that total.
 | | `join` | | | | 2,184 | 7,181 | 11 |
 | | `record` | | | | 3,677 | 8,674 | 13 |
 | | `wide` | | | | 2,949 | 7,946 | 12 |
-| `avm_sdk_amm.wasm` (local build) | SDK assertions | 15,021 | 1 | — | — | — | — |
-| `avm_sdk_amm.oz.wasm` (local post-processing) | SDK assertions + `wasm-opt -Oz` | 10,866 | 1 | — | — | — | — |
+| `avm_sdk_amm.wasm` (local build) | SDK assertions + owned reads | 16,068 | 1 | — | — | — | — |
+| `avm_sdk_amm.oz.wasm` (local post-processing) | owned reads + `wasm-opt -Oz` | 11,346 | 1 | — | — | — | — |
 | `sdk_math.wasm` | | 722 | 1 | — | — | — | — |
 
 AMM and math fixture costs have not yet been measured; dashes indicate unavailable
@@ -90,14 +90,14 @@ following historical measurements isolate the earlier AMM-specific changes:
 | Standard `assert!` / `assert_eq!` / `assert_ne!`, previous name builder | 20,907 |
 | Standard assertions and straightforward slice-based name construction | 22,073 |
 
-The current AMM keeps the straightforward slice-based name construction and
-imports trap-only assertions from `avm_sdk`. Only the assertion implementation
+The next comparison kept the straightforward slice-based name construction and
+imported trap-only assertions from `avm_sdk`. Only the assertion implementation
 changes between these rows; host arithmetic and SDK byte encoding are unchanged:
 
 | AMM assertions | Cargo release bytes | after `wasm-opt -Oz` |
 | --- | ---: | ---: |
 | Standard Rust `assert!` / `assert_eq!` / `assert_ne!` | 22,073 | 18,391 |
-| SDK trap-only assertions (current) | 15,021 | 10,866 |
+| SDK trap-only assertions, stack buffers | 15,021 | 10,866 |
 
 Binaryen **133** was used with `-Oz --enable-bulk-memory --enable-sign-ext
 --enable-mutable-globals`, without unsafe trap assumptions. `wasm-opt` alone
@@ -110,6 +110,54 @@ Both SDK-assert variants pass executor validation and smoke tests for creation
 and assertion failure. Those smoke tests use a lifted budget; fitting the size
 cap does not establish normal-budget deployability. Post-processing is optional,
 not part of the default Cargo build or `make wasm-guest-fixtures`.
+
+The current AMM enables the SDK's `alloc` feature and `#[contract(alloc)]`,
+uses owned `asset::unit_name(id)` values, and constructs the pool name with
+`[b"DPT-".as_slice(), a, b"-", b].concat()`. Trap-only assertions are unchanged.
+
+| Name handling | Cargo release bytes | after `wasm-opt -Oz` |
+| --- | ---: | ---: |
+| Caller-owned stack buffers | 15,021 | 10,866 |
+| Owned SDK names + `.concat()` | 16,107 | 11,343 |
+| Increase | 1,086 (7.2%) | 477 (4.4%) |
+
+Moving allocation/length validation from the public SDK wrapper into
+`HostAvm::asset_unit_name(id) -> Result<Option<Vec<u8>>, TxnError>` produced
+**byte-for-byte identical** raw and optimized modules (16,107 / 11,343 bytes).
+The experiment was reverted to the buffer-based trait: the public owned SDK
+wrapper centralizes allocation and length validation, while `HostAvm` and
+native mocks only implement the buffer read. That layer added no bytecode in
+this example after inlining. The raw host ABI still writes into guest memory;
+changing the Rust trait does not change that ABI.
+
+The AMM now also uses `GlobalBytes::try_read_owned()` for the governor read and
+`Transaction::address(field)` for fixed-size group addresses. These changes
+remove the contract-local `group_address` helper:
+
+| Additional SDK helpers | Cargo release bytes | after `wasm-opt -Oz` |
+| --- | ---: | ---: |
+| Owned unit names only | 16,107 | 11,343 |
+| Plus owned governor read and SDK address helpers (current) | 16,068 | 11,346 |
+| Change | -39 | +3 |
+
+General owned reads allocate a 4 KiB buffer and make one host call; truncation
+does not reclaim capacity. This is a memory/zeroing tradeoff, not a free
+abstraction. Fixed-size address helpers return `[u8; 32]` without allocation;
+owned unit names still allocate only eight bytes. The new general readers are
+feature-gated and unused ones do not increase the AMM's linked module size.
+
+For this contract, allocation simplifies the code but does not reduce the
+module size. Both current builds fit the 16,384-byte executor limit (the raw
+build has 316 bytes to spare). Initial memory remains one 64 KiB page; bootstrap
+grows it to two pages, versus one throughout for the stack-buffer baseline.
+A temporary wasmi harness exercised bootstrap with empty, three-byte, and
+eight-byte unit names for both current builds, verifying the LP name, three
+inner submissions, and return log. The real executor also validated both builds
+and passed creation/assertion-failure smoke tests with a lifted budget. These
+checks do not establish normal-budget deployability or full ledger integration.
+The bump allocator does not reclaim individual allocations. Allocation-free
+callers can use `asset::unit_name_into(id, &mut buffer)` without the `alloc`
+feature.
 
 To reproduce post-processing, from `wasm/guest`:
 

@@ -19,16 +19,25 @@ exercise ARC-4 routing, state, deposit validation, and inner transactions with
 a mock host; they do not model protocol budgets, fee pooling, minimum balances,
 resource availability, or atomic rollback.
 
-The stripped release module is **15,021 bytes** (one memory page), or **10,866
-bytes** after Binaryen 133 `wasm-opt -Oz` post-processing. The corresponding
-standard-Rust-assert builds measured 22,073 and 18,391 bytes. See the
+The stripped release module is **16,068 bytes**, or **11,346 bytes** after
+Binaryen 133 `wasm-opt -Oz` post-processing. The owned-unit-name-only version
+measured 16,107 / 11,343 bytes; adding the owned governor read and SDK address
+helpers changes that by -39 / +3 bytes. Initial memory is one page; bootstrap grows it to
+two 64 KiB pages. Moving ownership from the SDK wrapper to the `Avm` trait
+produced byte-for-byte identical raw and optimized modules. See the
 [comparison and reproduction commands](../README.md#size-and-cost).
 
 The contract imports SDK trap-only `assert!`, `assert_eq!`, and `assert_ne!`
-while keeping normal slices and `copy_from_slice` for the pool name. No allocator
-was added. The guest still uses host `mulw`, `divmodw`, and `sqrtw`, rather than
+and enables the SDK's `alloc` feature and `#[contract(alloc)]`. Asset unit names
+are owned `Vec<u8>` values; the pool name is built with `.concat()` instead of
+manual buffer offsets/copies. The guest still uses host `mulw`, `divmodw`, and `sqrtw`, rather than
 bundling software wide arithmetic. Both SDK-assert builds fit the executor's
 16,384-byte size cap; normal-budget deployability remains unverified.
+
+Governor reads use `GlobalBytes::try_read_owned()` (one host call with a 4 KiB
+allocation whose capacity is retained for the invocation). Group address reads
+use `Transaction::address(field)` without allocation or contract-local buffer
+handling. The underlying `Avm` methods remain buffer-based.
 
 Failed assertions trap on WASM rather than returning an ABI method error;
 the SDK macros do not format operands or accept custom message arguments.

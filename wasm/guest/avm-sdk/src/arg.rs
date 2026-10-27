@@ -23,6 +23,8 @@
 use avm_sys::ArgError;
 
 use crate::host;
+#[cfg(feature = "alloc")]
+use crate::rust_alloc::vec::Vec;
 #[cfg(target_arch = "wasm32")]
 use crate::Avm;
 
@@ -36,4 +38,16 @@ pub fn count() -> u32 {
 #[inline]
 pub fn get(index: u32, buf: &mut [u8]) -> Result<&[u8], ArgError> {
     host().arg_into(index, buf)
+}
+
+/// Returns an owned LogicSig argument. Allocates 4 KiB and reads once (there is
+/// no length-query operation). Requires a guest allocator. Signature-only;
+/// application programs must use [`crate::txn::app_arg`] instead.
+#[cfg(feature = "alloc")]
+#[inline]
+pub fn get_owned(index: u32) -> Result<Vec<u8>, ArgError> {
+    crate::bytes::read_owned(
+        |buf| get(index, buf).map(|value| value.len()),
+        ArgError::BufferTooSmall,
+    )
 }

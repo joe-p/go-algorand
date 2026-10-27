@@ -78,12 +78,59 @@ This is a separate Cargo workspace from the host executor so `make wasmlib`
    and inner host fuel charges are provisional pending calibration.
 
    Application-only asset queries are `asset::balance(&address, asset_id)` and
-   `asset::unit_name(asset_id, &mut buffer)`. They distinguish missing resources
+   `asset::unit_name_into(asset_id, &mut buffer)`. They distinguish missing resources
    (`None`) from existing zero balances/empty names (`Some(0)`). An empty name
    buffer queries the required length. Missing holdings/assets are not the same
    as unavailable resources: missing returns `None`, but AVM resource-access
    failures trap, including unavailable account/asset holding pairs under group
    sharing. Both methods are mockable through `Avm`; their defaults panic.
+
+   With the SDK's Cargo feature `alloc`, `asset::unit_name(asset_id)` returns
+   `Result<Option<Vec<u8>>, TxnError>` instead. It allocates eight bytes (the
+   protocol maximum), calls the host once, validates the returned length, and
+   truncates to the actual name. Missing assets return `None`; existing empty
+   names return `Some(vec![])`. Names need not be UTF-8. Install an allocator
+   with `#[contract(alloc)]` on the impl or `#[program_entry(alloc)]`. The AMM
+   example demonstrates owned names and `.concat()` without manual buffers.
+   Both query APIs use the buffer-based `Avm::asset_unit_name(asset_id, buffer)`
+   primitive. The public owned wrapper manages allocation and validates the
+   returned length; `HostAvm` and native mocks only implement the buffer read.
+
+   The `alloc` feature also provides owned byte readers (all return
+   `Result<Vec<u8>, ...>`; bytes need not be UTF-8):
+
+   | Owned API | Existing buffer-based API |
+   | --- | --- |
+   | `GlobalBytes::try_read_owned()` / `read_owned()` | `try_read(buf)` / `read(buf)` |
+   | `global::get_bytes_owned(key)` | `global::get_bytes(key, buf)` |
+   | `txn::app_arg(index)` | `txn::app_arg_into(index, buf)` |
+   | `txn::bytes_owned(field)` | `txn::bytes(field, buf)` |
+   | `txn::array_bytes_owned(field, index)` | `txn::array_bytes(field, index, buf)` |
+   | `txn::group_bytes_owned(index, field)` | `txn::group_bytes(index, field, buf)` |
+   | `Transaction::bytes_owned(field)` | `Transaction::bytes(field, buf)` |
+   | `arg::get_owned(index)` | `arg::get(index, buf)` |
+
+   `GlobalBytes::read_owned()` traps on errors rather than returning `Result`.
+   Missing global-state keys read as empty. LogicSig arguments remain
+   signature-only; state and application-argument operations retain their mode
+   restrictions. All these wrappers share bounded, safe buffer handling and
+   propagate host errors without introducing lossy UTF-8 conversion.
+
+   These general owned readers allocate **4 KiB per call**, make one host read,
+   then truncate the vector's length without shrinking capacity. This avoids
+   length-query calls (the slice-returning state/LogicSig APIs cannot express a
+   length-only read), but has a memory/zeroing cost even for short values. The
+   bump allocator does not reclaim that capacity until the invocation ends;
+   use existing buffer APIs in allocation-heavy loops or for tighter memory
+   control. `asset::unit_name` retains its specialized eight-byte allocation.
+
+   Fixed-size reads need no allocator: `txn::address(field)`,
+   `txn::array_address(field, index)`, `txn::group_address(index, field)`, and
+   `Transaction::address(field)` return `Result<[u8; 32], Error>`. They check
+   the returned length and propagate read errors. Select an address-valued field;
+   these helpers validate length, not field semantics. The AMM uses
+   `seed.address(TxnField::Receiver)` and `governor.try_read_owned()` instead of
+   local buffer-management helpers.
 
    Both modes can use host-backed arithmetic through `math::mulw(a, b)`
    (returns high/low product words), `math::divmodw(a_hi, a_lo, b_hi, b_lo)`

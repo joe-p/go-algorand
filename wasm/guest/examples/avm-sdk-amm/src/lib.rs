@@ -18,7 +18,10 @@
 //! See ../README.md for intentional fixes and deployment limitations.
 #![cfg_attr(target_arch = "wasm32", no_std)]
 
-use avm_sdk::arc4::{Address, Asset, AssetTransferTxn, PaymentTxn, Transaction};
+extern crate alloc;
+
+use alloc::vec::Vec;
+use avm_sdk::arc4::{Address, Asset, AssetTransferTxn, PaymentTxn};
 use avm_sdk::{
     assert, assert_eq, assert_ne, asset, contract, globals, itxn, math, txn, Error, GlobalBytes,
     GlobalUint, TxnField,
@@ -44,7 +47,7 @@ pub struct ConstantProductAMM {
     ratio: GlobalUint,
 }
 
-#[contract]
+#[contract(alloc)]
 impl ConstantProductAMM {
     /// Bare NoOp creation, matching createApplication in the source.
     pub fn approve(&self) -> Result<(), Error> {
@@ -71,21 +74,18 @@ impl ConstantProductAMM {
         assert!(self.pool_token.get() == 0 && globals::group_size() == 2);
         assert!(a_asset.0 != 0 && a_asset.0 < b_asset.0);
         let app = globals::application_address()?;
-        assert_eq!(group_address(seed, TxnField::Receiver)?, app);
+        assert_eq!(seed.address(TxnField::Receiver)?, app);
         assert!(seed.uint(TxnField::Amount) >= 300_000);
-        assert_eq!(group_address(seed, TxnField::CloseRemainderTo)?, [0; 32]);
-        assert_eq!(group_address(seed, TxnField::RekeyTo)?, [0; 32]);
+        assert_eq!(seed.address(TxnField::CloseRemainderTo)?, [0; 32]);
+        assert_eq!(seed.address(TxnField::RekeyTo)?, [0; 32]);
 
-        let mut name = [0; 21]; // "DPT-" + two ASA unit names (<=8 bytes) + "-".
-        let mut a_unit = [0; 8];
-        let mut b_unit = [0; 8];
-        let a_len = asset::unit_name(a_asset.0, &mut a_unit)?.ok_or(Error::InvalidValue)?;
-        let b_len = asset::unit_name(b_asset.0, &mut b_unit)?.ok_or(Error::InvalidValue)?;
-        let name = pool_token_name(&a_unit[..a_len], &b_unit[..b_len], &mut name);
+        let a_unit = asset::unit_name(a_asset.0)?.ok_or(Error::InvalidValue)?;
+        let b_unit = asset::unit_name(b_asset.0)?.ok_or(Error::InvalidValue)?;
+        let name = pool_token_name(&a_unit, &b_unit);
         let pool = itxn::AssetCreation {
             total: TOTAL_SUPPLY,
             decimals: 3,
-            asset_name: name,
+            asset_name: &name,
             unit_name: b"dpt",
             manager: Some(app),
             reserve: Some(app),
@@ -172,7 +172,7 @@ impl ConstantProductAMM {
 
 impl ConstantProductAMM {
     fn assert_governor(&self) -> Result<(), Error> {
-        assert_eq!(self.governor.try_read(&mut [0; 32])?, txn::sender()?);
+        assert_eq!(self.governor.try_read_owned()?, txn::sender()?);
         Ok(())
     }
 
@@ -200,36 +200,22 @@ fn sub(a: u64, b: u64) -> Result<u64, Error> {
     a.checked_sub(b).ok_or(Error::InvalidValue)
 }
 
-fn pool_token_name<'a>(a: &[u8], b: &[u8], out: &'a mut [u8]) -> &'a [u8] {
+fn pool_token_name(a: &[u8], b: &[u8]) -> Vec<u8> {
     assert!(a.len() <= 8 && b.len() <= 8);
-    let name = &mut out[..5 + a.len() + b.len()];
-    name[..4].copy_from_slice(b"DPT-");
-    name[4..4 + a.len()].copy_from_slice(a);
-    name[4 + a.len()] = b'-';
-    name[5 + a.len()..].copy_from_slice(b);
-    name
+    [b"DPT-".as_slice(), a, b"-", b].concat()
 }
 
 fn balance(id: u64) -> Result<u64, Error> {
     asset::balance(&globals::application_address()?, id).ok_or(Error::InvalidValue)
 }
 
-fn group_address<const KIND: u64>(
-    transaction: Transaction<KIND>,
-    field: TxnField,
-) -> Result<[u8; 32], Error> {
-    let mut address = [0; 32];
-    assert_eq!(transaction.bytes(field, &mut address)?, 32);
-    Ok(address)
-}
-
 fn verify_transfer(transfer: AssetTransferTxn, id: u64) -> Result<u64, Error> {
     assert_eq!(transfer.uint(TxnField::XferAsset), id);
     let amount = transfer.uint(TxnField::AssetAmount);
     assert!(amount > 0);
-    assert_eq!(group_address(transfer, TxnField::Sender)?, txn::sender()?);
+    assert_eq!(transfer.address(TxnField::Sender)?, txn::sender()?);
     assert_eq!(
-        group_address(transfer, TxnField::AssetReceiver)?,
+        transfer.address(TxnField::AssetReceiver)?,
         globals::application_address()?
     );
     // Reject clawbacks, close-outs, and rekeys rather than treating them as deposits.
@@ -238,7 +224,7 @@ fn verify_transfer(transfer: AssetTransferTxn, id: u64) -> Result<u64, Error> {
         TxnField::AssetCloseTo,
         TxnField::RekeyTo,
     ] {
-        assert_eq!(group_address(transfer, field)?, [0; 32]);
+        assert_eq!(transfer.address(field)?, [0; 32]);
     }
     Ok(amount)
 }

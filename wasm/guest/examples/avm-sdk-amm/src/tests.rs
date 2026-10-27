@@ -537,32 +537,20 @@ fn rounding_overflow_and_zero_denominators() {
 }
 
 #[test]
-fn pool_names_cover_all_unit_name_lengths_and_short_output_buffers() {
+fn pool_names_cover_all_unit_name_lengths() {
     for a_len in 0..=8 {
         for b_len in 0..=8 {
             let a = vec![b'A'; a_len];
             let b = vec![b'B'; b_len];
             let expected = [b"DPT-".as_slice(), &a, b"-", &b].concat();
-            let mut out = [0xff; 22];
-            assert_eq!(pool_token_name(&a, &b, &mut out), expected.as_slice());
-            assert!(out[expected.len()..].iter().all(|byte| *byte == 0xff));
-            for capacity in 0..expected.len() {
-                let mut short = vec![0xff; capacity];
-                assert!(catch_unwind(AssertUnwindSafe(|| {
-                    pool_token_name(&a, &b, &mut short);
-                }))
-                .is_err());
-                assert!(short.iter().all(|byte| *byte == 0xff));
-            }
+            assert_eq!(pool_token_name(&a, &b), expected);
         }
     }
     for (a, b) in [(vec![b'A'; 9], vec![]), (vec![], vec![b'B'; 9])] {
-        let mut out = [0xff; 32];
         assert!(catch_unwind(AssertUnwindSafe(|| {
-            pool_token_name(&a, &b, &mut out);
+            pool_token_name(&a, &b);
         }))
         .is_err());
-        assert_eq!(out, [0xff; 32]);
     }
 }
 

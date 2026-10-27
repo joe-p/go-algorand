@@ -26,6 +26,9 @@ description = "Opinionated Rust SDK for authoring WASM AVM programs: typed state
 name = "avm_sdk"
 crate-type = ["rlib"]
 
+[features]
+alloc = []
+
 [dependencies]
 avm-sdk-macros = { path = "../avm-sdk-macros" }
 avm-sys = { path = "../avm-sys" }

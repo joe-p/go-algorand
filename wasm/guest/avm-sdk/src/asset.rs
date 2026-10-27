@@ -17,6 +17,8 @@
 //! Application-only asset queries. Resource availability follows the AVM: a
 //! missing resource returns `None`, but an unavailable reference traps.
 
+#[cfg(feature = "alloc")]
+use crate::rust_alloc::{vec, vec::Vec};
 #[cfg(target_arch = "wasm32")]
 use crate::Avm;
 use crate::{host, TxnError};
@@ -32,6 +34,26 @@ pub fn balance(account: &[u8; 32], asset: u64) -> Option<u64> {
 /// asset. An empty buffer queries length; an existing empty name is `Some(0)`.
 /// Errors do not write partial data. Unavailable references trap.
 #[inline]
-pub fn unit_name(asset: u64, buf: &mut [u8]) -> Result<Option<usize>, TxnError> {
+pub fn unit_name_into(asset: u64, buf: &mut [u8]) -> Result<Option<usize>, TxnError> {
     host().asset_unit_name(asset, buf)
+}
+
+/// Returns an owned asset unit name, or `None` for a missing asset. An existing
+/// empty name is `Some(Vec::new())`. Names are bytes, not necessarily UTF-8.
+///
+/// Allocates an eight-byte buffer (the protocol maximum) and makes one host
+/// call. Requires a guest allocator, e.g. `#[contract(alloc)]` on the impl.
+/// Unavailable references trap; oversized names return `BufferTooSmall`.
+#[cfg(feature = "alloc")]
+#[inline]
+pub fn unit_name(asset: u64) -> Result<Option<Vec<u8>>, TxnError> {
+    let mut name = vec![0; 8];
+    let Some(len) = unit_name_into(asset, &mut name)? else {
+        return Ok(None);
+    };
+    if len > name.len() {
+        return Err(TxnError::BufferTooSmall);
+    }
+    name.truncate(len);
+    Ok(Some(name))
 }

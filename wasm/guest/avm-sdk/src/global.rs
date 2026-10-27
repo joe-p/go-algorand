@@ -24,6 +24,8 @@ use core::marker::PhantomData;
 
 use avm_sys::TxnError;
 
+#[cfg(feature = "alloc")]
+use crate::rust_alloc::vec::Vec;
 #[cfg(target_arch = "wasm32")]
 use crate::Avm;
 use crate::{host, trap};
@@ -96,6 +98,8 @@ where
 /// [`GlobalBytes::try_read`] when the value may exceed the buffer;
 /// [`GlobalBytes::read`] traps on that, matching the AVM. Like [`GlobalUint`],
 /// a handle holds only its key.
+/// With the `alloc` feature, `try_read_owned` / `read_owned` manage a buffer and
+/// return an owned byte vector instead.
 pub struct GlobalBytes {
     key: &'static [u8],
 }
@@ -116,6 +120,24 @@ impl GlobalBytes {
     #[inline]
     pub fn try_read<'buf>(&self, buf: &'buf mut [u8]) -> Result<&'buf [u8], TxnError> {
         get_bytes(self.key, buf)
+    }
+
+    /// Returns an owned value; a missing key reads as empty. Allocates 4 KiB
+    /// and reads once, without a length query. Requires a guest allocator.
+    #[cfg(feature = "alloc")]
+    #[inline]
+    pub fn try_read_owned(&self) -> Result<Vec<u8>, TxnError> {
+        get_bytes_owned(self.key)
+    }
+
+    /// Returns an owned value, trapping on read errors. See [`Self::try_read_owned`].
+    #[cfg(feature = "alloc")]
+    #[inline]
+    pub fn read_owned(&self) -> Vec<u8> {
+        match self.try_read_owned() {
+            Ok(value) => value,
+            Err(_) => trap(),
+        }
     }
 
     /// Copies the value into `buf`, trapping if the buffer is too small.
@@ -188,6 +210,18 @@ pub fn put_uint(key: &[u8], value: u64) {
 #[inline]
 pub fn get_bytes<'buf>(key: &[u8], buf: &'buf mut [u8]) -> Result<&'buf [u8], TxnError> {
     host().global_get_bytes(key, buf)
+}
+
+/// Returns an owned byte-string value; a missing key reads as empty. Allocates
+/// 4 KiB and reads once. Requires a guest allocator; use [`get_bytes`] to control
+/// capacity or avoid allocation. Reading a stored uint as bytes still traps.
+#[cfg(feature = "alloc")]
+#[inline]
+pub fn get_bytes_owned(key: &[u8]) -> Result<Vec<u8>, TxnError> {
+    crate::bytes::read_owned(
+        |buf| get_bytes(key, buf).map(|value| value.len()),
+        TxnError::BufferTooSmall,
+    )
 }
 
 /// Writes a byte-string value.

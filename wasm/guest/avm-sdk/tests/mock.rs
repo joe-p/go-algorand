@@ -43,11 +43,13 @@ struct MockAvm {
     txn_uints: RefCell<BTreeMap<i32, u64>>,
     txn_bytes: RefCell<BTreeMap<i32, Vec<u8>>>,
     app_args: RefCell<Vec<Vec<u8>>>,
+    accounts: Vec<Vec<u8>>,
     group: Vec<MockAvm>,
     context_uints: BTreeMap<i32, u64>,
     context_bytes: BTreeMap<i32, Vec<u8>>,
     balances: BTreeMap<([u8; 32], u64), u64>,
     unit_names: BTreeMap<u64, Vec<u8>>,
+    unit_name_reads: RefCell<Vec<&'static str>>,
     inner_calls: Rc<RefCell<Vec<(u32, i32, u64, Vec<u8>)>>>,
 }
 
@@ -92,6 +94,7 @@ impl Avm for MockAvm {
     }
 
     fn asset_unit_name(&self, asset: u64, buf: &mut [u8]) -> Result<Option<usize>, TxnError> {
+        self.unit_name_reads.borrow_mut().push("into");
         self.unit_names
             .get(&asset)
             .map(|name| copy_field(name, buf))
@@ -157,6 +160,12 @@ impl Avm for MockAvm {
     }
 
     fn txna_bytes(&self, field: TxnField, index: u32, buf: &mut [u8]) -> Result<usize, TxnError> {
+        if field == TxnField::Accounts {
+            return copy_field(
+                self.accounts.get(index as usize).ok_or(TxnError::Unknown)?,
+                buf,
+            );
+        }
         if field != TxnField::ApplicationArgs {
             return Err(TxnError::Unknown);
         }
@@ -290,23 +299,36 @@ fn asset_queries_distinguish_missing_and_empty() {
     avm.balances.insert((account, 778), 0);
     avm.unit_names.insert(777, b"USDC".to_vec());
     avm.unit_names.insert(778, vec![]);
+    avm.unit_names.insert(780, vec![0xff; 8]);
+    avm.unit_names.insert(781, vec![b'X'; 9]);
     let _host = set_host(avm);
 
     assert_eq!(asset::balance(&account, 777), Some(u64::MAX));
     assert_eq!(asset::balance(&account, 778), Some(0));
     assert_eq!(asset::balance(&account, 779), None);
-    assert_eq!(asset::unit_name(777, &mut []).unwrap(), Some(4));
+    assert_eq!(asset::unit_name_into(777, &mut []).unwrap(), Some(4));
     let mut buf = [0xFF; 8];
-    assert_eq!(asset::unit_name(777, &mut buf).unwrap(), Some(4));
+    assert_eq!(asset::unit_name_into(777, &mut buf).unwrap(), Some(4));
     assert_eq!(&buf[..4], b"USDC");
-    assert_eq!(asset::unit_name(778, &mut buf).unwrap(), Some(0));
-    assert_eq!(asset::unit_name(779, &mut buf).unwrap(), None);
+    assert_eq!(asset::unit_name_into(778, &mut buf).unwrap(), Some(0));
+    assert_eq!(asset::unit_name_into(779, &mut buf).unwrap(), None);
     let mut small = [0xFF; 3];
     assert_eq!(
-        asset::unit_name(777, &mut small),
+        asset::unit_name_into(777, &mut small),
         Err(TxnError::BufferTooSmall)
     );
     assert_eq!(small, [0xFF; 3]);
+    assert_eq!(*_host.unit_name_reads.borrow(), vec!["into"; 5]);
+    #[cfg(feature = "alloc")]
+    {
+        _host.unit_name_reads.borrow_mut().clear();
+        assert_eq!(asset::unit_name(777).unwrap(), Some(b"USDC".to_vec()));
+        assert_eq!(asset::unit_name(778).unwrap(), Some(vec![]));
+        assert_eq!(asset::unit_name(779).unwrap(), None);
+        assert_eq!(asset::unit_name(780).unwrap(), Some(vec![0xff; 8]));
+        assert_eq!(asset::unit_name(781), Err(TxnError::BufferTooSmall));
+        assert_eq!(*_host.unit_name_reads.borrow(), vec!["into"; 5]);
+    }
 }
 
 #[test]
@@ -379,6 +401,117 @@ fn transaction_helpers() {
 
     let mut buf = [0u8; 16];
     assert_eq!(txn::app_arg_into(1, &mut buf).unwrap(), b"second");
+}
+
+#[cfg(feature = "alloc")]
+#[test]
+fn owned_byte_reads_cover_empty_binary_and_maximum_lengths() {
+    use avm_sdk::{arc4::PaymentTxn, MAX_ARG_BYTES};
+
+    for len in [0, 1, 32, MAX_ARG_BYTES] {
+        let value = vec![0xff; len]; // Not UTF-8: these APIs return bytes.
+        let mut avm = MockAvm::default();
+        avm.set_bytes(TxnField::Note, &value);
+        avm.set_uint(TxnField::GroupIndex, 1);
+        *avm.app_args.borrow_mut() = vec![value.clone()];
+        *avm.args.borrow_mut() = vec![value.clone()];
+        let pay = MockAvm::default();
+        pay.set_uint(TxnField::TypeEnum, 1);
+        pay.set_bytes(TxnField::Note, &value);
+        avm.group.push(pay);
+        let host = set_host(avm);
+        let slot = GlobalBytes::new(b"owned");
+        slot.write(&value);
+
+        assert_eq!(txn::bytes_owned(TxnField::Note).unwrap(), value);
+        assert_eq!(
+            txn::array_bytes_owned(TxnField::ApplicationArgs, 0).unwrap(),
+            value
+        );
+        assert_eq!(txn::app_arg(0).unwrap(), value);
+        assert_eq!(txn::group_bytes_owned(0, TxnField::Note).unwrap(), value);
+        let payment = PaymentTxn::resolve(0, 1).unwrap();
+        assert_eq!(payment.bytes_owned(TxnField::Note).unwrap(), value);
+        assert_eq!(arg::get_owned(0).unwrap(), value);
+        assert_eq!(global::get_bytes_owned(b"owned").unwrap(), value);
+        assert_eq!(slot.try_read_owned().unwrap(), value);
+        assert_eq!(slot.read_owned(), value);
+        assert!(global::get_bytes_owned(b"missing").unwrap().is_empty());
+
+        let saved = slot.read_owned();
+        slot.write(b"changed");
+        host.set_bytes(TxnField::Note, b"changed");
+        assert_eq!(saved, value); // No dependency on host state or a caller buffer.
+    }
+}
+
+#[cfg(feature = "alloc")]
+#[test]
+fn owned_byte_reads_propagate_errors_and_reject_oversized_values() {
+    use avm_sdk::MAX_ARG_BYTES;
+    let value = vec![0; MAX_ARG_BYTES + 1];
+    let mut avm = MockAvm::default();
+    avm.set_bytes(TxnField::Note, &value);
+    *avm.app_args.borrow_mut() = vec![value.clone()];
+    *avm.args.borrow_mut() = vec![value.clone()];
+    let pay = MockAvm::default();
+    pay.set_bytes(TxnField::Note, &value);
+    avm.group.push(pay);
+    let _host = set_host(avm);
+    let slot = GlobalBytes::new(b"oversized");
+    slot.write(&value);
+
+    assert_eq!(
+        txn::bytes_owned(TxnField::Note),
+        Err(TxnError::BufferTooSmall)
+    );
+    assert_eq!(txn::app_arg(0), Err(TxnError::BufferTooSmall));
+    assert_eq!(
+        txn::group_bytes_owned(0, TxnField::Note),
+        Err(TxnError::BufferTooSmall)
+    );
+    assert_eq!(arg::get_owned(0), Err(ArgError::BufferTooSmall));
+    assert_eq!(slot.try_read_owned(), Err(TxnError::BufferTooSmall));
+    assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| slot.read_owned())).is_err());
+    assert_eq!(arg::get_owned(1), Err(ArgError::OutOfRange));
+    assert_eq!(txn::app_arg(1), Err(TxnError::Unknown));
+    assert_eq!(txn::bytes_owned(TxnField::Sender), Err(TxnError::Unknown));
+}
+
+#[test]
+fn address_helpers_validate_lengths_and_propagate_read_errors() {
+    use avm_sdk::arc4::PaymentTxn;
+
+    for len in [0, 31, 32, 33] {
+        let value = vec![0x12; len];
+        let mut avm = MockAvm::default();
+        avm.set_uint(TxnField::GroupIndex, 1);
+        avm.set_bytes(TxnField::Receiver, &value);
+        avm.accounts.push(value.clone());
+        let pay = MockAvm::default();
+        pay.set_uint(TxnField::TypeEnum, 1);
+        pay.set_bytes(TxnField::Receiver, &value);
+        avm.group.push(pay);
+        let _host = set_host(avm);
+        let expected = match len {
+            32 => Ok([0x12; 32]),
+            33 => Err(Error::BufferTooSmall),
+            _ => Err(Error::WrongLength {
+                expected: 32,
+                got: len,
+            }),
+        };
+        assert_eq!(txn::address(TxnField::Receiver), expected);
+        assert_eq!(txn::array_address(TxnField::Accounts, 0), expected);
+        assert_eq!(txn::group_address(0, TxnField::Receiver), expected);
+        assert_eq!(
+            PaymentTxn::resolve(0, 1)
+                .unwrap()
+                .address(TxnField::Receiver),
+            expected
+        );
+        assert_eq!(txn::address(TxnField::Sender), Err(Error::Unknown));
+    }
 }
 
 #[test]

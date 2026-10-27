@@ -69,7 +69,7 @@ needs to pool enough budget for that total.
 | | `join` | | | | 2,184 | 7,181 | 11 |
 | | `record` | | | | 3,677 | 8,674 | 13 |
 | | `wide` | | | | 2,949 | 7,946 | 12 |
-| `avm_sdk_amm.wasm` (local build) | | 16,522 | 1 | — | — | — | — |
+| `avm_sdk_amm.wasm` (local build) | | 13,103 | 1 | — | — | — | — |
 
 AMM costs have not yet been measured; dashes indicate unavailable measurements.
 

@@ -35,9 +35,12 @@ pub trait Encode {
 }
 
 pub(crate) fn copy(bytes: &[u8], out: &mut [u8]) -> Result<usize, EncodeError> {
-    out.get_mut(..bytes.len())
-        .ok_or(EncodeError)?
-        .copy_from_slice(bytes);
+    let out = out.get_mut(..bytes.len()).ok_or(EncodeError)?;
+    // Keep the length check, without linking copy_from_slice's formatted
+    // length-mismatch panic on size-optimized WASM builds.
+    for (dst, src) in out.iter_mut().zip(bytes) {
+        *dst = *src;
+    }
     Ok(bytes.len())
 }
 
@@ -229,7 +232,9 @@ pub const RETURN_PREFIX: [u8; 4] = [0x15, 0x1f, 0x7c, 0x75];
 /// failures still trap (including prior logs consuming the allowance).
 pub fn log_return<T: Encode>(value: &T) -> bool {
     let mut bytes = [0u8; 1024];
-    bytes[..4].copy_from_slice(&RETURN_PREFIX);
+    for (dst, src) in bytes.iter_mut().zip(RETURN_PREFIX) {
+        *dst = src;
+    }
     match value.encode(&mut bytes[4..]) {
         Ok(n) if n <= bytes.len() - 4 => {
             crate::log(&bytes[..n + 4]);

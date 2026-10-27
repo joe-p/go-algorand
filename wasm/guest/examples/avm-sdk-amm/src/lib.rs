@@ -74,19 +74,19 @@ impl ConstantProductAMM {
         require(group_address(seed, TxnField::RekeyTo)? == [0; 32])?;
 
         let mut name = [0; 21]; // "DPT-" + two ASA unit names (<=8 bytes) + "-".
-        name[..4].copy_from_slice(b"DPT-");
-        let mut unit = [0; 8];
-        let a_len = asset::unit_name(a_asset.0, &mut unit)?.ok_or(Error::InvalidValue)?;
-        require(a_len <= unit.len())?;
-        name[4..4 + a_len].copy_from_slice(&unit[..a_len]);
-        name[4 + a_len] = b'-';
-        let b_len = asset::unit_name(b_asset.0, &mut unit)?.ok_or(Error::InvalidValue)?;
-        require(b_len <= unit.len())?;
-        name[5 + a_len..5 + a_len + b_len].copy_from_slice(&unit[..b_len]);
+        let mut a_unit = [0; 8];
+        let mut b_unit = [0; 8];
+        let a_len = asset::unit_name(a_asset.0, &mut a_unit)?.ok_or(Error::InvalidValue)?;
+        let b_len = asset::unit_name(b_asset.0, &mut b_unit)?.ok_or(Error::InvalidValue)?;
+        let name = pool_token_name(
+            a_unit.get(..a_len).ok_or(Error::InvalidValue)?,
+            b_unit.get(..b_len).ok_or(Error::InvalidValue)?,
+            &mut name,
+        )?;
         let pool = itxn::AssetCreation {
             total: TOTAL_SUPPLY,
             decimals: 3,
-            asset_name: &name[..5 + a_len + b_len],
+            asset_name: name,
             unit_name: b"dpt",
             manager: Some(app),
             reserve: Some(app),
@@ -208,6 +208,20 @@ fn require(condition: bool) -> Result<(), Error> {
 
 fn sub(a: u64, b: u64) -> Result<u64, Error> {
     a.checked_sub(b).ok_or(Error::InvalidValue)
+}
+
+fn pool_token_name<'a>(a: &[u8], b: &[u8], out: &'a mut [u8]) -> Result<&'a [u8], Error> {
+    require(a.len() <= 8 && b.len() <= 8)?;
+    let name = out
+        .get_mut(..5 + a.len() + b.len())
+        .ok_or(Error::InvalidValue)?;
+    // Iterator copies avoid both indexing panics and copy_from_slice's
+    // length-mismatch panic machinery. The checked slice above fits every byte.
+    let bytes = b"DPT-".iter().chain(a).chain(b"-").chain(b);
+    for (dst, src) in name.iter_mut().zip(bytes) {
+        *dst = *src;
+    }
+    Ok(name)
 }
 
 fn balance(id: u64) -> Result<u64, Error> {

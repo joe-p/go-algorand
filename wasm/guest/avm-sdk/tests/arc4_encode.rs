@@ -41,6 +41,23 @@ fn scalar_and_dynamic_golden_encodings() {
 }
 
 #[test]
+fn scalar_copy_rejects_short_buffers_and_preserves_unused_bytes() {
+    let value = 0x0102030405060708u64;
+    for capacity in 0..=16 {
+        let mut out = vec![0xff; capacity];
+        if capacity < 8 {
+            assert!(value.encode(&mut out).is_err());
+            assert_eq!(out, vec![0xff; capacity]);
+        } else {
+            assert_eq!(value.encode(&mut out), Ok(8));
+            assert_eq!(&out[..8], &value.to_be_bytes());
+            assert!(out[8..].iter().all(|byte| *byte == 0xff));
+        }
+    }
+    assert_eq!(Uint([]).encode(&mut []), Ok(0));
+}
+
+#[test]
 fn tuple_offsets_and_boolean_runs_match_arc4() {
     check(
         (true, false, true, 0x1234u16, "hi", &b"x"[..]),

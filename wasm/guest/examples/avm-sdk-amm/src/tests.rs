@@ -65,6 +65,7 @@ struct Mock {
     uints: RefCell<BTreeMap<Vec<u8>, u64>>,
     bytes: RefCell<BTreeMap<Vec<u8>, Vec<u8>>>,
     balances: RefCell<BTreeMap<u64, u64>>,
+    unit_names: RefCell<BTreeMap<u64, Vec<u8>>>,
     pending: RefCell<Fields>,
     inner: RefCell<Vec<Fields>>,
     logs: RefCell<Vec<Vec<u8>>>,
@@ -81,6 +82,7 @@ impl Mock {
             uints: RefCell::default(),
             bytes: RefCell::default(),
             balances: RefCell::default(),
+            unit_names: RefCell::new([(A, b"AAA".to_vec()), (B, b"BBB".to_vec())].into()),
             pending: RefCell::default(),
             inner: RefCell::default(),
             logs: RefCell::default(),
@@ -184,7 +186,11 @@ impl Avm for Mock {
         self.balances.borrow().get(&asset).copied()
     }
     fn asset_unit_name(&self, asset: u64, out: &mut [u8]) -> Result<Option<usize>, TxnError> {
-        Ok(Some(copy(if asset == A { b"AAA" } else { b"BBB" }, out)))
+        Ok(self
+            .unit_names
+            .borrow()
+            .get(&asset)
+            .map(|name| copy(name, out)))
     }
     fn itxn_begin(&self) {
         *self.pending.borrow_mut() = Fields::default();
@@ -497,4 +503,49 @@ fn rounding_overflow_and_zero_denominators() {
     assert!(swap_tokens(u64::MAX, 1, 1).is_err());
     assert!(swap_tokens(1, u64::MAX, 1).is_err());
     assert!(swap_tokens(0, 0, 1).is_err());
+}
+
+#[test]
+fn pool_names_cover_all_unit_name_lengths_and_short_output_buffers() {
+    for a_len in 0..=8 {
+        for b_len in 0..=8 {
+            let a = vec![b'A'; a_len];
+            let b = vec![b'B'; b_len];
+            let expected = [b"DPT-".as_slice(), &a, b"-", &b].concat();
+            let mut out = [0xff; 22];
+            assert_eq!(pool_token_name(&a, &b, &mut out), Ok(expected.as_slice()));
+            assert!(out[expected.len()..].iter().all(|byte| *byte == 0xff));
+            for capacity in 0..expected.len() {
+                let mut short = vec![0xff; capacity];
+                assert!(pool_token_name(&a, &b, &mut short).is_err());
+                assert!(short.iter().all(|byte| *byte == 0xff));
+            }
+        }
+    }
+    for (a, b) in [(vec![b'A'; 9], vec![]), (vec![], vec![b'B'; 9])] {
+        let mut out = [0xff; 32];
+        assert!(pool_token_name(&a, &b, &mut out).is_err());
+        assert_eq!(out, [0xff; 32]);
+    }
+}
+
+#[test]
+fn bootstrap_rejects_missing_or_oversized_unit_names_without_panicking() {
+    for asset in [A, B] {
+        for oversized in [false, true] {
+            let host = set_host(Mock::new());
+            host.global_put_bytes(b"g", &USER);
+            if oversized {
+                // The host reports the required length without writing a partial name.
+                host.unit_names.borrow_mut().insert(asset, vec![b'X'; 9]);
+            } else {
+                host.unit_names.borrow_mut().remove(&asset);
+            }
+            assert_eq!(
+                host.call("bootstrap", &[&[0], &[1]], vec![seed(300_000)]),
+                0
+            );
+            assert!(host.inner.borrow().is_empty());
+        }
+    }
 }

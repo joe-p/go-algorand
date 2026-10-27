@@ -331,6 +331,116 @@ At equal work the AVM is **1.9x faster**. The WASM row includes the prototype
 protocol budgets are unchanged: this is an engine microbenchmark, not a claim
 that a single default-budget application can run these loop counts.
 
+## New host imports: calibration (2026-10-27)
+
+The new timing harnesses are `TestWasmNewHostCallCost` in
+`data/transactions/logic/wasm_new_hostcost_test.go` and
+`TestWasmInnerSubmitCost` in `ledger/eval/wasm_hostcost_test.go`. They compile
+temporary WAT fixtures using the existing Rust `wat2wasm` example, outside the
+timed region. Build the release executor first:
+
+```sh
+make wasmlib
+WASM_OPCOST=1 GOMAXPROCS=1 go test ./data/transactions/logic -run '^TestWasm(NewHostCallCost|HostCallCost)$' -v -count=3
+WASM_OPCOST=1 GOMAXPROCS=1 go test ./ledger/eval -run '^TestWasmInnerSubmitCost$' -v -count=3
+```
+
+Each new harness interleaves zero-work and work evaluations of the **same
+module**, alternating order, with fresh ledger state outside timing. This
+cancels fixed compilation/instantiation work without accumulating created
+assets or moving balances across samples. Both force `GOMAXPROCS=1` during
+measurement and restore it afterward. Only the application budget is raised;
+log and inner limits remain enforced. The logic harness uses the existing test
+protocol (8 inners/group, 550-byte Note); the production harness uses the block
+evaluator's protocol (up to 16/group).
+
+Submission must be calibrated on the **production COW/Perform path**, not just
+the logic test ledger. The production fixture prepares the same group in both
+runs, then conditionally submits it. The child COW is discarded after each
+evaluation. Transfers move one unit to another opted-in account; opt-in starts
+with a missing holding. In a multi-inner opt-in group only the first inner
+creates the holding; later ones repeat the zero self-transfer.
+
+Measured on linux/arm64, 8-core Apple CPU, Go 1.25.3, release Rust executor.
+Production-submit results below are medians of three runs, with 4,000 paired
+samples per row in each run:
+
+| inners/group | asset create (ns) | nonzero transfer (ns) | opt-in (ns) | pre-change host fuel |
+| --- | ---: | ---: | ---: | ---: |
+| 1 | 2,658 | 2,661 | 3,039 | 2,500 |
+| 2 | 6,082 | 5,799 | 6,044 | 4,500 |
+| 4 | 10,509 | 9,896 | 10,805 | 8,500 |
+| 8 | 18,218 | 18,372 | 16,518 | 16,500 |
+| 16 | 35,990 | 33,999 | 29,848 | 32,500 |
+
+The table excludes group construction through the field/begin/next imports;
+those are charged separately. The timing difference still includes the
+conditional/call guest instructions. The production harness prints **AVM cost
+differences**, which have evaluation-level rounding, not exact raw fuel.
+At the existing ~1 ns/fuel calibration target, the initial timing-based
+recommendation was **2,000 + 2,500 per inner** for submit, rather than
+500 + 2,000. That recommendation was **not adopted**: begin, next, and submit
+are charged at the protocol level and now each pay only a flat **10-fuel host
+charge**, with no per-inner submit host charge. Their ns/fuel ratios should
+therefore not be interpreted as standalone calibration failures.
+
+The logic-ledger measurements below are medians of three runs (begin uses the
+five-run follow-up described below). As in the
+existing host table, times include guest loop/call scaffolding. The candidate
+host weights allow for that small overhead; they are not rounded wall-clock
+measurements inserted directly into the protocol.
+
+| import / case | ns/iteration | pre-change host fuel | applied host fuel |
+| --- | ---: | ---: | ---: |
+| `gtxn_uint` | 139 | 125 | 125 (keep) |
+| `gtxn_bytes`, 32 / 550 bytes | 219 / 243 | 190 | 225 |
+| `global_uint` (`GroupSize`) | 96 | 125 | 125 (keep) |
+| `global_bytes` (app address) | 199 | 190 | 190 (keep) |
+| `asset_balance`, present / absent holding | 515 / 831 | 300 | 900 |
+| `asset_unit_name`, 8 bytes / length / absent asset | 288 / 295 / 347 | 300 | 350 |
+| `itxn_begin` | 695 | 300 | 10 (protocol-level charging) |
+| `itxn_next`, averaged over 7 additions | 1,823 | 300 | 10 (protocol-level charging) |
+| `itxn_field_uint` (`ConfigAssetTotal`) | 97 | 200 | 200 (keep conservatively) |
+| `itxn_field_bytes` (`Note`), 0 / 32 / 256 / 550 bytes | 107 / 154 / 231 / 321 | 200 + bytes | 200 + bytes (keep) |
+| `itxn_created_asset_id` | 121 | 125 | 125 (keep) |
+| `log`, 0 / 32 / 256 / 1,024 bytes | 119 / 130 / 266 / 648 | 200 + bytes | 200 + bytes (keep) |
+| `itxn_submit` | production table above | 500 + 2,000/txn | 10 flat (protocol-level charging) |
+
+The existing calibration control still aligns: `ed25519verify_bare` takes
+approximately 28 us for 28,527 total iteration fuel, and the matched
+`txn_uint` control is approximately 135 ns for 147 fuel. The empty new loop is
+approximately 9 ns for 10 fuel. The `host estimate` output column subtracts
+non-host guest fuel at 1 ns/fuel, following the existing calibration method;
+it does not independently isolate boundary time.
+
+Do **not** calibrate only successful asset queries. A missing holding is a
+successful query returning "not found", but internally constructs an error
+before converting it into the existence flag; it is substantially slower here.
+The named-asset path alone would incorrectly suggest that 300 fuel suffices.
+The suggested fixed charges cover both paths measured, before any host work.
+
+The read/query changes in the table are applied in the Rust fuel constants;
+the begin/next/submit weights reflect the protocol-level charging policy rather
+than the standalone timing recommendation. Preserve headroom rather than reducing the already conservative
+log/field charges from these small fixtures. Single-call differences (especially
+begin and large logs) are noisy because they subtract two complete WASM
+evaluations: the three initial begin timings ranged from 260 to 1,371 ns.
+Increasing begin to 40,000 paired evaluations and repeating five times reduced
+the range to 615–863 ns, with a median of 695 ns. Reproduce that follow-up with:
+
+```sh
+WASM_OPCOST=1 GOMAXPROCS=1 go test ./data/transactions/logic -run '^TestWasmNewHostCallCost$/^itxn_begin$' -v -count=5
+```
+
+`itxn_next` has group-size-dependent fee scanning and slice growth, so a
+16-wide production-path sweep would be needed before independently pricing its
+host execution. These
+measurements do not cover every field, maximum resource sharing, asset
+close-out/reconfiguration, maximum transaction payloads, cold ledger/cache
+misses, or other CPUs. In particular, query weights still need confirmation on
+production ledger state. They are a practical calibration starting point, not
+a consensus-safe worst-case proof.
+
 ## Instruction opcodes
 
 `opcode_cost_table` (`wasm/src/lib.rs`, an `#[ignore]`d test) runs each allowed

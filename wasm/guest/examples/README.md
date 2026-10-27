@@ -13,6 +13,8 @@ wasm-guest-fixtures` rebuilds and copies all of them.
 | `avm-sdk-counter/` | `app_avm_sdk_counter.wasm` | application | `avm-sdk`, allocating |
 | `avm-sdk-arc4-counter/` | `app_avm_sdk_arc4_counter.wasm` | ARC-4 application | `avm-sdk` |
 | `avm-sdk-arc4-types/` | `app_avm_sdk_arc4_types.wasm` | ARC-4 application | `avm-sdk` |
+| `avm-sdk-arc4-resources/` | `app_avm_sdk_arc4_resources.wasm` | ARC-4 references/returns | `avm-sdk` |
+| `avm-sdk-amm/` | not copied (local build: `avm_sdk_amm.wasm`) | ARC-4 AMM application | `avm-sdk` |
 
 - **`rust-counter`** reads a big-endian delta and the sender and updates a
   global counter plus a per-sender total, with fixed buffers and no allocation.
@@ -30,9 +32,21 @@ wasm-guest-fixtures` rebuilds and copies all of them.
   `set_label(string)void` by selector, without allocating.
 - **`avm-sdk-arc4-types`** takes dynamic arrays, nested tuples with packed
   bools, and 17 parameters (packed past the 15th), to exercise every
-  parameter type the router supports.
+  ordinary value parameter type the router supports.
+- **`avm-sdk-arc4-resources`** resolves asset/account/application references,
+  validates a preceding asset transfer, and returns its amount in an ARC-4 log.
+  It is a routing fixture, not a deposit-safe AMM implementation. With a 32 KiB
+  stack it is 5,119 bytes and uses 6,691 budget units (10 pooled app calls) for
+  the successful Go integration case. Log host pricing is provisional. Run
+  `go test ./data/transactions/logic -run TestWasmARC4ResourceArgumentsAndReturns -v`.
 
 ## Size and cost
+
+`avm-sdk-amm/` is a standalone Rust port of TEALScript's constant-product AMM,
+with corrected initial LP issuance and swap direction. See its [README](avm-sdk-amm/README.md)
+for the ABI, tests, and execution-budget limitations. Unlike the fixtures above,
+it is built explicitly with `cargo build -p avm-sdk-amm --release --target wasm32-unknown-unknown`
+from `wasm/guest`; it is not copied by `make wasm-guest-fixtures`.
 
 Costs are AVM budget units (10 wasmi fuel each). An application call has a
 700-unit budget, pooled across the app calls in its group, so a 16-call group
@@ -55,6 +69,9 @@ needs to pool enough budget for that total.
 | | `join` | | | | 2,184 | 7,181 | 11 |
 | | `record` | | | | 3,677 | 8,674 | 13 |
 | | `wide` | | | | 2,949 | 7,946 | 12 |
+| `avm_sdk_amm.wasm` (local build) | | 16,522 | 1 | — | — | — | — |
+
+AMM costs have not yet been measured; dashes indicate unavailable measurements.
 
 The signed-claim and LogicSig executions each include the 2,850-unit
 `ed25519verify_bare` host charge. The LogicSig runs under its own 20,000-unit

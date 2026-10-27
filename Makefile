@@ -185,6 +185,8 @@ wasm-guest-fixtures:
 	cp wasm/guest/target/wasm32-unknown-unknown/release/avm_sdk_arc4_counter.wasm data/transactions/logic/testdata/wasm/app_avm_sdk_arc4_counter.wasm
 	cargo build --release --locked --manifest-path wasm/guest/Cargo.toml -p avm-sdk-arc4-types --target wasm32-unknown-unknown
 	cp wasm/guest/target/wasm32-unknown-unknown/release/avm_sdk_arc4_types.wasm data/transactions/logic/testdata/wasm/app_avm_sdk_arc4_types.wasm
+	cargo build --release --locked --manifest-path wasm/guest/Cargo.toml -p avm-sdk-arc4-resources --target wasm32-unknown-unknown
+	cp wasm/guest/target/wasm32-unknown-unknown/release/avm_sdk_arc4_resources.wasm data/transactions/logic/testdata/wasm/app_avm_sdk_arc4_resources.wasm
 
 # Print the per-opcode wall-clock/fuel table (metering calibration harness).
 # The host-function table is the gated Go test:

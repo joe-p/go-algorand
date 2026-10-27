@@ -37,6 +37,12 @@ macro_rules! decode_tuple {
                 ($(unsafe { read_tuple_elem::<$name>(bytes, elems, $index) },)+)
             }
         }
+        impl<$($name: super::Encode),+> super::Encode for ($($name,)+) {
+            const STATIC_LEN: Option<usize> = super::encode::static_size(&[$(($name::STATIC_LEN, $name::IS_BOOL)),+]);
+            fn encode(&self, out: &mut [u8]) -> Result<usize, super::EncodeError> {
+                super::encode::sequence(&[$(&self.$index as &dyn super::encode::Value),+], out)
+            }
+        }
     };
 }
 

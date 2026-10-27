@@ -129,6 +129,7 @@ const ARG_COUNT_FUEL_COST: u64 = 10;
 /// Additional fuel charged per txn host invocation, including length queries.
 const TXN_UINT_FUEL_COST: u64 = 125;
 const TXN_BYTES_FUEL_COST: u64 = 190;
+const GTXN_BYTES_FUEL_COST: u64 = 225;
 const TXNA_BYTES_FUEL_COST: u64 = 200;
 
 /// Fuel charged for one `ed25519verify_bare` call, calibrated near 1 ns/fuel.
@@ -148,9 +149,25 @@ const GLOBAL_PUT_UINT_FUEL_COST: u64 = 410;
 const GLOBAL_PUT_BYTES_FUEL_COST: u64 = 390;
 const GLOBAL_DEL_FUEL_COST: u64 = 140;
 
+// Calibrated for both present and absent resources; see WASM_PERF.md.
+// Charge before any memory or host work.
+const ASSET_BALANCE_FUEL_COST: u64 = 900;
+const ASSET_UNIT_NAME_FUEL_COST: u64 = 350;
+
+// Inner begin/next/submit work is charged at the protocol level. These imports
+// pay only a flat host charge, independent of the submitted group size.
+// No inner app calls are exposed, so submit cannot recursively spend or add to
+// the shared application budget while Rust runs.
+const ITXN_BEGIN_FUEL_COST: u64 = 10;
+const ITXN_SUBMIT_FUEL_COST: u64 = 10;
+const ITXN_FIELD_FUEL_COST: u64 = 200;
+const ITXN_RESULT_FUEL_COST: u64 = 125;
+
 /// A transaction field provider, implemented in Go. `ctx` is an opaque handle
 /// that Go maps back to the evaluation context; Rust never dereferences it.
 ///
+/// `source` is 0 for the current transaction, 1 for transaction `group_index`,
+/// or 2 for an AVM global context field (not an application state key).
 /// `field` selects the field, `index` the element for an array field (ignored
 /// when `expect_array` is 0), and `expect_array` whether the field is expected
 /// to be an array field (`txna`-style) rather than a scalar one. The callback
@@ -161,6 +178,8 @@ const GLOBAL_DEL_FUEL_COST: u64 = 140;
 /// length is still written to `out_len`).
 type TxnFieldCb = unsafe extern "C" fn(
     ctx: usize,
+    source: u32,
+    group_index: u32,
     field: u32,
     index: u32,
     expect_array: u32,
@@ -206,6 +225,39 @@ type GlobalGetCb = unsafe extern "C" fn(
     err: *mut u8,
     err_cap: usize,
 ) -> i32;
+
+/// Asset query provider: kind 0=balance (account points to 32 bytes), 1=unit
+/// name (account ignored). Uint values are 8 little-endian bytes. Reports
+/// existence separately from length, returning 0, -1 on error, or -2 for a
+/// short buffer. Resource-availability failures must be errors, not absence.
+type AssetGetCb = unsafe extern "C" fn(
+    ctx: usize,
+    kind: u32,
+    asset: u64,
+    account: *const u8,
+    buf: *mut u8,
+    buf_cap: usize,
+    out_len: *mut usize,
+    out_exists: *mut u8,
+    err: *mut u8,
+    err_cap: usize,
+) -> i32;
+
+/// Asset inner transaction state machine. Operations: begin=0, next=1,
+/// uint field=2, bytes field=3, submit=4, last CreatedAssetID=5.
+type InnerTxnCb = unsafe extern "C" fn(
+    ctx: usize,
+    op: u32,
+    field: u32,
+    value: u64,
+    data: *const u8,
+    data_len: usize,
+    result: *mut u64,
+    err: *mut u8,
+    err_cap: usize,
+) -> i32;
+
+type LogCb = unsafe extern "C" fn(usize, *const u8, usize, *mut u8, usize) -> i32;
 
 /// A global-state writer, implemented in Go. `val_is_uint` non-zero selects a
 /// uint value (8 little-endian bytes in `val`); otherwise `val` is a byte
@@ -255,6 +307,9 @@ struct HostCallbacks {
     global_put: Option<GlobalPutCb>,
     /// Provider for global-state deletes.
     global_del: Option<GlobalDelCb>,
+    asset_get: Option<AssetGetCb>,
+    inner_txn: Option<InnerTxnCb>,
+    log: Option<LogCb>,
     /// Opaque handle passed back to `txn_field`.
     ctx: usize,
     /// Whether the guest is an application program rather than a LogicSig. In
@@ -336,12 +391,21 @@ fn cstr(buf: &[u8]) -> String {
     String::from_utf8_lossy(&buf[..end]).into_owned()
 }
 
+/// Selects a transaction or an AVM context field for the shared read callback.
+#[derive(Clone, Copy)]
+enum FieldSource {
+    Current,
+    Group(i32),
+    Global,
+}
+
 /// Fetches a field once into a caller-owned buffer. A short buffer still
 /// reports the type and required length. Invalid or unavailable fields trap.
 /// `index` selects the element for an array field and is meaningful only when
 /// `expect_array` is true.
 fn fetch_txn_field(
     caller: &mut Caller<'_, HostState>,
+    source: FieldSource,
     field: i32,
     index: i32,
     expect_array: bool,
@@ -363,6 +427,14 @@ fn fetch_txn_field(
         )));
     }
     let index = if index < 0 { 0 } else { index as u32 };
+    let (source, group_index) = match source {
+        FieldSource::Current => (0, 0),
+        FieldSource::Group(i) if i >= 0 => (1, i as u32),
+        FieldSource::Group(i) => {
+            return Err(wasmi::Error::new(format!("invalid txn group index {i}")));
+        }
+        FieldSource::Global => (2, 0),
+    };
 
     let mut err = [0u8; ERR_BUF_LEN];
     let mut len = 0usize;
@@ -371,6 +443,8 @@ fn fetch_txn_field(
     let ret = unsafe {
         cb(
             ctx,
+            source,
+            group_index,
             field as u32,
             index,
             expect_array as u32,
@@ -400,6 +474,7 @@ fn fetch_txn_field(
 /// reads.
 fn read_txn_uint(
     caller: &mut Caller<'_, HostState>,
+    source: FieldSource,
     field: i32,
     index: i32,
     expect_array: bool,
@@ -407,7 +482,7 @@ fn read_txn_uint(
     // Charge before validation, buffer preparation, or Go callbacks.
     charge_fuel(caller, TXN_UINT_FUEL_COST)?;
     let mut bytes = [0u8; 8];
-    let (is_bytes, len) = fetch_txn_field(caller, field, index, expect_array, &mut bytes)?;
+    let (is_bytes, len) = fetch_txn_field(caller, source, field, index, expect_array, &mut bytes)?;
     if is_bytes {
         return Err(wasmi::Error::new(format!(
             "txn field {field} is not a uint"
@@ -422,7 +497,7 @@ fn read_txn_uint(
 }
 
 fn txn_uint(mut caller: Caller<'_, HostState>, field: i32) -> Result<i64, wasmi::Error> {
-    read_txn_uint(&mut caller, field, 0, false)
+    read_txn_uint(&mut caller, FieldSource::Current, field, 0, false)
 }
 
 fn txna_uint(
@@ -430,13 +505,14 @@ fn txna_uint(
     field: i32,
     index: i32,
 ) -> Result<i64, wasmi::Error> {
-    read_txn_uint(&mut caller, field, index, true)
+    read_txn_uint(&mut caller, FieldSource::Current, field, index, true)
 }
 
 /// Shared implementation of the scalar (`txn`) and array (`txna`) byte-string
 /// field reads.
 fn read_txn_bytes(
     mut caller: &mut Caller<'_, HostState>,
+    source: FieldSource,
     field: i32,
     index: i32,
     expect_array: bool,
@@ -447,6 +523,8 @@ fn read_txn_bytes(
         caller,
         if expect_array {
             TXNA_BYTES_FUEL_COST
+        } else if matches!(source, FieldSource::Group(_)) {
+            GTXN_BYTES_FUEL_COST
         } else {
             TXN_BYTES_FUEL_COST
         },
@@ -458,8 +536,14 @@ fn read_txn_bytes(
     } else {
         (out_len as usize).min(buf.len())
     };
-    let (is_bytes, len) =
-        fetch_txn_field(caller, field, index, expect_array, &mut buf[..capacity])?;
+    let (is_bytes, len) = fetch_txn_field(
+        caller,
+        source,
+        field,
+        index,
+        expect_array,
+        &mut buf[..capacity],
+    )?;
     if !is_bytes {
         return Err(wasmi::Error::new(format!(
             "txn field {field} is not a byte string"
@@ -498,7 +582,15 @@ fn txn_bytes(
     out_ptr: i32,
     out_len: i32,
 ) -> Result<i32, wasmi::Error> {
-    read_txn_bytes(&mut caller, field, 0, false, out_ptr, out_len)
+    read_txn_bytes(
+        &mut caller,
+        FieldSource::Current,
+        field,
+        0,
+        false,
+        out_ptr,
+        out_len,
+    )
 }
 
 fn txna_bytes(
@@ -508,7 +600,68 @@ fn txna_bytes(
     out_ptr: i32,
     out_len: i32,
 ) -> Result<i32, wasmi::Error> {
-    read_txn_bytes(&mut caller, field, index, true, out_ptr, out_len)
+    read_txn_bytes(
+        &mut caller,
+        FieldSource::Current,
+        field,
+        index,
+        true,
+        out_ptr,
+        out_len,
+    )
+}
+
+fn gtxn_uint(
+    mut caller: Caller<'_, HostState>,
+    group_index: i32,
+    field: i32,
+) -> Result<i64, wasmi::Error> {
+    read_txn_uint(
+        &mut caller,
+        FieldSource::Group(group_index),
+        field,
+        0,
+        false,
+    )
+}
+
+fn gtxn_bytes(
+    mut caller: Caller<'_, HostState>,
+    group_index: i32,
+    field: i32,
+    out_ptr: i32,
+    out_len: i32,
+) -> Result<i32, wasmi::Error> {
+    read_txn_bytes(
+        &mut caller,
+        FieldSource::Group(group_index),
+        field,
+        0,
+        false,
+        out_ptr,
+        out_len,
+    )
+}
+
+fn global_uint(mut caller: Caller<'_, HostState>, field: i32) -> Result<i64, wasmi::Error> {
+    read_txn_uint(&mut caller, FieldSource::Global, field, 0, false)
+}
+
+fn global_bytes(
+    mut caller: Caller<'_, HostState>,
+    field: i32,
+    out_ptr: i32,
+    out_len: i32,
+) -> Result<i32, wasmi::Error> {
+    read_txn_bytes(
+        &mut caller,
+        FieldSource::Global,
+        field,
+        0,
+        false,
+        out_ptr,
+        out_len,
+    )
 }
 
 /// Copies a byte range out of a guest's linear memory into a fresh buffer. The
@@ -563,6 +716,257 @@ fn require_app(caller: &Caller<'_, HostState>) -> Result<(), wasmi::Error> {
             "global state is not available in signature mode",
         ))
     }
+}
+
+fn host_inner_txn(
+    caller: &mut Caller<'_, HostState>,
+    op: u32,
+    field: i32,
+    value: i64,
+    bytes: &[u8],
+) -> Result<i64, wasmi::Error> {
+    if !caller.data().host.is_app {
+        return Err(wasmi::Error::new(
+            "inner transactions are not available in signature mode",
+        ));
+    }
+    if field < 0 {
+        return Err(wasmi::Error::new("invalid inner field"));
+    }
+    let cb =
+        caller.data().host.inner_txn.ok_or_else(|| {
+            wasmi::Error::new("inner transactions are not available in this build")
+        })?;
+    let mut result = 0;
+    let mut err = [0; ERR_BUF_LEN];
+    let ret = unsafe {
+        cb(
+            caller.data().host.ctx,
+            op,
+            field as u32,
+            value as u64,
+            bytes.as_ptr(),
+            bytes.len(),
+            &mut result,
+            err.as_mut_ptr(),
+            err.len(),
+        )
+    };
+    if ret != 0 {
+        return Err(wasmi::Error::new(format!(
+            "inner transaction error: {}",
+            cstr(&err)
+        )));
+    }
+    Ok(result as i64)
+}
+
+// Provisional base + per-byte price; calibrate before release.
+const LOG_BASE_FUEL_COST: u64 = 200;
+fn app_log(mut caller: Caller<'_, HostState>, ptr: i32, len: i32) -> Result<(), wasmi::Error> {
+    charge_fuel(&mut caller, LOG_BASE_FUEL_COST + len.max(0) as u64)?;
+    if !caller.data().host.is_app {
+        return Err(wasmi::Error::new("log is not available in signature mode"));
+    }
+    let cb = caller
+        .data()
+        .host
+        .log
+        .ok_or_else(|| wasmi::Error::new("log is not available in this build"))?;
+    let bytes = read_guest_bytes(&mut caller, ptr, len)?;
+    let mut err = [0; ERR_BUF_LEN];
+    let ret = unsafe {
+        cb(
+            caller.data().host.ctx,
+            bytes.as_ptr(),
+            bytes.len(),
+            err.as_mut_ptr(),
+            err.len(),
+        )
+    };
+    if ret != 0 {
+        return Err(wasmi::Error::new(format!("log error: {}", cstr(&err))));
+    }
+    Ok(())
+}
+
+fn itxn_begin(mut caller: Caller<'_, HostState>) -> Result<(), wasmi::Error> {
+    charge_fuel(&mut caller, ITXN_BEGIN_FUEL_COST)?;
+    host_inner_txn(&mut caller, 0, 0, 0, &[])?;
+    Ok(())
+}
+
+fn itxn_next(mut caller: Caller<'_, HostState>) -> Result<(), wasmi::Error> {
+    charge_fuel(&mut caller, ITXN_BEGIN_FUEL_COST)?;
+    host_inner_txn(&mut caller, 1, 0, 0, &[])?;
+    Ok(())
+}
+
+fn itxn_field_uint(
+    mut caller: Caller<'_, HostState>,
+    field: i32,
+    value: i64,
+) -> Result<(), wasmi::Error> {
+    charge_fuel(&mut caller, ITXN_FIELD_FUEL_COST)?;
+    host_inner_txn(&mut caller, 2, field, value, &[])?;
+    Ok(())
+}
+
+fn itxn_field_bytes(
+    mut caller: Caller<'_, HostState>,
+    field: i32,
+    ptr: i32,
+    len: i32,
+) -> Result<(), wasmi::Error> {
+    charge_fuel(&mut caller, ITXN_FIELD_FUEL_COST + len.max(0) as u64)?;
+    if !caller.data().host.is_app {
+        return Err(wasmi::Error::new(
+            "inner transactions are not available in signature mode",
+        ));
+    }
+    let bytes = read_guest_bytes(&mut caller, ptr, len)?;
+    host_inner_txn(&mut caller, 3, field, 0, &bytes)?;
+    Ok(())
+}
+
+fn itxn_submit(mut caller: Caller<'_, HostState>) -> Result<(), wasmi::Error> {
+    charge_fuel(&mut caller, ITXN_SUBMIT_FUEL_COST)?;
+    host_inner_txn(&mut caller, 4, 0, 0, &[])?;
+    Ok(())
+}
+
+fn itxn_created_asset_id(mut caller: Caller<'_, HostState>) -> Result<i64, wasmi::Error> {
+    charge_fuel(&mut caller, ITXN_RESULT_FUEL_COST)?;
+    host_inner_txn(&mut caller, 5, 0, 0, &[])
+}
+
+fn host_asset_get(
+    caller: &mut Caller<'_, HostState>,
+    kind: u32,
+    asset: i64,
+    account: Option<&[u8]>,
+    buf: &mut [u8],
+) -> Result<(bool, usize), wasmi::Error> {
+    if !caller.data().host.is_app {
+        return Err(wasmi::Error::new(
+            "asset queries are not available in signature mode",
+        ));
+    }
+    let cb = caller
+        .data()
+        .host
+        .asset_get
+        .ok_or_else(|| wasmi::Error::new("asset queries are not available in this build"))?;
+    let mut err = [0; ERR_BUF_LEN];
+    let mut len = 0;
+    let mut exists = 0;
+    let ret = unsafe {
+        cb(
+            caller.data().host.ctx,
+            kind,
+            asset as u64,
+            account.map_or(std::ptr::null(), |a| a.as_ptr()),
+            buf.as_mut_ptr(),
+            buf.len(),
+            &mut len,
+            &mut exists,
+            err.as_mut_ptr(),
+            err.len(),
+        )
+    };
+    if ret != 0 && ret != TXN_ERR_BUFFER {
+        return Err(wasmi::Error::new(format!(
+            "asset query error: {}",
+            cstr(&err)
+        )));
+    }
+    if len > MAX_AVM_BYTES {
+        return Err(wasmi::Error::new("asset value exceeds AVM size limit"));
+    }
+    Ok((exists != 0, len))
+}
+
+/// Returns 1 and writes an LE uint64 for an existing holding; otherwise returns
+/// 0 without writing. Bad memory or unavailable resources trap.
+fn asset_balance(
+    mut caller: Caller<'_, HostState>,
+    account: i32,
+    asset: i64,
+    out: i32,
+) -> Result<i32, wasmi::Error> {
+    charge_fuel(&mut caller, ASSET_BALANCE_FUEL_COST)?;
+    if !caller.data().host.is_app {
+        return Err(wasmi::Error::new(
+            "asset queries are not available in signature mode",
+        ));
+    }
+    let address = read_guest_bytes(&mut caller, account, 32)?;
+    // Validate the output before invoking the ledger, even for absent holdings.
+    let memory = caller
+        .get_export("memory")
+        .and_then(|e| e.into_memory())
+        .ok_or_else(|| wasmi::Error::new("missing guest memory"))?;
+    if out < 0
+        || (out as usize)
+            .checked_add(8)
+            .is_none_or(|end| end > memory.data_size(&caller))
+    {
+        return Err(wasmi::Error::new("invalid asset balance output pointer"));
+    }
+    let mut bytes = [0; 8];
+    let (exists, len) = host_asset_get(&mut caller, 0, asset, Some(&address), &mut bytes)?;
+    if !exists {
+        return Ok(0);
+    }
+    if len != 8 {
+        return Err(wasmi::Error::new("invalid asset balance length"));
+    }
+    memory.write(&mut caller, out as usize, &bytes)?;
+    Ok(1)
+}
+
+/// Returns the byte length, or -1 for a missing asset. Empty names return 0.
+/// A zero capacity queries length without touching memory. ABI failures use
+/// -2/-3 and never write partial data; resource failures trap.
+fn asset_unit_name(
+    mut caller: Caller<'_, HostState>,
+    asset: i64,
+    out: i32,
+    capacity: i32,
+) -> Result<i32, wasmi::Error> {
+    charge_fuel(&mut caller, ASSET_UNIT_NAME_FUEL_COST)?;
+    let mut bytes = [0; MAX_AVM_BYTES];
+    let cap = if capacity <= 0 {
+        0
+    } else {
+        (capacity as usize).min(bytes.len())
+    };
+    let (exists, len) = host_asset_get(&mut caller, 1, asset, None, &mut bytes[..cap])?;
+    if capacity < 0 {
+        return Ok(TXN_ERR_MEMORY);
+    }
+    if !exists {
+        return Ok(-1);
+    }
+    if capacity == 0 {
+        return Ok(len as i32);
+    }
+    if out < 0 {
+        return Ok(TXN_ERR_MEMORY);
+    }
+    if len > capacity as usize {
+        return Ok(TXN_ERR_BUFFER);
+    }
+    let Some(memory) = caller.get_export("memory").and_then(|e| e.into_memory()) else {
+        return Ok(TXN_ERR_MEMORY);
+    };
+    if memory
+        .write(&mut caller, out as usize, &bytes[..len])
+        .is_err()
+    {
+        return Ok(TXN_ERR_MEMORY);
+    }
+    Ok(len as i32)
 }
 
 /// Calls the host's global-state reader, returning `(exists, len, is_bytes)`.
@@ -952,6 +1356,45 @@ fn instantiate_prepaid(
 fn new_linker(engine: &Engine) -> Result<Linker<HostState>, String> {
     let mut linker = Linker::new(engine);
     linker
+        .func_wrap("env", "log", app_log)
+        .map_err(|e| e.to_string())?;
+    linker
+        .func_wrap("env", "itxn_begin", itxn_begin)
+        .map_err(|e| e.to_string())?;
+    linker
+        .func_wrap("env", "itxn_next", itxn_next)
+        .map_err(|e| e.to_string())?;
+    linker
+        .func_wrap("env", "itxn_field_uint", itxn_field_uint)
+        .map_err(|e| e.to_string())?;
+    linker
+        .func_wrap("env", "itxn_field_bytes", itxn_field_bytes)
+        .map_err(|e| e.to_string())?;
+    linker
+        .func_wrap("env", "itxn_submit", itxn_submit)
+        .map_err(|e| e.to_string())?;
+    linker
+        .func_wrap("env", "itxn_created_asset_id", itxn_created_asset_id)
+        .map_err(|e| e.to_string())?;
+    linker
+        .func_wrap("env", "asset_balance", asset_balance)
+        .map_err(|err| format!("could not link env.asset_balance: {err}"))?;
+    linker
+        .func_wrap("env", "asset_unit_name", asset_unit_name)
+        .map_err(|err| format!("could not link env.asset_unit_name: {err}"))?;
+    linker
+        .func_wrap("env", "gtxn_uint", gtxn_uint)
+        .map_err(|err| format!("could not link env.gtxn_uint: {err}"))?;
+    linker
+        .func_wrap("env", "gtxn_bytes", gtxn_bytes)
+        .map_err(|err| format!("could not link env.gtxn_bytes: {err}"))?;
+    linker
+        .func_wrap("env", "global_uint", global_uint)
+        .map_err(|err| format!("could not link env.global_uint: {err}"))?;
+    linker
+        .func_wrap("env", "global_bytes", global_bytes)
+        .map_err(|err| format!("could not link env.global_bytes: {err}"))?;
+    linker
         .func_wrap("env", "arg_count", arg_count)
         .map_err(|err| format!("could not link env.arg_count: {err}"))?;
     linker
@@ -1045,8 +1488,27 @@ fn validate_inner(wasm: &[u8]) -> Result<(), String> {
         let ok = import.module() == "env"
             && match import.name() {
                 "arg_count" => func_type_is(import.ty(), &[], &[ValType::I32]),
+                "log" => func_type_is(import.ty(), &[ValType::I32; 2], &[]),
+                "itxn_begin" | "itxn_next" | "itxn_submit" => func_type_is(import.ty(), &[], &[]),
+                "itxn_field_uint" => func_type_is(import.ty(), &[ValType::I32, ValType::I64], &[]),
+                "itxn_field_bytes" => func_type_is(import.ty(), &[ValType::I32; 3], &[]),
+                "itxn_created_asset_id" => func_type_is(import.ty(), &[], &[ValType::I64]),
                 "arg" => func_type_is(import.ty(), &[ValType::I32; 3], &[ValType::I32]),
                 "txn_uint" => func_type_is(import.ty(), &[ValType::I32], &[ValType::I64]),
+                "gtxn_uint" => func_type_is(import.ty(), &[ValType::I32; 2], &[ValType::I64]),
+                "gtxn_bytes" => func_type_is(import.ty(), &[ValType::I32; 4], &[ValType::I32]),
+                "global_uint" => func_type_is(import.ty(), &[ValType::I32], &[ValType::I64]),
+                "global_bytes" => func_type_is(import.ty(), &[ValType::I32; 3], &[ValType::I32]),
+                "asset_balance" => func_type_is(
+                    import.ty(),
+                    &[ValType::I32, ValType::I64, ValType::I32],
+                    &[ValType::I32],
+                ),
+                "asset_unit_name" => func_type_is(
+                    import.ty(),
+                    &[ValType::I64, ValType::I32, ValType::I32],
+                    &[ValType::I32],
+                ),
                 "txn_bytes" => func_type_is(import.ty(), &[ValType::I32; 3], &[ValType::I32]),
                 "txna_uint" => func_type_is(import.ty(), &[ValType::I32; 2], &[ValType::I64]),
                 "txna_bytes" => func_type_is(import.ty(), &[ValType::I32; 4], &[ValType::I32]),
@@ -1193,7 +1655,8 @@ unsafe fn args_from_raw(args: *const WasmLsigArg, args_len: usize) -> Result<Vec
 ///
 /// `txn_cb`, if non-null, is the host's provider for `txn` field reads,
 /// `ed25519verify_bare_cb` its verifier, and `global_get_cb`/`global_put_cb`/
-/// `global_del_cb` its global-state accessors; `ctx` is passed back to them
+/// `global_del_cb` its global-state accessors, and `asset_get_cb` its asset
+/// query provider; `ctx` is passed back to them
 /// unchanged. `is_app` is non-zero for an application program, which disables
 /// the `arg`/`arg_count` host functions (they are signature-only, as in the
 /// AVM).
@@ -1218,6 +1681,9 @@ pub unsafe extern "C" fn wasm_lsig_run(
     global_get_cb: Option<GlobalGetCb>,
     global_put_cb: Option<GlobalPutCb>,
     global_del_cb: Option<GlobalDelCb>,
+    asset_get_cb: Option<AssetGetCb>,
+    inner_txn_cb: Option<InnerTxnCb>,
+    log_cb: Option<LogCb>,
     ctx: usize,
     is_app: u32,
 ) -> i32 {
@@ -1227,6 +1693,9 @@ pub unsafe extern "C" fn wasm_lsig_run(
         global_get: global_get_cb,
         global_put: global_put_cb,
         global_del: global_del_cb,
+        asset_get: asset_get_cb,
+        inner_txn: inner_txn_cb,
+        log: log_cb,
         ctx,
         is_app: is_app != 0,
     };
@@ -1400,6 +1869,8 @@ mod tests {
     // Fee is the uint 42, Note is empty, and everything else is an error.
     unsafe extern "C" fn fake_txn_field(
         ctx: usize,
+        _source: u32,
+        _group_index: u32,
         field: u32,
         _index: u32,
         _expect_array: u32,
@@ -2000,6 +2471,442 @@ mod tests {
         }
     }
 
+    // Asset 0 is absent, 1 exists with zero/empty values, 2 has a full-width
+    // balance or "DPT" name, and 3 reports a host error. Optional ctx counts
+    // callbacks so tests can prove charging and mode checks precede host work.
+    unsafe extern "C" fn fake_asset_get(
+        ctx: usize,
+        kind: u32,
+        asset: u64,
+        account: *const u8,
+        buf: *mut u8,
+        cap: usize,
+        len: *mut usize,
+        exists: *mut u8,
+        err: *mut u8,
+        err_cap: usize,
+    ) -> i32 {
+        if ctx != 0 {
+            *(ctx as *mut usize) += 1;
+        }
+        *exists = u8::from(asset != 0);
+        *len = 0;
+        if asset == 0 {
+            return 0;
+        }
+        if asset == 3 {
+            if err_cap >= 2 {
+                std::ptr::copy_nonoverlapping(b"x\0".as_ptr(), err, 2);
+            }
+            return -1;
+        }
+        if asset == 4 {
+            *len = MAX_AVM_BYTES + 1;
+            return -2;
+        }
+        let bytes = if kind == 0 {
+            // Record address correctness by rejecting any address other than
+            // 32 bytes of 7. Never panic across the C boundary.
+            if account.is_null() || std::slice::from_raw_parts(account, 32) != [7; 32] {
+                return -1;
+            }
+            if asset == 1 {
+                &[0u8; 8][..]
+            } else {
+                &[0xFFu8; 8][..]
+            }
+        } else if asset == 1 {
+            &[][..]
+        } else {
+            b"DPT"
+        };
+        *len = bytes.len();
+        if cap < bytes.len() {
+            return -2;
+        }
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf, bytes.len());
+        0
+    }
+
+    #[test]
+    fn asset_balance_memory_and_existence() {
+        for (asset, exists, value) in [(0, 0, 42), (1, 1, 0), (2, 1, -1), (-1, 1, -1)] {
+            let wasm = wat::parse_str(format!(r#"(module
+                (import "env" "asset_balance" (func $balance (param i32 i64 i32) (result i32)))
+                (memory (export "memory") 1)
+                (data (i32.const 0) "\07\07\07\07\07\07\07\07\07\07\07\07\07\07\07\07\07\07\07\07\07\07\07\07\07\07\07\07\07\07\07\07")
+                (func (export "program") (result i32)
+                    (i64.store (i32.const 65528) (i64.const 42))
+                    (i32.and (i32.eq (call $balance (i32.const 0) (i64.const {asset}) (i32.const 65528)) (i32.const {exists}))
+                        (i64.eq (i64.load (i32.const 65528)) (i64.const {value})))))"#)).unwrap();
+            assert!(validate_inner(&wasm).is_ok());
+            let host = HostCallbacks {
+                asset_get: Some(fake_asset_get),
+                is_app: true,
+                ..Default::default()
+            };
+            let outcome = run_inner(&wasm, vec![], 100_000, host).unwrap();
+            assert!(outcome.pass);
+            assert!(
+                run_inner(&wasm, vec![], outcome.fuel_used, host)
+                    .unwrap()
+                    .pass
+            );
+            assert!(run_inner(&wasm, vec![], outcome.fuel_used - 1, host).is_err());
+        }
+        for (address, out, memory) in [
+            (0, -1, true),
+            (0, 65529, true),
+            (-1, 32, true),
+            (65505, 32, true),
+            (0, 32, false),
+        ] {
+            let memory = if memory {
+                r#"(memory (export "memory") 1)"#
+            } else {
+                ""
+            };
+            let wasm = wat::parse_str(format!(r#"(module
+                (import "env" "asset_balance" (func $balance (param i32 i64 i32) (result i32)))
+                {memory}
+                (func (export "program") (result i32) (call $balance (i32.const {address}) (i64.const 0) (i32.const {out}))))"#)).unwrap();
+            let mut calls = 0usize;
+            assert!(run_inner(
+                &wasm,
+                vec![],
+                100_000,
+                HostCallbacks {
+                    asset_get: Some(fake_asset_get),
+                    ctx: (&mut calls as *mut usize) as usize,
+                    is_app: true,
+                    ..Default::default()
+                }
+            )
+            .is_err());
+            assert_eq!(calls, 0);
+        }
+    }
+
+    #[test]
+    fn asset_unit_name_buffers_and_existence() {
+        for (asset, ptr, cap, expected, memory) in [
+            (0, 0, 3, -1, true),
+            (1, 0, 3, 0, true),
+            (2, 65533, 3, 3, true),
+            (2, 0, 2, TXN_ERR_BUFFER, true),
+            (2, -1, 3, TXN_ERR_MEMORY, true),
+            (2, 65534, 3, TXN_ERR_MEMORY, true),
+            (2, 0, -1, TXN_ERR_MEMORY, true),
+            (2, 0, 3, TXN_ERR_MEMORY, false),
+            (2, -1, 0, 3, false),
+            (1, -1, 0, 0, false),
+            (0, -1, 0, -1, false),
+        ] {
+            let memory = if memory {
+                r#"(memory (export "memory") 1)
+                   (data (i32.const 0) "\09")
+                   (data (i32.const 65535) "\09")"#
+            } else {
+                ""
+            };
+            let unchanged = if !memory.is_empty() && expected <= 0 {
+                "(i32.and (i32.eq (i32.load8_u (i32.const 0)) (i32.const 9))
+                           (i32.eq (i32.load8_u (i32.const 65535)) (i32.const 9)))"
+            } else {
+                "(i32.const 1)"
+            };
+            let wasm = wat::parse_str(format!(r#"(module
+                (import "env" "asset_unit_name" (func $name (param i64 i32 i32) (result i32)))
+                {memory}
+                (func (export "program") (result i32)
+                    (i32.and (i32.eq (call $name (i64.const {asset}) (i32.const {ptr}) (i32.const {cap})) (i32.const {expected}))
+                              {unchanged})))"#)).unwrap();
+            assert!(validate_inner(&wasm).is_ok());
+            let host = HostCallbacks {
+                asset_get: Some(fake_asset_get),
+                is_app: true,
+                ..Default::default()
+            };
+            assert!(
+                run_inner(&wasm, vec![], 100_000, host).unwrap().pass,
+                "{asset}/{ptr}/{cap}"
+            );
+        }
+    }
+
+    #[test]
+    fn asset_queries_charge_before_host_work_and_reject_signature_mode() {
+        let wasm = wat::parse_str(r#"(module (func (export "program") (result i32) i32.const 1))"#)
+            .unwrap();
+        let mut calls = 0usize;
+        let (mut store, _, _) = instantiate(
+            &wasm,
+            vec![],
+            DEFAULT_MEMORY_LIMIT,
+            10_000,
+            HostCallbacks {
+                asset_get: Some(fake_asset_get),
+                ctx: (&mut calls as *mut usize) as usize,
+                is_app: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let name = wasmi::Func::wrap(&mut store, asset_unit_name)
+            .typed::<(i64, i32, i32), i32>(&store)
+            .unwrap();
+        store.set_fuel(ASSET_UNIT_NAME_FUEL_COST - 1).unwrap();
+        assert_eq!(
+            name.call(&mut store, (2, 0, 0)).unwrap_err().as_trap_code(),
+            Some(TrapCode::OutOfFuel)
+        );
+        assert_eq!(calls, 0);
+        store.set_fuel(ASSET_UNIT_NAME_FUEL_COST).unwrap();
+        assert_eq!(name.call(&mut store, (2, 0, 0)).unwrap(), 3);
+        assert_eq!(calls, 1);
+        assert_eq!(store.get_fuel().unwrap(), 0);
+        store.set_fuel(ASSET_UNIT_NAME_FUEL_COST).unwrap();
+        assert!(name
+            .call(&mut store, (3, 0, 0))
+            .unwrap_err()
+            .to_string()
+            .contains("asset query error"));
+        assert_eq!(store.get_fuel().unwrap(), 0);
+        store.set_fuel(ASSET_UNIT_NAME_FUEL_COST).unwrap();
+        assert!(name
+            .call(&mut store, (4, 0, 0))
+            .unwrap_err()
+            .to_string()
+            .contains("size limit"));
+        let before = calls;
+        store.data_mut().host.is_app = false;
+        store.set_fuel(ASSET_UNIT_NAME_FUEL_COST).unwrap();
+        assert!(name
+            .call(&mut store, (2, 0, 0))
+            .unwrap_err()
+            .to_string()
+            .contains("signature mode"));
+        assert_eq!(calls, before);
+        assert_eq!(store.get_fuel().unwrap(), 0);
+
+        let balance = wasmi::Func::wrap(&mut store, asset_balance)
+            .typed::<(i32, i64, i32), i32>(&store)
+            .unwrap();
+        store.set_fuel(ASSET_BALANCE_FUEL_COST - 1).unwrap();
+        assert_eq!(
+            balance
+                .call(&mut store, (0, 2, 0))
+                .unwrap_err()
+                .as_trap_code(),
+            Some(TrapCode::OutOfFuel)
+        );
+        store.set_fuel(ASSET_BALANCE_FUEL_COST).unwrap();
+        assert!(balance
+            .call(&mut store, (0, 2, 0))
+            .unwrap_err()
+            .to_string()
+            .contains("signature mode"));
+        assert_eq!(store.get_fuel().unwrap(), 0);
+        assert_eq!(calls, before);
+        store.data_mut().host.is_app = true;
+        store.data_mut().host.asset_get = None;
+        store.set_fuel(ASSET_UNIT_NAME_FUEL_COST).unwrap();
+        assert!(name
+            .call(&mut store, (2, 0, 0))
+            .unwrap_err()
+            .to_string()
+            .contains("not available in this build"));
+        assert_eq!(store.get_fuel().unwrap(), 0);
+    }
+
+    #[test]
+    fn validation_rejects_wrong_asset_query_signatures() {
+        for name in ["asset_balance", "asset_unit_name"] {
+            let wasm = wat::parse_str(format!(
+                r#"(module
+                (import "env" "{name}" (func (param i32 i32 i32) (result i32)))
+                (func (export "program") (result i32) i32.const 1))"#
+            ))
+            .unwrap();
+            assert!(validate_inner(&wasm).is_err());
+        }
+    }
+
+    #[test]
+    fn group_and_context_hosts_route_and_charge_before_work() {
+        use wasmi::Val::{I32, I64};
+
+        unsafe extern "C" fn record(
+            ctx: usize,
+            source: u32,
+            group_index: u32,
+            field: u32,
+            index: u32,
+            expect_array: u32,
+            buf: *mut u8,
+            buf_cap: usize,
+            out_len: *mut usize,
+            is_bytes: *mut u8,
+            err: *mut u8,
+            err_cap: usize,
+        ) -> i32 {
+            let calls = &mut *(ctx as *mut Vec<(u32, u32, u32, u32, u32)>);
+            calls.push((source, group_index, field, index, expect_array));
+            fake_txn_field(
+                0,
+                source,
+                group_index,
+                field,
+                index,
+                expect_array,
+                buf,
+                buf_cap,
+                out_len,
+                is_bytes,
+                err,
+                err_cap,
+            )
+        }
+
+        let wasm = wat::parse_str(r#"(module (func (export "program") (result i32) i32.const 1))"#)
+            .unwrap();
+        let mut calls: Vec<(u32, u32, u32, u32, u32)> = Vec::new();
+        let (mut store, _, _) = instantiate(
+            &wasm,
+            vec![],
+            DEFAULT_MEMORY_LIMIT,
+            10_000,
+            HostCallbacks {
+                txn_field: Some(record),
+                ctx: (&mut calls as *mut Vec<(u32, u32, u32, u32, u32)>) as usize,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let cases = [
+            (
+                wasmi::Func::wrap(&mut store, gtxn_uint),
+                vec![I32(3), I32(1)],
+                vec![I64(0)],
+                TXN_UINT_FUEL_COST,
+                (1, 3, 1, 0, 0),
+            ),
+            // Empty buffers are length queries, including without a memory export.
+            (
+                wasmi::Func::wrap(&mut store, gtxn_bytes),
+                vec![I32(2), I32(0), I32(-1), I32(0)],
+                vec![I32(0)],
+                GTXN_BYTES_FUEL_COST,
+                (1, 2, 0, 0, 0),
+            ),
+            (
+                wasmi::Func::wrap(&mut store, global_uint),
+                vec![I32(1)],
+                vec![I64(0)],
+                TXN_UINT_FUEL_COST,
+                (2, 0, 1, 0, 0),
+            ),
+            (
+                wasmi::Func::wrap(&mut store, global_bytes),
+                vec![I32(0), I32(-1), I32(0)],
+                vec![I32(0)],
+                TXN_BYTES_FUEL_COST,
+                (2, 0, 0, 0, 0),
+            ),
+        ];
+        for (func, inputs, mut outputs, cost, expected) in cases {
+            let before = calls.len();
+            store.set_fuel(cost - 1).unwrap();
+            assert_eq!(
+                func.call(&mut store, &inputs, &mut outputs)
+                    .unwrap_err()
+                    .as_trap_code(),
+                Some(TrapCode::OutOfFuel)
+            );
+            assert_eq!(calls.len(), before);
+            store.set_fuel(cost).unwrap();
+            func.call(&mut store, &inputs, &mut outputs).unwrap();
+            assert_eq!(calls.len(), before + 1);
+            assert_eq!(calls[before], expected);
+            assert_eq!(store.get_fuel().unwrap(), 0);
+            match outputs[0] {
+                I64(value) => assert_eq!(value, 42),
+                I32(value) => assert_eq!(value, 32),
+                _ => unreachable!(),
+            }
+        }
+        let uint = wasmi::Func::wrap(&mut store, gtxn_uint)
+            .typed::<(i32, i32), i64>(&store)
+            .unwrap();
+        for inputs in [(-1, 1), (0, -1)] {
+            let before = calls.len();
+            store.set_fuel(TXN_UINT_FUEL_COST).unwrap();
+            assert!(uint.call(&mut store, inputs).is_err());
+            assert_eq!(store.get_fuel().unwrap(), 0);
+            assert_eq!(calls.len(), before);
+        }
+    }
+
+    #[test]
+    fn group_and_context_import_signatures_are_checked() {
+        for (name, params, result) in [
+            ("gtxn_uint", "i32 i32", "i64"),
+            ("gtxn_bytes", "i32 i32 i32 i32", "i32"),
+            ("global_uint", "i32", "i64"),
+            ("global_bytes", "i32 i32 i32", "i32"),
+        ] {
+            let module = |params: &str, result: &str| {
+                wat::parse_str(format!(
+                    r#"(module
+                (import "env" "{name}" (func (param {params}) (result {result})))
+                (func (export "program") (result i32) i32.const 1))"#
+                ))
+                .unwrap()
+            };
+            assert!(validate_inner(&module(params, result)).is_ok());
+            assert!(validate_inner(&module("i64", result)).is_err());
+            assert!(validate_inner(&module(params, "f32")).is_err());
+        }
+    }
+
+    #[test]
+    fn group_and_context_byte_buffers() {
+        for (name, params, prefix) in [
+            ("gtxn_bytes", "i32 i32 i32 i32", "(i32.const 3)"),
+            ("global_bytes", "i32 i32 i32", ""),
+        ] {
+            for (ptr, len, expected, memory) in [
+                (-1, 0, 32, false),
+                (0, 0, 32, true),
+                (0, 31, TXN_ERR_BUFFER, true),
+                (-1, 32, TXN_ERR_MEMORY, true),
+                (0, -1, TXN_ERR_MEMORY, true),
+                (65505, 32, TXN_ERR_MEMORY, true),
+                (0, 32, TXN_ERR_MEMORY, false),
+                (65504, 32, 32, true),
+            ] {
+                let memory = if memory {
+                    r#"(memory (export "memory") 1)"#
+                } else {
+                    ""
+                };
+                let wat = format!(
+                    r#"(module
+                    (import "env" "{name}" (func $bytes (param {params}) (result i32)))
+                    {memory}
+                    (func (export "program") (result i32)
+                        (i32.eq (call $bytes {prefix} (i32.const 0) (i32.const {ptr}) (i32.const {len}))
+                                (i32.const {expected}))))"#
+                );
+                assert!(
+                    run_wat_with_txn(&wat, 1000).unwrap().pass,
+                    "{name}/{ptr}/{len}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn txn_charges_scaled_host_fuel_before_work() {
         let wasm = wat::parse_str(r#"(module (func (export "program") (result i32) i32.const 1))"#)
@@ -2270,6 +3177,8 @@ mod tests {
         // a four-byte value.
         unsafe extern "C" fn cb(
             ctx: usize,
+            _source: u32,
+            _group_index: u32,
             field: u32,
             index: u32,
             expect_array: u32,
@@ -2434,6 +3343,265 @@ mod tests {
         .unwrap();
         let err = run_inner(&wasm, vec![], 10_000, HostCallbacks::default()).unwrap_err();
         assert!(err.contains("signature mode"), "{err}");
+    }
+
+    // A stand-in for the Go global-state writer: records `(val_is_uint, value)`.
+    #[derive(Default)]
+    struct InnerCalls(Vec<(u32, u32, u64, Vec<u8>)>);
+
+    unsafe extern "C" fn record_inner(
+        ctx: usize,
+        op: u32,
+        field: u32,
+        value: u64,
+        data: *const u8,
+        len: usize,
+        result: *mut u64,
+        _err: *mut u8,
+        _cap: usize,
+    ) -> i32 {
+        let rec = &mut *(ctx as *mut InnerCalls);
+        rec.0.push((
+            op,
+            field,
+            value,
+            std::slice::from_raw_parts(data, len).to_vec(),
+        ));
+        *result = u64::MAX;
+        0
+    }
+
+    #[test]
+    fn inner_begin_next_submit_charge_ten_fuel_before_host_work() {
+        let wasm = wat::parse_str(r#"(module (func (export "program") (result i32) i32.const 1))"#)
+            .unwrap();
+        let mut rec = InnerCalls::default();
+        let (mut store, _, _) = instantiate(
+            &wasm,
+            vec![],
+            DEFAULT_MEMORY_LIMIT,
+            10_000,
+            HostCallbacks {
+                inner_txn: Some(record_inner),
+                is_app: true,
+                ctx: (&mut rec as *mut InnerCalls) as usize,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let begin = wasmi::Func::wrap(&mut store, itxn_begin)
+            .typed::<(), ()>(&store)
+            .unwrap();
+        let next = wasmi::Func::wrap(&mut store, itxn_next)
+            .typed::<(), ()>(&store)
+            .unwrap();
+        let submit = wasmi::Func::wrap(&mut store, itxn_submit)
+            .typed::<(), ()>(&store)
+            .unwrap();
+        // Submit costs the same for one inner and for a multi-inner group.
+        for (func, op) in [
+            (begin, 0),
+            (submit, 4),
+            (begin, 0),
+            (next, 1),
+            (next, 1),
+            (submit, 4),
+        ] {
+            let before = rec.0.len();
+            store.set_fuel(9).unwrap();
+            assert_eq!(
+                func.call(&mut store, ()).unwrap_err().as_trap_code(),
+                Some(TrapCode::OutOfFuel)
+            );
+            assert_eq!(rec.0.len(), before);
+            store.set_fuel(10).unwrap();
+            func.call(&mut store, ()).unwrap();
+            assert_eq!(store.get_fuel().unwrap(), 0);
+            assert_eq!(rec.0.len(), before + 1);
+            assert_eq!(rec.0.last().unwrap().0, op);
+        }
+    }
+
+    #[test]
+    fn inner_imports_meter_and_forward_full_width_values() {
+        let wasm = wat::parse_str(
+            r#"(module
+            (import "env" "itxn_begin" (func $begin))
+            (import "env" "itxn_next" (func $next))
+            (import "env" "itxn_field_uint" (func $uint (param i32 i64)))
+            (import "env" "itxn_field_bytes" (func $bytes (param i32 i32 i32)))
+            (import "env" "itxn_submit" (func $submit))
+            (import "env" "itxn_created_asset_id" (func $id (result i64)))
+            (memory (export "memory") 1)
+            (data (i32.const 0) "abc")
+            (func (export "program") (result i32)
+                (call $begin)
+                (call $uint (i32.const 34) (i64.const -1))
+                (call $bytes (i32.const 38) (i32.const 0) (i32.const 3))
+                (call $next)
+                (call $submit)
+                (i64.eq (call $id) (i64.const -1))))"#,
+        )
+        .unwrap();
+        assert!(validate_inner(&wasm).is_ok());
+        let mut rec = InnerCalls::default();
+        let host = HostCallbacks {
+            inner_txn: Some(record_inner),
+            is_app: true,
+            ctx: (&mut rec as *mut InnerCalls) as usize,
+            ..Default::default()
+        };
+        let out = run_inner(&wasm, vec![], 50_000, host).unwrap();
+        assert!(out.pass);
+        assert_eq!(
+            rec.0.iter().map(|c| c.0).collect::<Vec<_>>(),
+            vec![0, 2, 3, 1, 4, 5]
+        );
+        assert_eq!(rec.0[1], (2, 34, u64::MAX, vec![]));
+        assert_eq!(rec.0[2], (3, 38, 0, b"abc".to_vec()));
+        let charges = ITXN_BEGIN_FUEL_COST * 2
+            + ITXN_FIELD_FUEL_COST * 2
+            + 3
+            + ITXN_SUBMIT_FUEL_COST
+            + ITXN_RESULT_FUEL_COST;
+        assert!(
+            out.fuel_used >= charges + setup::fuel(&wasm, DEFAULT_MEMORY_LIMIT, u64::MAX).unwrap()
+        );
+        assert!(run_inner(&wasm, vec![], out.fuel_used, host).unwrap().pass);
+        assert!(run_inner(&wasm, vec![], out.fuel_used - 1, host).is_err());
+        let err = run_inner(
+            &wasm,
+            vec![],
+            50_000,
+            HostCallbacks {
+                is_app: false,
+                ..host
+            },
+        )
+        .unwrap_err();
+        assert!(err.contains("signature mode"), "{err}");
+    }
+
+    #[test]
+    fn inner_bytes_reject_bad_memory_before_callback() {
+        for (ptr, len) in [(-1, 1), (0, -1), (0, 4097), (65535, 2)] {
+            let wasm = wat::parse_str(format!(
+                r#"(module
+                (import "env" "itxn_field_bytes" (func $bytes (param i32 i32 i32)))
+                (memory (export "memory") 1)
+                (func (export "program") (result i32)
+                    (call $bytes (i32.const 38) (i32.const {ptr}) (i32.const {len}))
+                    i32.const 1))"#
+            ))
+            .unwrap();
+            let mut rec = InnerCalls::default();
+            let host = HostCallbacks {
+                inner_txn: Some(record_inner),
+                is_app: true,
+                ctx: (&mut rec as *mut InnerCalls) as usize,
+                ..Default::default()
+            };
+            assert!(run_inner(&wasm, vec![], 50_000, host).is_err());
+            assert!(rec.0.is_empty());
+        }
+    }
+
+    #[test]
+    fn inner_validation_rejects_wrong_signatures() {
+        for name in [
+            "itxn_begin",
+            "itxn_next",
+            "itxn_field_uint",
+            "itxn_field_bytes",
+            "itxn_submit",
+            "itxn_created_asset_id",
+        ] {
+            let wasm = wat::parse_str(format!(
+                r#"(module
+                (import "env" "{name}" (func (param i64 i64 i64)))
+                (func (export "program") (result i32) i32.const 1))"#
+            ))
+            .unwrap();
+            assert!(validate_inner(&wasm).is_err(), "{name}");
+        }
+    }
+
+    unsafe extern "C" fn record_log(
+        ctx: usize,
+        data: *const u8,
+        len: usize,
+        _err: *mut u8,
+        _cap: usize,
+    ) -> i32 {
+        let rec = &mut *(ctx as *mut Vec<Vec<u8>>);
+        rec.push(std::slice::from_raw_parts(data, len).to_vec());
+        0
+    }
+
+    #[test]
+    fn log_checks_mode_memory_signatures_and_fuel_before_host_work() {
+        for (ptr, len, valid) in [
+            (0, 3, true),
+            (0, 0, true),
+            (-1, 1, false),
+            (0, -1, false),
+            (65535, 2, false),
+            (0, 4097, false),
+        ] {
+            let wasm = wat::parse_str(format!(
+                r#"(module
+                (import "env" "log" (func $log (param i32 i32)))
+                (memory (export "memory") 1)
+                (data (i32.const 0) "abc")
+                (func (export "program") (result i32)
+                    (call $log (i32.const {ptr}) (i32.const {len})) i32.const 1))"#
+            ))
+            .unwrap();
+            assert!(validate_inner(&wasm).is_ok());
+            let mut logs = Vec::<Vec<u8>>::new();
+            let host = HostCallbacks {
+                log: Some(record_log),
+                is_app: true,
+                ctx: (&mut logs as *mut Vec<Vec<u8>>) as usize,
+                ..Default::default()
+            };
+            let result = run_inner(&wasm, vec![], 50_000, host);
+            if valid {
+                let out = result.unwrap();
+                assert_eq!(logs, vec![b"abc"[..len as usize].to_vec()]);
+                logs.clear();
+                assert!(run_inner(&wasm, vec![], out.fuel_used, host).unwrap().pass);
+                assert!(run_inner(&wasm, vec![], out.fuel_used - 1, host).is_err());
+                logs.clear();
+                // Setup only: the host callback must never run unfunded.
+                let setup = setup::fuel(&wasm, DEFAULT_MEMORY_LIMIT, u64::MAX).unwrap();
+                assert!(run_inner(&wasm, vec![], setup, host).is_err());
+                assert!(logs.is_empty());
+            } else {
+                assert!(result.is_err());
+                assert!(logs.is_empty());
+            }
+            logs.clear();
+            assert!(run_inner(
+                &wasm,
+                vec![],
+                50_000,
+                HostCallbacks {
+                    is_app: false,
+                    ..host
+                }
+            )
+            .unwrap_err()
+            .contains("signature mode"));
+            assert!(logs.is_empty());
+        }
+        let wasm = wat::parse_str(
+            r#"(module
+            (import "env" "log" (func (param i64 i64)))
+            (func (export "program") (result i32) i32.const 1))"#,
+        )
+        .unwrap();
+        assert!(validate_inner(&wasm).is_err());
     }
 
     // A stand-in for the Go global-state writer: records `(val_is_uint, value)`.

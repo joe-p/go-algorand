@@ -11,7 +11,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "avm-sdk-amm"
+version = "0.1.0"
+dependencies = [
+ "avm-sdk",
+]
+
+[[package]]
 name = "avm-sdk-arc4-counter"
+version = "0.1.0"
+dependencies = [
+ "avm-sdk",
+]
+
+[[package]]
+name = "avm-sdk-arc4-resources"
 version = "0.1.0"
 dependencies = [
  "avm-sdk",

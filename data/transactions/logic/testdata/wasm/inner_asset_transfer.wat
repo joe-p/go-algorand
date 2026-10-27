@@ -1,0 +1,23 @@
+;; Transfer ForeignAssets[0], with receiver and LE uint64 amount in args 0/1.
+;; A third argument rejects after submission, for rollback testing.
+(module
+  (import "env" "itxn_begin" (func $begin))
+  (import "env" "itxn_field_uint" (func $uint (param i32 i64)))
+  (import "env" "itxn_field_bytes" (func $bytes (param i32 i32 i32)))
+  (import "env" "itxn_submit" (func $submit))
+  (import "env" "itxn_created_asset_id" (func $id (result i64)))
+  (import "env" "txna_uint" (func $asset (param i32 i32) (result i64)))
+  (import "env" "txna_bytes" (func $arg (param i32 i32 i32 i32) (result i32)))
+  (import "env" "txn_uint" (func $txn (param i32) (result i64)))
+  (memory (export "memory") 1)
+  (func (export "program") (result i32)
+    (call $begin)
+    (drop (call $arg (i32.const 26) (i32.const 0) (i32.const 0) (i32.const 32)))
+    (drop (call $arg (i32.const 26) (i32.const 1) (i32.const 32) (i32.const 8)))
+    (call $uint (i32.const 16) (i64.const 4))
+    (call $uint (i32.const 1) (i64.const 0))
+    (call $uint (i32.const 17) (call $asset (i32.const 48) (i32.const 0)))
+    (call $uint (i32.const 18) (i64.load (i32.const 32)))
+    (call $bytes (i32.const 20) (i32.const 0) (i32.const 32))
+    (call $submit)
+    (i32.and (i64.eqz (call $id)) (i64.eq (call $txn (i32.const 27)) (i64.const 2)))))

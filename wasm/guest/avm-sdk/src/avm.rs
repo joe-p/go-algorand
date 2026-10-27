@@ -16,7 +16,7 @@
 
 //! The host abstraction.
 
-use avm_sys::{self, ArgError, TxnError, TxnField};
+use avm_sys::{self, ArgError, GlobalField, TxnError, TxnField};
 
 /// Every host operation the current ABI exposes.
 ///
@@ -28,6 +28,73 @@ use avm_sys::{self, ArgError, TxnError, TxnField};
 /// invalid transaction field, an oversized value, a type mismatch) are not
 /// `Result`; a trap ends the program, as in the AVM.
 pub trait Avm {
+    /// Appends an application log, subject to AVM count and total-byte limits.
+    fn log(&self, _bytes: &[u8]) {
+        unimplemented!("log")
+    }
+    /// Begins an application-only inner asset group.
+    fn itxn_begin(&self) {
+        unimplemented!("itxn_begin")
+    }
+    /// Starts the next transaction in the pending inner group.
+    fn itxn_next(&self) {
+        unimplemented!("itxn_next")
+    }
+    /// Sets a uint field of the current pending inner asset transaction.
+    fn itxn_field_uint(&self, _field: TxnField, _value: u64) {
+        unimplemented!("itxn_field_uint")
+    }
+    /// Sets a byte-string field of the current pending inner asset transaction.
+    fn itxn_field_bytes(&self, _field: TxnField, _bytes: &[u8]) {
+        unimplemented!("itxn_field_bytes")
+    }
+    /// Submits the pending asset group. Host failures trap.
+    fn itxn_submit(&self) {
+        unimplemented!("itxn_submit")
+    }
+    /// CreatedAssetID of the last submitted transaction.
+    fn itxn_created_asset_id(&self) -> u64 {
+        unimplemented!("itxn_created_asset_id")
+    }
+
+    /// Reads a holding's balance; absence differs from an existing zero balance.
+    /// Unavailable resources trap. Application-only.
+    fn asset_balance(&self, _account: &[u8; 32], _asset: u64) -> Option<u64> {
+        unimplemented!("asset_balance")
+    }
+
+    /// Copies an asset's unit name, or reports absence. An empty buffer queries
+    /// length without copying. Application-only.
+    fn asset_unit_name(&self, _asset: u64, _buf: &mut [u8]) -> Result<Option<usize>, TxnError> {
+        unimplemented!("asset_unit_name")
+    }
+
+    /// Reads a scalar uint field from a group transaction. Mocks that do not
+    /// model group reads fail explicitly rather than silently returning zero.
+    fn gtxn_uint(&self, _group_index: u32, _field: TxnField) -> u64 {
+        unimplemented!("gtxn_uint")
+    }
+
+    /// Copies a scalar byte field from a group transaction.
+    fn gtxn_bytes(
+        &self,
+        _group_index: u32,
+        _field: TxnField,
+        _buf: &mut [u8],
+    ) -> Result<usize, TxnError> {
+        unimplemented!("gtxn_bytes")
+    }
+
+    /// Reads a uint context field (not an application state key).
+    fn global_uint(&self, _field: GlobalField) -> u64 {
+        unimplemented!("global_uint")
+    }
+
+    /// Copies a byte-string context field.
+    fn global_bytes(&self, _field: GlobalField, _buf: &mut [u8]) -> Result<usize, TxnError> {
+        unimplemented!("global_bytes")
+    }
+
     /// The number of LogicSig arguments. Signature-only: traps in an
     /// application program.
     fn arg_count(&self) -> u32;
@@ -103,6 +170,70 @@ pub struct HostAvm;
 static HOST_AVM: HostAvm = HostAvm;
 
 impl Avm for HostAvm {
+    #[inline]
+    fn log(&self, bytes: &[u8]) {
+        avm_sys::log(bytes)
+    }
+    #[inline]
+    fn itxn_begin(&self) {
+        avm_sys::itxn_begin()
+    }
+    #[inline]
+    fn itxn_next(&self) {
+        avm_sys::itxn_next()
+    }
+    #[inline]
+    fn itxn_field_uint(&self, field: TxnField, value: u64) {
+        avm_sys::itxn_field_uint(field, value)
+    }
+    #[inline]
+    fn itxn_field_bytes(&self, field: TxnField, bytes: &[u8]) {
+        avm_sys::itxn_field_bytes(field, bytes)
+    }
+    #[inline]
+    fn itxn_submit(&self) {
+        avm_sys::itxn_submit()
+    }
+    #[inline]
+    fn itxn_created_asset_id(&self) -> u64 {
+        avm_sys::itxn_created_asset_id()
+    }
+
+    #[inline]
+    fn asset_balance(&self, account: &[u8; 32], asset: u64) -> Option<u64> {
+        avm_sys::asset_balance(account, asset)
+    }
+
+    #[inline]
+    fn asset_unit_name(&self, asset: u64, buf: &mut [u8]) -> Result<Option<usize>, TxnError> {
+        avm_sys::asset_unit_name(asset, buf)
+    }
+
+    #[inline]
+    fn gtxn_uint(&self, group_index: u32, field: TxnField) -> u64 {
+        avm_sys::gtxn_uint(group_index, field)
+    }
+
+    #[inline]
+    fn gtxn_bytes(
+        &self,
+        group_index: u32,
+        field: TxnField,
+        buf: &mut [u8],
+    ) -> Result<usize, TxnError> {
+        avm_sys::gtxn_bytes(group_index, field, buf)
+    }
+
+    #[inline]
+    fn global_uint(&self, field: GlobalField) -> u64 {
+        avm_sys::global_uint(field)
+    }
+
+    #[inline]
+    fn global_bytes(&self, field: GlobalField, buf: &mut [u8]) -> Result<usize, TxnError> {
+        avm_sys::global_bytes(field, buf)
+    }
+
     #[inline]
     fn arg_count(&self) -> u32 {
         avm_sys::arg_count()

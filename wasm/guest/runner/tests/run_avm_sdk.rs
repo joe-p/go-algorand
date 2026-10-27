@@ -97,6 +97,8 @@ unsafe fn write_bytes(
 /// A `txn`/`txna` provider for the fields the fixture reads.
 unsafe extern "C" fn txn_stub(
     _ctx: usize,
+    _source: u32,
+    _group_index: u32,
     field: u32,
     index: u32,
     _expect_array: u32,
@@ -213,6 +215,9 @@ fn run() -> (i32, u64, String) {
             Some(global_get),
             Some(global_put),
             Some(global_del),
+            None,
+            None,
+            None,
             0,
             // is_app = 1: the fixture is an application program.
             1,

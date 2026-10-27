@@ -4156,17 +4156,19 @@ func (cx *EvalContext) globalFieldToValue(fs globalFieldSpec) (sv stackValue, er
 	return sv, err
 }
 
-func opGlobal(cx *EvalContext) error {
-	globalField := GlobalField(cx.program[cx.pc+1])
+func (cx *EvalContext) readGlobalField(globalField GlobalField) (stackValue, error) {
 	fs, ok := globalFieldSpecByField(globalField)
 	if !ok || fs.version > cx.version {
-		return fmt.Errorf("invalid global field %s", globalField)
+		return stackValue{}, fmt.Errorf("invalid global field %s", globalField)
 	}
 	if (cx.runMode & fs.mode) == 0 {
-		return fmt.Errorf("global[%s] not allowed in current mode", globalField)
+		return stackValue{}, fmt.Errorf("global[%s] not allowed in current mode", globalField)
 	}
+	return cx.globalFieldToValue(fs)
+}
 
-	sv, err := cx.globalFieldToValue(fs)
+func opGlobal(cx *EvalContext) error {
+	sv, err := cx.readGlobalField(GlobalField(cx.program[cx.pc+1]))
 	if err != nil {
 		return err
 	}
@@ -5309,62 +5311,74 @@ func (cx *EvalContext) holdingReference(account stackValue, ref uint64) (basics.
 	return addr, asset, nil
 }
 
+// readAssetHolding is shared by AVM and WASM without interpreting program
+// bytes or using the AVM operand stack. A missing ledger holding yields false;
+// an unavailable resource or invalid field is an evaluation error.
+func (cx *EvalContext) readAssetHolding(account stackValue, ref uint64, holdingField AssetHoldingField) (stackValue, bool, error) {
+	fs, ok := assetHoldingFieldSpecByField(holdingField)
+	if !ok || fs.version > cx.version {
+		return stackValue{}, false, fmt.Errorf("invalid asset_holding_get field %d", holdingField)
+	}
+
+	addr, asset, err := cx.holdingReference(account, ref)
+	if err != nil {
+		return stackValue{}, false, err
+	}
+
+	holding, err := cx.Ledger.AssetHolding(addr, asset)
+	if err != nil {
+		return stackValue{}, false, nil
+	}
+	value, err := cx.assetHoldingToValue(&holding, fs)
+	return value, true, err
+}
+
 func opAssetHoldingGet(cx *EvalContext) error {
 	last := len(cx.Stack) - 1 // asset
 	prev := last - 1          // account
-
-	holdingField := AssetHoldingField(cx.program[cx.pc+1])
-	fs, ok := assetHoldingFieldSpecByField(holdingField)
-	if !ok || fs.version > cx.version {
-		return fmt.Errorf("invalid asset_holding_get field %d", holdingField)
-	}
-
-	addr, asset, err := cx.holdingReference(cx.Stack[prev], cx.Stack[last].Uint)
+	value, exists, err := cx.readAssetHolding(cx.Stack[prev], cx.Stack[last].Uint, AssetHoldingField(cx.program[cx.pc+1]))
 	if err != nil {
 		return err
 	}
-
-	var exist uint64 = 0
-	var value stackValue
-	if holding, err := cx.Ledger.AssetHolding(addr, asset); err == nil {
-		// the holding exists, read the value
+	var exist uint64
+	if exists {
 		exist = 1
-		value, err = cx.assetHoldingToValue(&holding, fs)
-		if err != nil {
-			return err
-		}
 	}
-
 	cx.Stack[prev] = value
 	cx.Stack[last].Uint = exist
 	return nil
 }
 
-func opAssetParamsGet(cx *EvalContext) error {
-	last := len(cx.Stack) - 1 // asset
-
-	paramField := AssetParamsField(cx.program[cx.pc+1])
+// readAssetParams preserves AVM resource resolution and missing-asset semantics.
+func (cx *EvalContext) readAssetParams(ref uint64, paramField AssetParamsField) (stackValue, bool, error) {
 	fs, ok := assetParamsFieldSpecByField(paramField)
 	if !ok || fs.version > cx.version {
-		return fmt.Errorf("invalid asset_params_get field %d", paramField)
+		return stackValue{}, false, fmt.Errorf("invalid asset_params_get field %d", paramField)
 	}
 
-	asset, err := cx.assetReference(cx.Stack[last].Uint, true)
+	asset, err := cx.assetReference(ref, true)
+	if err != nil {
+		return stackValue{}, false, err
+	}
+
+	params, creator, err := cx.Ledger.AssetParams(asset)
+	if err != nil {
+		return stackValue{}, false, nil
+	}
+	value, err := cx.assetParamsToValue(&params, creator, fs)
+	return value, true, err
+}
+
+func opAssetParamsGet(cx *EvalContext) error {
+	last := len(cx.Stack) - 1 // asset
+	value, exists, err := cx.readAssetParams(cx.Stack[last].Uint, AssetParamsField(cx.program[cx.pc+1]))
 	if err != nil {
 		return err
 	}
-
-	var exist uint64 = 0
-	var value stackValue
-	if params, creator, err := cx.Ledger.AssetParams(asset); err == nil {
-		// params exist, read the value
+	var exist uint64
+	if exists {
 		exist = 1
-		value, err = cx.assetParamsToValue(&params, creator, fs)
-		if err != nil {
-			return err
-		}
 	}
-
 	cx.Stack[last] = value
 	cx.Stack = append(cx.Stack, stackValue{Uint: exist})
 	return nil
@@ -5538,18 +5552,24 @@ func opOnlineStake(cx *EvalContext) error {
 	return nil
 }
 
-func opLog(cx *EvalContext) error {
-	last := len(cx.Stack) - 1
-
+// appendLog shares AVM log count and total-byte limits with WASM.
+func (cx *EvalContext) appendLog(log []byte) error {
 	if len(cx.txn.EvalDelta.Logs) >= cx.MaxLogCalls {
 		return fmt.Errorf("too many log calls in program. up to %d is allowed", cx.MaxLogCalls)
 	}
-	log := cx.Stack[last]
-	cx.logSize += len(log.Bytes)
+	cx.logSize += len(log)
 	if cx.logSize > cx.MaxLogSize {
 		return fmt.Errorf("program logs too large. %d bytes >  %d bytes limit", cx.logSize, cx.MaxLogSize)
 	}
-	cx.txn.EvalDelta.Logs = append(cx.txn.EvalDelta.Logs, string(log.Bytes))
+	cx.txn.EvalDelta.Logs = append(cx.txn.EvalDelta.Logs, string(log))
+	return nil
+}
+
+func opLog(cx *EvalContext) error {
+	last := len(cx.Stack) - 1
+	if err := cx.appendLog(cx.Stack[last].Bytes); err != nil {
+		return err
+	}
 	cx.Stack = cx.Stack[:last]
 	return nil
 }
@@ -5970,19 +5990,23 @@ func (cx *EvalContext) stackIntoTxnField(sv stackValue, fs *txnFieldSpec, txn *t
 	return
 }
 
-func opItxnField(cx *EvalContext) error {
+// setInnerTxnField shares AVM field assignment with WASM without reading an
+// immediate from the program or manipulating the AVM operand stack.
+func (cx *EvalContext) setInnerTxnField(field TxnField, sv stackValue) error {
 	itx := len(cx.subtxns) - 1
 	if itx < 0 {
 		return errors.New("itxn_field without itxn_begin")
 	}
-	last := len(cx.Stack) - 1
-	field := TxnField(cx.program[cx.pc+1])
 	fs, ok := txnFieldSpecByField(field)
 	if !ok || fs.itxVersion == 0 || fs.itxVersion > cx.version {
 		return fmt.Errorf("invalid itxn_field %s", field)
 	}
-	sv := cx.Stack[last]
-	err := cx.stackIntoTxnField(sv, &fs, &cx.subtxns[itx].Txn)
+	return cx.stackIntoTxnField(sv, &fs, &cx.subtxns[itx].Txn)
+}
+
+func opItxnField(cx *EvalContext) error {
+	last := len(cx.Stack) - 1
+	err := cx.setInnerTxnField(TxnField(cx.program[cx.pc+1]), cx.Stack[last])
 	cx.Stack = cx.Stack[:last] // pop
 	return err
 }

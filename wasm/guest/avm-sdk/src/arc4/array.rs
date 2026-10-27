@@ -105,6 +105,18 @@ impl<'a, T: Decode<'a>> Decode<'a> for DynArray<'a, T> {
     }
 }
 
+impl<'a, T: Decode<'a>> super::Encode for DynArray<'a, T> {
+    const STATIC_LEN: Option<usize> = None;
+    fn encode(&self, out: &mut [u8]) -> Result<usize, super::EncodeError> {
+        let prefix = u16::try_from(self.len)
+            .map_err(|_| super::EncodeError)?
+            .to_be_bytes();
+        super::encode::copy(&prefix, out)?;
+        super::encode::copy(self.bytes, out.get_mut(2..).ok_or(super::EncodeError)?)?;
+        Ok(self.bytes.len() + 2)
+    }
+}
+
 impl<'a, T: Decode<'a>> IntoIterator for DynArray<'a, T> {
     type Item = T;
     type IntoIter = Iter<'a, T>;

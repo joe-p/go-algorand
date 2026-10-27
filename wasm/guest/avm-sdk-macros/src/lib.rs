@@ -183,7 +183,7 @@ pub fn program_entry(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// - sends a bare call (no arguments) to `approve` if the impl defines one, and
 ///   otherwise approves only a `NoOp` create;
 /// - requires method calls to be `NoOp`, to match a selector, and to carry
-///   exactly one argument per parameter;
+///   exactly the encoded arguments (transaction parameters consume none);
 /// - runs a method only on an existing application, or only at creation with
 ///   `#[abimethod(create)]`;
 /// - rejects when an argument does not decode, and otherwise approves according
@@ -194,7 +194,10 @@ pub fn program_entry(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// 15th are decoded from the tuple ARC-4 packs them into. The type-to-ABI-name
 /// mapping is syntactic (the selector is computed before types resolve), so a
 /// type alias is not seen through, except `U256` / `U512`. Methods must return
-/// `()` or `Result<(), E>` until the host has `log`. The macro also implements
+/// `()`, an ABI value, or `Result<T, E>`. Non-void successes emit an ARC-4
+/// return log; errors reject without logging a return. Top-level `Account`,
+/// `Asset`, and `Application` resolve uint8 references; transaction aliases
+/// select preceding group transactions in signature order. The macro also implements
 /// `avm_sdk::arc4::Arc4Contract`, the method metadata for tooling.
 ///
 /// ```ignore
@@ -384,6 +387,51 @@ struct AbiParam {
     name: String,
     abi: String,
     ty: Type,
+    kind: ParamKind,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ParamKind {
+    Value,
+    Reference,
+    Transaction,
+}
+
+fn special_param(ty: &Type) -> Option<(&'static str, ParamKind)> {
+    let Type::Path(path) = ty else {
+        return None;
+    };
+    if path.qself.is_some() {
+        return None;
+    }
+    let segment = path.path.segments.last()?;
+    if !segment.arguments.is_none() {
+        return None;
+    }
+    let (abi, kind) = match segment.ident.to_string().as_str() {
+        "Account" => ("account", ParamKind::Reference),
+        "Asset" => ("asset", ParamKind::Reference),
+        "Application" => ("application", ParamKind::Reference),
+        "Transaction" => ("txn", ParamKind::Transaction),
+        "PaymentTxn" => ("pay", ParamKind::Transaction),
+        "KeyRegistrationTxn" => ("keyreg", ParamKind::Transaction),
+        "AssetConfigTxn" => ("acfg", ParamKind::Transaction),
+        "AssetTransferTxn" => ("axfer", ParamKind::Transaction),
+        "AssetFreezeTxn" => ("afrz", ParamKind::Transaction),
+        "ApplicationCallTxn" => ("appl", ParamKind::Transaction),
+        _ => return None,
+    };
+    Some((abi, kind))
+}
+
+impl AbiParam {
+    fn encoded_type(&self) -> Type {
+        if self.kind == ParamKind::Reference {
+            syn::parse_quote!(u8)
+        } else {
+            self.ty.clone()
+        }
+    }
 }
 
 struct AbiMethod {
@@ -393,6 +441,8 @@ struct AbiMethod {
     selector: [u8; 4],
     create: bool,
     params: Vec<AbiParam>,
+    returns: String,
+    fallible: bool,
 }
 
 fn abi_method(method: &ImplItemFn, options: AbiOptions) -> syn::Result<AbiMethod> {
@@ -409,14 +459,17 @@ fn abi_method(method: &ImplItemFn, options: AbiOptions) -> syn::Result<AbiMethod
             "an #[abimethod] cannot be generic or async",
         ));
     }
-    check_void_return(&sig.output)?;
+    let (returns, fallible) = abi_return(&sig.output)?;
 
     let mut params = Vec::new();
     for input in sig.inputs.iter().skip(1) {
         let FnArg::Typed(typed) = input else {
             unreachable!("only the first parameter can be a receiver");
         };
-        let abi = abi_name(&typed.ty)?;
+        let (abi, kind) = match special_param(&typed.ty) {
+            Some((abi, kind)) => (abi.to_string(), kind),
+            None => (abi_name(&typed.ty)?, ParamKind::Value),
+        };
         let name = match &*typed.pat {
             Pat::Ident(ident) => ident.ident.to_string(),
             _ => "_".to_string(),
@@ -425,19 +478,30 @@ fn abi_method(method: &ImplItemFn, options: AbiOptions) -> syn::Result<AbiMethod
             name,
             abi,
             ty: (*typed.ty).clone(),
+            kind,
         });
     }
     let max_params = MAX_SEPARATE_ARGS - 1 + MAX_TUPLE_LEN;
-    if params.len() > max_params {
+    if params
+        .iter()
+        .filter(|p| p.kind != ParamKind::Transaction)
+        .count()
+        > max_params
+        || params
+            .iter()
+            .filter(|p| p.kind == ParamKind::Transaction)
+            .count()
+            > 15
+    {
         return Err(syn::Error::new_spanned(
             &sig.inputs,
-            format!("an #[abimethod] takes at most {max_params} parameters"),
+            format!("an #[abimethod] takes at most {max_params} encoded parameters and 15 transaction parameters"),
         ));
     }
 
     let name = options.name.unwrap_or_else(|| sig.ident.to_string());
     let types: Vec<&str> = params.iter().map(|p| p.abi.as_str()).collect();
-    let signature = format!("{name}({})void", types.join(","));
+    let signature = format!("{name}({}){returns}", types.join(","));
     let hash = Sha512_256::digest(signature.as_bytes());
     Ok(AbiMethod {
         ident: sig.ident.clone(),
@@ -446,35 +510,33 @@ fn abi_method(method: &ImplItemFn, options: AbiOptions) -> syn::Result<AbiMethod
         selector: [hash[0], hash[1], hash[2], hash[3]],
         create: options.create,
         params,
+        returns,
+        fallible,
     })
 }
 
-/// ARC-4 return values are logged, and the host has no `log` yet, so only
-/// `()` and `Result<(), E>` are accepted.
-fn check_void_return(output: &ReturnType) -> syn::Result<()> {
+/// Returns the ABI value type and whether the Rust method returns Result<T,E>.
+fn abi_return(output: &ReturnType) -> syn::Result<(String, bool)> {
     let ReturnType::Type(_, ty) = output else {
-        return Ok(());
+        return Ok(("void".into(), false));
     };
-    let is_unit = |ty: &Type| matches!(ty, Type::Tuple(tuple) if tuple.elems.is_empty());
-    let ok = match &**ty {
-        ty if is_unit(ty) => true,
-        Type::Path(path) => path.path.segments.last().is_some_and(|segment| {
-            segment.ident == "Result"
-                && matches!(
-                    &segment.arguments,
-                    PathArguments::AngleBracketed(args)
-                        if matches!(args.args.first(), Some(GenericArgument::Type(ok)) if is_unit(ok))
-                )
-        }),
-        _ => false,
-    };
-    if ok {
-        Ok(())
+    if let Type::Path(path) = &**ty {
+        if let Some(segment) = path.path.segments.last().filter(|s| s.ident == "Result") {
+            if let PathArguments::AngleBracketed(args) = &segment.arguments {
+                if let Some(GenericArgument::Type(ok)) = args.args.first() {
+                    return Ok((return_name(ok)?, true));
+                }
+            }
+        }
+    }
+    Ok((return_name(ty)?, false))
+}
+
+fn return_name(ty: &Type) -> syn::Result<String> {
+    if matches!(ty, Type::Tuple(tuple) if tuple.elems.is_empty()) {
+        Ok("void".into())
     } else {
-        Err(syn::Error::new_spanned(
-            ty,
-            "an #[abimethod] must return `()` or `Result<(), E>`: ARC-4 return values are logged, and the host has no `log` function yet",
-        ))
+        abi_name(ty)
     }
 }
 
@@ -663,18 +725,19 @@ fn arc4_route(self_ty: &Type, methods: &[AbiMethod], has_approve: bool) -> Token
             let ident = &method.ident;
             let entry = format_ident!("abi_{}", ident);
             let create = method.create;
-            let (separate, packed) = if method.params.len() > MAX_SEPARATE_ARGS {
-                method.params.split_at(MAX_SEPARATE_ARGS - 1)
+            let encoded: Vec<_> = method.params.iter().filter(|p| p.kind != ParamKind::Transaction).collect();
+            let (separate, packed) = if encoded.len() > MAX_SEPARATE_ARGS {
+                encoded.split_at(MAX_SEPARATE_ARGS - 1)
             } else {
-                (method.params.as_slice(), &[][..])
+                (encoded.as_slice(), &[][..])
             };
             let num_args = (separate.len() + usize::from(!packed.is_empty()) + 1) as u32;
 
             // The argument types in order: each separate parameter, then the tuple
             // of packed ones.
-            let mut types: Vec<Type> = separate.iter().map(|param| param.ty.clone()).collect();
+            let mut types: Vec<Type> = separate.iter().map(|param| param.encoded_type()).collect();
             if !packed.is_empty() {
-                let packed_types = packed.iter().map(|param| &param.ty);
+                let packed_types = packed.iter().map(|param| param.encoded_type());
                 types.push(syn::parse_quote!((#(#packed_types,)*)));
             }
             let descs = types
@@ -685,7 +748,7 @@ fn arc4_route(self_ty: &Type, methods: &[AbiMethod], has_approve: bool) -> Token
             let mut args = Vec::new();
             for (i, param) in separate.iter().enumerate() {
                 let arg = format_ident!("arg{i}");
-                let ty = &param.ty;
+                let ty = param.encoded_type();
                 let index = i + 1;
                 reads.push(quote! {
                     let #arg: #ty = unsafe { args.decode(#index) };
@@ -704,6 +767,50 @@ fn arc4_route(self_ty: &Type, methods: &[AbiMethod], has_approve: bool) -> Token
                 });
                 args.extend(names);
             }
+            // Resolve references only after validating their uint8 wire encodings.
+            // Transaction parameters do not consume any application arguments.
+            let mut resolved = Vec::new();
+            let mut call_args = Vec::new();
+            let txn_count = method.params.iter().filter(|p| p.kind == ParamKind::Transaction).count() as u32;
+            let mut txn_offset = 0u32;
+            let mut encoded_offset = 0;
+            for (i, param) in method.params.iter().enumerate() {
+                let name = format_ident!("resolved{i}");
+                let ty = &param.ty;
+                match param.kind {
+                    ParamKind::Transaction => {
+                        let offset = txn_offset;
+                        txn_offset += 1;
+                        resolved.push(quote! {
+                            let Some(#name) = <#ty>::resolve(#offset, #txn_count) else { return false; };
+                        });
+                        call_args.push(quote!(#name));
+                    }
+                    kind => {
+                        let arg = &args[encoded_offset];
+                        encoded_offset += 1;
+                        if kind == ParamKind::Reference {
+                            resolved.push(quote! {
+                                let Some(#name) = <#ty>::resolve(#arg) else { return false; };
+                            });
+                            call_args.push(quote!(#name));
+                        } else { call_args.push(quote!(#arg)); }
+                    }
+                }
+            }
+            let invoke = quote! { <#self_ty>::new().#ident(#(#call_args),*) };
+            let result = if method.returns == "void" {
+                quote! { ::avm_sdk::Approve::approve(#invoke) }
+            } else if method.fallible {
+                quote! {
+                    match #invoke {
+                        Ok(value) => ::avm_sdk::arc4::log_return(&value),
+                        Err(_) => false,
+                    }
+                }
+            } else {
+                quote! { ::avm_sdk::arc4::log_return(&#invoke) }
+            };
             entries.push(quote! {
                 /// # Safety
                 ///
@@ -711,7 +818,8 @@ fn arc4_route(self_ty: &Type, methods: &[AbiMethod], has_approve: bool) -> Token
                 #[inline(never)]
                 unsafe fn #entry(args: &::avm_sdk::arc4::Args) -> bool {
                     #(#reads)*
-                    ::avm_sdk::Approve::approve(<#self_ty>::new().#ident(#(#args),*))
+                    #(#resolved)*
+                    #result
                 }
             });
             quote! {
@@ -765,6 +873,7 @@ fn arc4_metadata(self_ty: &Type, methods: &[AbiMethod]) -> TokenStream2 {
         let signature = &method.signature;
         let [b0, b1, b2, b3] = method.selector;
         let create = method.create;
+        let returns = &method.returns;
         let args = method.params.iter().map(|param| {
             let name = &param.name;
             let abi = &param.abi;
@@ -777,6 +886,7 @@ fn arc4_metadata(self_ty: &Type, methods: &[AbiMethod]) -> TokenStream2 {
                 selector: [#b0, #b1, #b2, #b3],
                 args: &[#(#args),*],
                 create: #create,
+                returns: #returns,
             }
         }
     });
@@ -896,5 +1006,36 @@ fn take_key_attr(
     match err {
         Some(err) => Err(err),
         None => Ok(key),
+    }
+}
+
+#[cfg(test)]
+mod abi_tests {
+    use super::*;
+
+    #[test]
+    fn reference_and_transaction_types_are_top_level_only() {
+        for ty in [
+            syn::parse_quote!((Asset, u64)),
+            syn::parse_quote!([Account; 2]),
+            syn::parse_quote!(DynArray<PaymentTxn>),
+        ] {
+            assert!(abi_name(&ty).is_err());
+        }
+        let method: ImplItemFn = syn::parse_quote!(
+            fn deposit(&self, asset: Asset, transfer: AssetTransferTxn) -> Result<u64, Error> {
+                unreachable!()
+            }
+        );
+        let method = abi_method(&method, AbiOptions::default()).unwrap();
+        assert_eq!(method.signature, "deposit(asset,axfer)uint64");
+        assert!(method.fallible);
+        for output in [
+            syn::parse_quote!(-> Asset),
+            syn::parse_quote!(-> PaymentTxn),
+            syn::parse_quote!(-> (u64, Account)),
+        ] {
+            assert!(abi_return(&output).is_err());
+        }
     }
 }

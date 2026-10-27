@@ -100,6 +100,9 @@ fn run(args: &[&[u8]]) -> (i32, String) {
             None,
             None,
             None,
+            None,
+            None,
+            None,
             0,
             // is_app = 0: the fixture runs as a LogicSig.
             0,

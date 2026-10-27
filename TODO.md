@@ -54,9 +54,10 @@ gated by the `EnableWasmLogicSig` consensus parameter (currently set only in
 `vFuture`). A first cut of WASM **application** programs is also in place: a WASM
 module may be an app's approval or clear-state program (both must be the same
 kind), gated by `EnableWasmApp`, in `vFuture`. The
-guest reads transaction fields (including the application arguments via a
-`txna`-style accessor), runs `ed25519verify_bare`, and reads/writes global app
-state. Local state, boxes, and inner transactions are not yet exposed. Both modes
+guest reads transaction fields (including application arguments and scalar
+grouped fields), selected context fields, and asset balances/unit names; it runs
+`ed25519verify_bare`, reads/writes global app state, and submits inner asset
+transactions. Local state, boxes, and inner app calls are not yet exposed. Both modes
 use 10 fuel per AVM cost unit, with deterministic setup and calibrated host
 charges (see `WASM_PERF.md`). This file tracks what is left.
 
@@ -82,12 +83,34 @@ Done:
       accessors and limits, plus calibrated host-side fuel charges (not AVM
       opcode-price parity).
 - [x] Guest SDK bindings and helpers (`txna_uint`, `txna_bytes`,
-      `app_args_count`, `app_arg_into`, `app_global_*`).
+       `app_args_count`, `app_arg_into`, `app_global_*`).
+- [x] AMM foundation: scalar grouped-transaction reads (`gtxn_uint` /
+      `gtxn_bytes`) and context reads for group size, current application ID,
+      and current application address, with SDK wrappers and integration tests.
+      Bootstrap's exact
+      two-transaction assertion also needs a budget-compatible design.
+- [x] AMM asset queries: holding balances and asset unit names, with distinct
+      missing vs zero/empty results. Shared AVM resource/ledger helpers, SDK
+      wrappers, and differential/resource-sharing tests are in place. Their
+      provisional fuel charges still need dedicated calibration.
+- [x] Inner asset transactions: begin/next, typed field assignment, submit,
+      and CreatedAssetID, sharing AVM validation/execution paths. SDK creation,
+      self-opt-in, transfer helpers; lifecycle/fee/resource/limit tests and real
+      ledger minimum-balance/rollback tests (reject, trap, fuel exhaustion).
+      Host charges remain provisional. Inner app calls are deliberately excluded
+      until live WASM/shared-budget synchronization is implemented.
+- [x] ARC-4 top-level account/asset/application references and typed preceding
+      transaction parameters (excluded from argument counting/tuple packing).
+      Allocation-free return encoding and `log` use shared AVM log limits.
+      Native/golden encoding tests, compiled Rust integration, log parity,
+      memory/fuel boundaries, and ledger log rollback tests cover the new cut.
+      Log host charges are provisional. The resources example is not an AMM;
+      AMM implementation, arithmetic, and bootstrap budgets are still pending.
 
 Still to do:
 
 - [ ] Extend the stateful surface beyond global state: local state
-      (`app_local_*`), boxes, `log`, inner transactions, foreign access, and
+      (`app_local_*`), boxes, non-asset inner transactions, foreign access, and
       scratch, wired to shared Go primitives so AVM and WASM can't disagree.
 - [x] Emit tracer hooks (`BeforeProgram`/`AfterProgram`) for the WASM app path
       so `simulate` reports `app-budget-consumed` and a program trace frame.
@@ -163,8 +186,9 @@ Still to do:
 - [ ] Expose opcodes, transaction fields, and other data to guest programs via
       additional `env` host functions (design the ABI and add Go↔Rust callbacks
       as needed). Current-transaction scalar and array
-      transaction-field reads (`txna_uint`/`txna_bytes`) are in place; `gtxn`,
-      `gtxna`, `itxn`, `global`, and the remaining crypto/state opcodes are not.
+      transaction-field reads (`txna_uint`/`txna_bytes`), scalar `gtxn`, and
+      selected `global` fields are in place; `gtxna`, `itxn`, other context
+      fields, and the remaining crypto/state opcodes are not.
 - [ ] Add `goal`/clerk tooling to create, compile-to-WASM, and submit WASM
       LogicSigs, mirroring the existing TEAL lsig flow.
 - [x] Provide a small guest-authoring SDK / ABI doc and example contracts.

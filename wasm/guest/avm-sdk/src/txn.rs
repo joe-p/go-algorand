@@ -51,6 +51,19 @@ pub fn array_bytes(field: TxnField, index: u32, buf: &mut [u8]) -> Result<usize,
     host().txna_bytes(field, index, buf)
 }
 
+/// Reads a scalar uint field from transaction `group_index` in the current group.
+#[inline]
+pub fn group_uint(group_index: u32, field: TxnField) -> u64 {
+    host().gtxn_uint(group_index, field)
+}
+
+/// Copies a scalar byte field from transaction `group_index`. An empty buffer
+/// queries the field's length without copying. Invalid indices or fields trap.
+#[inline]
+pub fn group_bytes(group_index: u32, field: TxnField, buf: &mut [u8]) -> Result<usize, TxnError> {
+    host().gtxn_bytes(group_index, field, buf)
+}
+
 /// Reads the current transaction's sender, which is always 32 bytes.
 #[inline]
 pub fn sender() -> Result<[u8; 32], Error> {

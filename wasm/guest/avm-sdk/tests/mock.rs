@@ -22,11 +22,12 @@
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
+use std::rc::Rc;
 
 use avm_sdk::testing::set_host;
 use avm_sdk::{
-    arg, ed25519_verify_bare, global, txn, ArgError, Avm, Error, GlobalBytes, GlobalUint, TxnError,
-    TxnField,
+    arg, asset, ed25519_verify_bare, global, globals, txn, ArgError, Avm, Error, GlobalBytes,
+    GlobalField, GlobalUint, TxnError, TxnField,
 };
 
 #[derive(Clone)]
@@ -42,6 +43,12 @@ struct MockAvm {
     txn_uints: RefCell<BTreeMap<i32, u64>>,
     txn_bytes: RefCell<BTreeMap<i32, Vec<u8>>>,
     app_args: RefCell<Vec<Vec<u8>>>,
+    group: Vec<MockAvm>,
+    context_uints: BTreeMap<i32, u64>,
+    context_bytes: BTreeMap<i32, Vec<u8>>,
+    balances: BTreeMap<([u8; 32], u64), u64>,
+    unit_names: BTreeMap<u64, Vec<u8>>,
+    inner_calls: Rc<RefCell<Vec<(u32, i32, u64, Vec<u8>)>>>,
 }
 
 impl MockAvm {
@@ -57,6 +64,62 @@ impl MockAvm {
 }
 
 impl Avm for MockAvm {
+    fn itxn_begin(&self) {
+        self.inner_calls.borrow_mut().push((0, 0, 0, vec![]));
+    }
+    fn itxn_next(&self) {
+        self.inner_calls.borrow_mut().push((1, 0, 0, vec![]));
+    }
+    fn itxn_field_uint(&self, field: TxnField, value: u64) {
+        self.inner_calls
+            .borrow_mut()
+            .push((2, field as i32, value, vec![]));
+    }
+    fn itxn_field_bytes(&self, field: TxnField, bytes: &[u8]) {
+        self.inner_calls
+            .borrow_mut()
+            .push((3, field as i32, 0, bytes.to_vec()));
+    }
+    fn itxn_submit(&self) {
+        self.inner_calls.borrow_mut().push((4, 0, 0, vec![]));
+    }
+    fn itxn_created_asset_id(&self) -> u64 {
+        1234
+    }
+
+    fn asset_balance(&self, account: &[u8; 32], asset: u64) -> Option<u64> {
+        self.balances.get(&(*account, asset)).copied()
+    }
+
+    fn asset_unit_name(&self, asset: u64, buf: &mut [u8]) -> Result<Option<usize>, TxnError> {
+        self.unit_names
+            .get(&asset)
+            .map(|name| copy_field(name, buf))
+            .transpose()
+    }
+
+    fn gtxn_uint(&self, group_index: u32, field: TxnField) -> u64 {
+        self.group[group_index as usize].txn_uint(field)
+    }
+
+    fn gtxn_bytes(
+        &self,
+        group_index: u32,
+        field: TxnField,
+        buf: &mut [u8],
+    ) -> Result<usize, TxnError> {
+        let fields = self.group[group_index as usize].txn_bytes.borrow();
+        copy_field(fields.get(&(field as i32)).expect("missing field"), buf)
+    }
+
+    fn global_uint(&self, field: GlobalField) -> u64 {
+        self.context_uints[&(field as i32)]
+    }
+
+    fn global_bytes(&self, field: GlobalField, buf: &mut [u8]) -> Result<usize, TxnError> {
+        copy_field(&self.context_bytes[&(field as i32)], buf)
+    }
+
     fn arg_count(&self) -> u32 {
         self.args.borrow().len() as u32
     }
@@ -151,6 +214,100 @@ impl Avm for MockAvm {
 
 /// A handle declared before any host exists; it resolves the host per access.
 const COUNT: GlobalUint = GlobalUint::new(b"count");
+
+fn copy_field(value: &[u8], buf: &mut [u8]) -> Result<usize, TxnError> {
+    if !buf.is_empty() {
+        if value.len() > buf.len() {
+            return Err(TxnError::BufferTooSmall);
+        }
+        buf[..value.len()].copy_from_slice(value);
+    }
+    Ok(value.len())
+}
+
+#[test]
+fn grouped_transactions_and_context_helpers() {
+    let pay = MockAvm::default();
+    pay.set_uint(TxnField::Amount, u64::MAX);
+    pay.set_bytes(TxnField::Receiver, &[0x12; 32]);
+    let mut avm = MockAvm::default();
+    avm.group.push(pay);
+    avm.context_uints.insert(GlobalField::GroupSize as i32, 3);
+    avm.context_uints
+        .insert(GlobalField::CurrentApplicationID as i32, 888);
+    avm.context_bytes.insert(
+        GlobalField::CurrentApplicationAddress as i32,
+        vec![0x12; 32],
+    );
+    let _host = set_host(avm);
+
+    assert_eq!(txn::group_uint(0, TxnField::Amount), u64::MAX);
+    assert_eq!(globals::group_size(), 3);
+    assert_eq!(globals::application_id(), 888);
+    assert_eq!(globals::application_address().unwrap(), [0x12; 32]);
+    assert_eq!(
+        txn::group_bytes(0, TxnField::Receiver, &mut []).unwrap(),
+        32
+    );
+    assert_eq!(
+        globals::bytes(GlobalField::CurrentApplicationAddress, &mut []).unwrap(),
+        32
+    );
+    let mut buf = [0; 32];
+    assert_eq!(
+        txn::group_bytes(0, TxnField::Receiver, &mut buf).unwrap(),
+        32
+    );
+    assert_eq!(buf, [0x12; 32]);
+    let mut small = [0xFF; 31];
+    assert_eq!(
+        txn::group_bytes(0, TxnField::Receiver, &mut small),
+        Err(TxnError::BufferTooSmall)
+    );
+    assert_eq!(small, [0xFF; 31]);
+}
+
+#[test]
+fn wrong_application_address_length_is_an_error() {
+    let mut avm = MockAvm::default();
+    avm.context_bytes
+        .insert(GlobalField::CurrentApplicationAddress as i32, vec![0; 31]);
+    let _host = set_host(avm);
+    assert!(matches!(
+        globals::application_address(),
+        Err(Error::WrongLength {
+            expected: 32,
+            got: 31
+        })
+    ));
+}
+
+#[test]
+fn asset_queries_distinguish_missing_and_empty() {
+    let account = [0x12; 32];
+    let mut avm = MockAvm::default();
+    avm.balances.insert((account, 777), u64::MAX);
+    avm.balances.insert((account, 778), 0);
+    avm.unit_names.insert(777, b"USDC".to_vec());
+    avm.unit_names.insert(778, vec![]);
+    let _host = set_host(avm);
+
+    assert_eq!(asset::balance(&account, 777), Some(u64::MAX));
+    assert_eq!(asset::balance(&account, 778), Some(0));
+    assert_eq!(asset::balance(&account, 779), None);
+    assert_eq!(asset::unit_name(777, &mut []).unwrap(), Some(4));
+    let mut buf = [0xFF; 8];
+    assert_eq!(asset::unit_name(777, &mut buf).unwrap(), Some(4));
+    assert_eq!(&buf[..4], b"USDC");
+    assert_eq!(asset::unit_name(778, &mut buf).unwrap(), Some(0));
+    assert_eq!(asset::unit_name(779, &mut buf).unwrap(), None);
+    let mut small = [0xFF; 3];
+    assert_eq!(
+        asset::unit_name(777, &mut small),
+        Err(TxnError::BufferTooSmall)
+    );
+    assert_eq!(small, [0xFF; 3]);
+}
 
 #[test]
 fn global_uint_round_trip() {
@@ -271,6 +428,61 @@ fn guard_restores_previous_host() {
         assert_eq!(txn::application_id(), 2);
     }
     assert_eq!(txn::application_id(), 1);
+}
+
+#[test]
+fn inner_asset_helpers_use_zero_fees_and_correct_fields() {
+    use avm_sdk::itxn;
+    let mut mock = MockAvm::default();
+    mock.context_bytes
+        .insert(GlobalField::CurrentApplicationAddress as i32, vec![7; 32]);
+    let calls = Rc::clone(&mock.inner_calls);
+    let _guard = set_host(mock);
+    let id = itxn::AssetCreation {
+        total: u64::MAX,
+        decimals: 3,
+        asset_name: b"pool",
+        unit_name: b"dpt",
+        manager: Some([7; 32]),
+        reserve: Some([7; 32]),
+        ..Default::default()
+    }
+    .submit();
+    assert_eq!(id, 1234);
+    assert!(calls
+        .borrow()
+        .contains(&(2, TxnField::ConfigAssetTotal as i32, u64::MAX, vec![])));
+    assert!(calls
+        .borrow()
+        .contains(&(2, TxnField::Fee as i32, 0, vec![])));
+    assert!(calls
+        .borrow()
+        .contains(&(3, TxnField::ConfigAssetName as i32, 0, b"pool".to_vec())));
+    calls.borrow_mut().clear();
+    itxn::asset_opt_in(777).unwrap();
+    assert_eq!(
+        *calls.borrow(),
+        vec![
+            (0, 0, 0, vec![]),
+            (2, TxnField::TypeEnum as i32, 4, vec![]),
+            (2, TxnField::Fee as i32, 0, vec![]),
+            (2, TxnField::XferAsset as i32, 777, vec![]),
+            (2, TxnField::AssetAmount as i32, 0, vec![]),
+            (3, TxnField::AssetReceiver as i32, 0, vec![7; 32]),
+            (4, 0, 0, vec![]),
+        ]
+    );
+    calls.borrow_mut().clear();
+    itxn::asset_transfer(777, &[8; 32], 42);
+    assert!(calls
+        .borrow()
+        .contains(&(2, TxnField::AssetAmount as i32, 42, vec![])));
+    assert!(calls
+        .borrow()
+        .contains(&(3, TxnField::AssetReceiver as i32, 0, vec![8; 32])));
+    itxn::begin();
+    itxn::next();
+    assert_eq!(calls.borrow().last().unwrap().0, 1);
 }
 
 #[test]

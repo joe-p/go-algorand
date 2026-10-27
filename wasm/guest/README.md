@@ -21,7 +21,13 @@ This is a separate Cargo workspace from the host executor so `make wasmlib`
   | `txn_uint(field) -> i64` | `txn_uint(TxnField) -> i64` |
   | `txn_bytes(field, out, len) -> i32` | `txn_bytes(TxnField, &mut [u8]) -> Result<usize, TxnError>` |
   | `txna_uint(field, index) -> i64` | `txna_uint(TxnField, u32) -> i64` |
-  | `txna_bytes(field, index, out, len) -> i32` | `txna_bytes(TxnField, u32, &mut [u8]) -> Result<usize, TxnError>` |
+   | `txna_bytes(field, index, out, len) -> i32` | `txna_bytes(TxnField, u32, &mut [u8]) -> Result<usize, TxnError>` |
+   | `gtxn_uint(group_index, field) -> i64` | `gtxn_uint(u32, TxnField) -> u64` |
+   | `gtxn_bytes(group_index, field, out, len) -> i32` | `gtxn_bytes(u32, TxnField, &mut [u8]) -> Result<usize, TxnError>` |
+   | `global_uint(field) -> i64` | `global_uint(GlobalField) -> u64` |
+   | `global_bytes(field, out, len) -> i32` | `global_bytes(GlobalField, &mut [u8]) -> Result<usize, TxnError>` |
+   | `asset_balance(account, asset, out) -> i32` | `asset_balance(&[u8; 32], u64) -> Option<u64>` |
+   | `asset_unit_name(asset, out, len) -> i32` | `asset_unit_name(u64, &mut [u8]) -> Result<Option<usize>, TxnError>` |
   | `app_global_get_uint(key, key_len) -> i64` | `app_global_get_uint(&[u8]) -> u64` |
   | `app_global_get_bytes(key, key_len, out, len) -> i32` | `app_global_get_bytes(&[u8], &mut [u8]) -> Result<&[u8], TxnError>` |
   | `app_global_put_uint(key, key_len, value)` | `app_global_put_uint(&[u8], u64)` |
@@ -48,10 +54,36 @@ This is a separate Cargo workspace from the host executor so `make wasmlib`
   `#[program_entry(alloc)]`), which installs a guest-side bump allocator so
   contracts can use `Vec`/`String`; see [Allocation](#allocation).
 
-  Every SDK helper reaches the host through `avm_sdk::host()`. On wasm that is
+   Every SDK helper reaches the host through `avm_sdk::host()`. On wasm that is
   the concrete `HostAvm`, so calls compile to direct imports. On native builds
   it is a mock installed with `avm_sdk::testing::set_host(...)`, so the same
-  program code runs in unit tests.
+   program code runs in unit tests.
+
+   Group scalar reads are `txn::group_uint` / `txn::group_bytes`. Context
+   fields live in **`globals`**, separately from application state in `global`:
+   `globals::group_size()`, `globals::application_id()` (assigned ID, even at
+   creation), and `globals::application_address()`. Only those three context
+   fields are currently exposed. Byte reads accept an empty buffer to query
+   length without copying. Group array reads remain
+   unavailable. Native mocks can override the four new `Avm` methods; their
+   defaults panic so an unmodeled read cannot silently pass.
+
+   Application-only inner assets use `itxn::AssetCreation { .. }.submit()`
+   (returns the created ID), `itxn::asset_opt_in(asset_id)`, and
+   `itxn::asset_transfer(asset_id, &receiver, amount)`. These helpers set Fee=0
+   and require outer fee credit. Low-level `begin`, `next`, `set_uint`,
+   `set_bytes`, `submit`, and `created_asset_id` mirror the AVM asset transaction
+   lifecycle and defaults. Protocol/ledger failures trap; rollback is handled
+   atomically by the outer transaction group. Inner app calls are not supported,
+   and inner host fuel charges are provisional pending calibration.
+
+   Application-only asset queries are `asset::balance(&address, asset_id)` and
+   `asset::unit_name(asset_id, &mut buffer)`. They distinguish missing resources
+   (`None`) from existing zero balances/empty names (`Some(0)`). An empty name
+   buffer queries the required length. Missing holdings/assets are not the same
+   as unavailable resources: missing returns `None`, but AVM resource-access
+   failures trap, including unavailable account/asset holding pairs under group
+   sharing. Both methods are mockable through `Avm`; their defaults panic.
 
   A contract is usually a struct of state fields plus an `impl` block, both
   marked `#[contract]`. On the struct, each field's key is its name
@@ -105,8 +137,12 @@ This is a separate Cargo workspace from the host executor so `make wasmlib`
   argument 15, as ARC-4 specifies), and decodes them strictly. Methods run on
   an existing app, or only at creation with `#[abimethod(create)]`. Bare calls
   go to `approve` if there is one; otherwise only a plain create is approved.
-  Methods return `()` or `Result<(), E>`: ARC-4 return values are logged, and
-  the host has no `log` function yet.
+  Methods return `()`, an ABI value, or `Result<T, E>`. Successful non-void
+  calls log `0x151f7c75` followed by the ABI encoding; errors reject without a
+  return log. A returned `false` is a successful ABI bool, not rejection.
+  Encoding is allocation-free and bounded to 1020 payload bytes; oversized
+  returns reject. Earlier logs consume the same 1024-byte protocol allowance.
+  `avm_sdk::log(&bytes)` also exposes raw application logging.
   `<Counter as avm_sdk::arc4::Arc4Contract>::METHODS` lists the signatures and
   selectors for tooling.
 
@@ -123,8 +159,17 @@ This is a separate Cargo workspace from the host executor so `make wasmlib`
   | `T[]` | `arc4::DynArray<T>` |
   | `(T1,T2,…)` | Rust tuples, up to 16 elements |
 
-  Reference types (`account`, `asset`, `application`) and transaction types
-  are not supported yet.
+  Top-level `arc4::Account`, `Asset`, and `Application` consume uint8 indices
+  into the call's foreign arrays. Account/application index 0 resolves to
+  sender/current transaction ApplicationID (0 at creation); asset index 0 is
+  the first foreign asset. Values passed to methods contain resolved addresses
+  or IDs, not indices. Invalid indices reject before running the method.
+  `Transaction`, `PaymentTxn`, `KeyRegistrationTxn`, `AssetConfigTxn`,
+  `AssetTransferTxn`, `AssetFreezeTxn`, and `ApplicationCallTxn` consume no
+  application argument. They select immediately preceding group transactions
+  in signature order and validate types; `.group_index()`, `.uint(field)`, and
+  `.bytes(field, &mut buf)` access them. Only encoded parameters count toward
+  ARC-4 tuple packing. References and transactions cannot be nested or returned.
 
   **Cost.** Module size dominates a call's cost: setup charges 6 fuel per
   module byte, and wasmi charges another 7 fuel per byte of each function the

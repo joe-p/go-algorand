@@ -18,8 +18,8 @@
 //!
 //! `#[contract]` on an impl block routes ARC-4 calls to its `#[abimethod]`
 //! methods. Application argument 0 is the 4-byte method selector and arguments
-//! 1.. are the ABI-encoded parameters, one per argument. A method with more
-//! than 15 parameters receives the 15th onward packed into a tuple in argument
+//! 1.. are the ABI-encoded non-transaction parameters, one per argument. With more
+//! than 15 encoded parameters, the 15th onward are packed into a tuple in argument
 //! 15, as ARC-4 specifies.
 //!
 //! Parameters decode without allocating. The router reads every argument into
@@ -48,17 +48,33 @@
 //! | `string` | `&str` |
 //! | `(T1,T2,…)` | `(T1, T2, …)`, up to 16 elements |
 //!
-//! Methods return nothing (`void`): ARC-4 return values are logged, and the
-//! host has no `log` function yet. Reference types (`account`, `asset`,
-//! `application`) and transaction types are not supported.
+//! Top-level [`Account`], [`Asset`], and [`Application`] resolve uint8 indices
+//! into this call's foreign arrays (account/application index 0 is implicit).
+//! [`Transaction`] and its typed aliases consume no application arguments:
+//! they select the immediately preceding group transactions in signature order.
+//! References/transactions cannot be nested in tuples/arrays or returned.
+//!
+//! Methods return `()`, an ABI value, or `Result<T,E>`. Non-void successes
+//! emit `RETURN_PREFIX || Encode(value)`; errors reject without a return log.
+//! [`Encode`] supports the scalar, tuple, static-array, string, byte-slice,
+//! and borrowed dynamic-array types above without an allocator. A return larger
+//! than 1020 encoded bytes rejects. Earlier logs still consume the shared
+//! protocol log allowance, and host limit failures trap.
 
 mod array;
 mod desc;
+mod encode;
+mod reference;
 mod tuple;
 mod utf8;
 
 pub use array::{DynArray, Iter};
 pub use desc::{validate, Desc};
+pub use encode::{log_return, Encode, EncodeError, RETURN_PREFIX};
+pub use reference::{
+    Account, Application, ApplicationCallTxn, Asset, AssetConfigTxn, AssetFreezeTxn,
+    AssetTransferTxn, KeyRegistrationTxn, PaymentTxn, Transaction,
+};
 
 use crate::{trap, Error};
 
@@ -390,6 +406,8 @@ pub struct Method {
     pub selector: [u8; 4],
     /// The parameters, in order.
     pub args: &'static [Arg],
+    /// ARC-4 return type, or `void`.
+    pub returns: &'static str,
     /// Whether the method is callable only at creation (`ApplicationID == 0`).
     /// Other methods are callable only on an existing application.
     pub create: bool,

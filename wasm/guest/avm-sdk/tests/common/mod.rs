@@ -38,6 +38,11 @@ pub struct CallAvm {
     pub app_id: u64,
     pub on_completion: u64,
     pub app_args: Vec<Vec<u8>>,
+    pub accounts: Vec<[u8; 32]>,
+    pub assets: Vec<u64>,
+    pub applications: Vec<u64>,
+    pub group_types: Vec<u64>,
+    pub logs: RefCell<Vec<Vec<u8>>>,
     globals: RefCell<BTreeMap<Vec<u8>, Value>>,
 }
 
@@ -57,6 +62,11 @@ impl CallAvm {
             app_id,
             on_completion: 0,
             app_args: args.iter().map(|arg| arg.to_vec()).collect(),
+            accounts: vec![],
+            assets: vec![],
+            applications: vec![],
+            group_types: vec![],
+            logs: RefCell::default(),
             globals: RefCell::default(),
         }
     }
@@ -84,6 +94,9 @@ fn copy_into(value: &[u8], buf: &mut [u8]) -> usize {
 }
 
 impl Avm for CallAvm {
+    fn log(&self, bytes: &[u8]) {
+        self.logs.borrow_mut().push(bytes.to_vec());
+    }
     fn arg_count(&self) -> u32 {
         panic!("arg_count traps in an application program")
     }
@@ -95,16 +108,37 @@ impl Avm for CallAvm {
             TxnField::ApplicationID => self.app_id,
             TxnField::OnCompletion => self.on_completion,
             TxnField::NumAppArgs => self.app_args.len() as u64,
+            TxnField::NumAccounts => self.accounts.len() as u64,
+            TxnField::NumAssets => self.assets.len() as u64,
+            TxnField::NumApplications => self.applications.len() as u64,
+            TxnField::GroupIndex => self.group_types.len() as u64,
             other => panic!("unexpected field {other:?}"),
         }
     }
     fn txn_bytes(&self, field: TxnField, _buf: &mut [u8]) -> Result<usize, TxnError> {
         panic!("unexpected field {field:?}")
     }
-    fn txna_uint(&self, field: TxnField, _index: u32) -> u64 {
-        panic!("unexpected field {field:?}")
+    fn txna_uint(&self, field: TxnField, index: u32) -> u64 {
+        match field {
+            TxnField::Assets => self.assets[index as usize],
+            TxnField::Applications if index == 0 => self.app_id,
+            TxnField::Applications => self.applications[index as usize - 1],
+            _ => panic!("unexpected field {field:?}"),
+        }
+    }
+    fn gtxn_uint(&self, index: u32, field: TxnField) -> u64 {
+        assert_eq!(field, TxnField::TypeEnum);
+        self.group_types[index as usize]
     }
     fn txna_bytes(&self, field: TxnField, index: u32, buf: &mut [u8]) -> Result<usize, TxnError> {
+        if field == TxnField::Accounts {
+            let address = if index == 0 {
+                [42; 32]
+            } else {
+                self.accounts[index as usize - 1]
+            };
+            return Ok(copy_into(&address, buf));
+        }
         assert_eq!(field, TxnField::ApplicationArgs);
         // The AVM fails the program on an out-of-range index.
         let arg = self

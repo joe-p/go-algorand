@@ -85,7 +85,10 @@ mod error;
 
 pub mod arc4;
 pub mod arg;
+pub mod asset;
 pub mod global;
+pub mod globals;
+pub mod itxn;
 pub mod txn;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -98,9 +101,15 @@ pub use alloc::BumpAllocator;
 
 pub use avm::{host, Avm, Host, HostAvm};
 pub use avm_sdk_macros::{contract, program_entry};
-pub use avm_sys::{ArgError, TxnError, TxnField, MAX_ARG_BYTES};
+pub use avm_sys::{ArgError, GlobalField, TxnError, TxnField, MAX_ARG_BYTES};
 pub use error::Error;
 pub use global::{GlobalBytes, GlobalUint, StateField};
+
+/// Appends an application log. Protocol count and total-byte limits apply.
+#[inline]
+pub fn log(bytes: &[u8]) {
+    host().log(bytes)
+}
 
 /// A contract's global-state schema, implemented by `#[contract]`.
 ///

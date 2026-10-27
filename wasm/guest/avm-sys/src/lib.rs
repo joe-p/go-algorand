@@ -33,6 +33,12 @@
 //! | `txn_bytes(field, out, len) -> i32` | [`txn_bytes`] |
 //! | `txna_uint(field, index) -> i64` | [`txna_uint`] |
 //! | `txna_bytes(field, index, out, len) -> i32` | [`txna_bytes`] |
+//! | `gtxn_uint(group_index, field) -> i64` | [`gtxn_uint`] |
+//! | `gtxn_bytes(group_index, field, out, len) -> i32` | [`gtxn_bytes`] |
+//! | `global_uint(field) -> i64` | [`global_uint`] |
+//! | `global_bytes(field, out, len) -> i32` | [`global_bytes`] |
+//! | `asset_balance(account, asset, out) -> i32` | [`asset_balance`] |
+//! | `asset_unit_name(asset, out, len) -> i32` | [`asset_unit_name`] |
 //! | `app_global_get_uint(key, key_len) -> i64` | [`app_global_get_uint`] |
 //! | `app_global_get_bytes(key, key_len, out, len) -> i32` | [`app_global_get_bytes`] |
 //! | `app_global_put_uint(key, key_len, value)` | [`app_global_put_uint`] |
@@ -110,6 +116,19 @@ mod sys {
         pub fn txn_bytes(field: i32, out: i32, len: i32) -> i32;
         pub fn txna_uint(field: i32, index: i32) -> i64;
         pub fn txna_bytes(field: i32, index: i32, out: i32, len: i32) -> i32;
+        pub fn gtxn_uint(group_index: i32, field: i32) -> i64;
+        pub fn gtxn_bytes(group_index: i32, field: i32, out: i32, len: i32) -> i32;
+        pub fn global_uint(field: i32) -> i64;
+        pub fn global_bytes(field: i32, out: i32, len: i32) -> i32;
+        pub fn asset_balance(account: i32, asset: i64, out: i32) -> i32;
+        pub fn asset_unit_name(asset: i64, out: i32, len: i32) -> i32;
+        pub fn itxn_begin();
+        pub fn log(ptr: i32, len: i32);
+        pub fn itxn_next();
+        pub fn itxn_field_uint(field: i32, value: i64);
+        pub fn itxn_field_bytes(field: i32, ptr: i32, len: i32);
+        pub fn itxn_submit();
+        pub fn itxn_created_asset_id() -> i64;
         pub fn app_global_get_uint(key: i32, key_len: i32) -> i64;
         pub fn app_global_get_bytes(key: i32, key_len: i32, out: i32, len: i32) -> i32;
         pub fn app_global_put_uint(key: i32, key_len: i32, value: i64);
@@ -159,6 +178,45 @@ mod sys {
     }
     pub unsafe fn txna_bytes(_field: i32, _index: i32, _out: i32, _len: i32) -> i32 {
         unavailable!("txna_bytes")
+    }
+    pub unsafe fn gtxn_uint(_group_index: i32, _field: i32) -> i64 {
+        unavailable!("gtxn_uint")
+    }
+    pub unsafe fn gtxn_bytes(_group_index: i32, _field: i32, _out: i32, _len: i32) -> i32 {
+        unavailable!("gtxn_bytes")
+    }
+    pub unsafe fn global_uint(_field: i32) -> i64 {
+        unavailable!("global_uint")
+    }
+    pub unsafe fn global_bytes(_field: i32, _out: i32, _len: i32) -> i32 {
+        unavailable!("global_bytes")
+    }
+    pub unsafe fn asset_balance(_account: i32, _asset: i64, _out: i32) -> i32 {
+        unavailable!("asset_balance")
+    }
+    pub unsafe fn asset_unit_name(_asset: i64, _out: i32, _len: i32) -> i32 {
+        unavailable!("asset_unit_name")
+    }
+    pub unsafe fn log(_ptr: i32, _len: i32) {
+        unavailable!("log")
+    }
+    pub unsafe fn itxn_begin() {
+        unavailable!("itxn_begin")
+    }
+    pub unsafe fn itxn_next() {
+        unavailable!("itxn_next")
+    }
+    pub unsafe fn itxn_field_uint(_field: i32, _value: i64) {
+        unavailable!("itxn_field_uint")
+    }
+    pub unsafe fn itxn_field_bytes(_field: i32, _ptr: i32, _len: i32) {
+        unavailable!("itxn_field_bytes")
+    }
+    pub unsafe fn itxn_submit() {
+        unavailable!("itxn_submit")
+    }
+    pub unsafe fn itxn_created_asset_id() -> i64 {
+        unavailable!("itxn_created_asset_id")
     }
     pub unsafe fn app_global_get_uint(_key: i32, _key_len: i32) -> i64 {
         unavailable!("app_global_get_uint")
@@ -241,9 +299,8 @@ impl core::fmt::Display for TxnError {
 ///
 /// The discriminants match Go's `logic.TxnField` exactly; the host validates
 /// the field against the current protocol. All fields are listed so the enum
-/// stays in lockstep with Go. Reads are limited to the current transaction:
-/// array fields are read one element at a time with the `txna_*` functions, and
-/// `gtxn`/`gtxna`/`itxn` are not yet exposed.
+/// stays in lockstep with Go. Scalar reads support current and group transactions;
+/// array reads currently support only the current transaction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(i32)]
 #[allow(missing_docs)]
@@ -317,6 +374,22 @@ pub enum TxnField {
     ClearStateProgramPages = 66,
     NumClearStateProgramPages = 67,
     RejectVersion = 68,
+}
+
+/// Context fields currently exposed by [`global_uint`] and [`global_bytes`].
+/// Discriminants match Go's `logic.GlobalField`. These are not application
+/// global-state keys. Other AVM globals (notably live OpcodeBudget) are not yet
+/// exposed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(i32)]
+pub enum GlobalField {
+    /// Number of transactions in this group, in either execution mode.
+    GroupSize = 4,
+    /// ID assigned to the current application, including during creation.
+    /// Application-only, unlike `txn ApplicationID` which is zero at creation.
+    CurrentApplicationID = 8,
+    /// The current application's 32-byte address. Application-only.
+    CurrentApplicationAddress = 10,
 }
 
 /// The number of LogicSig arguments.
@@ -427,6 +500,159 @@ pub fn txna_bytes(field: TxnField, index: u32, buf: &mut [u8]) -> Result<usize, 
             _ => TxnError::Unknown,
         })
     }
+}
+
+/// Reads a scalar uint64 field from transaction `group_index`. Invalid indices,
+/// unavailable effects, array fields, and wrong-typed fields trap as in the AVM.
+#[inline]
+pub fn gtxn_uint(group_index: u32, field: TxnField) -> u64 {
+    unsafe { sys::gtxn_uint(group_index as i32, field as i32) as u64 }
+}
+
+/// Copies a scalar byte field from transaction `group_index`. An empty buffer
+/// queries the length without copying. Invalid fields or indices trap.
+#[inline]
+pub fn gtxn_bytes(group_index: u32, field: TxnField, buf: &mut [u8]) -> Result<usize, TxnError> {
+    let ret = unsafe {
+        sys::gtxn_bytes(
+            group_index as i32,
+            field as i32,
+            buf.as_mut_ptr() as usize as i32,
+            buf.len() as i32,
+        )
+    };
+    field_bytes_result(ret)
+}
+
+/// Reads a uint64 context field. Wrong types and unavailable modes trap.
+#[inline]
+pub fn global_uint(field: GlobalField) -> u64 {
+    unsafe { sys::global_uint(field as i32) as u64 }
+}
+
+/// Copies a context byte field. An empty buffer queries its length without
+/// copying. Wrong types and unavailable modes trap.
+#[inline]
+pub fn global_bytes(field: GlobalField, buf: &mut [u8]) -> Result<usize, TxnError> {
+    let ret = unsafe {
+        sys::global_bytes(
+            field as i32,
+            buf.as_mut_ptr() as usize as i32,
+            buf.len() as i32,
+        )
+    };
+    field_bytes_result(ret)
+}
+
+#[inline]
+fn field_bytes_result(ret: i32) -> Result<usize, TxnError> {
+    if ret >= 0 {
+        Ok(ret as usize)
+    } else {
+        Err(match ret {
+            TXN_ERR_BUFFER => TxnError::BufferTooSmall,
+            TXN_ERR_MEMORY => TxnError::Memory,
+            _ => TxnError::Unknown,
+        })
+    }
+}
+
+/// Reads an account's asset balance. `None` means no holding, which is distinct
+/// from `Some(0)` (opted in with no units). Unavailable resources trap, rather
+/// than returning `None`. Application-only; follows AVM asset reference rules.
+#[inline]
+pub fn asset_balance(account: &[u8; 32], asset: u64) -> Option<u64> {
+    let mut value = [0u8; 8];
+    let exists = unsafe {
+        sys::asset_balance(
+            account.as_ptr() as usize as i32,
+            asset as i64,
+            value.as_mut_ptr() as usize as i32,
+        )
+    };
+    match exists {
+        0 => None,
+        1 => Some(u64::from_le_bytes(value)),
+        _ => {
+            // Avoid pulling panic-formatting code into a size-sensitive guest.
+            #[cfg(target_arch = "wasm32")]
+            core::arch::wasm32::unreachable();
+            #[cfg(not(target_arch = "wasm32"))]
+            panic!("invalid asset balance result");
+        }
+    }
+}
+
+/// Copies an asset's unit name. `None` means the asset is missing; `Some(0)`
+/// means an existing empty name. An empty buffer queries length. ABI errors do
+/// not write memory. Unavailable resources trap. Application-only.
+#[inline]
+pub fn asset_unit_name(asset: u64, buf: &mut [u8]) -> Result<Option<usize>, TxnError> {
+    let ret = unsafe {
+        sys::asset_unit_name(
+            asset as i64,
+            buf.as_mut_ptr() as usize as i32,
+            buf.len() as i32,
+        )
+    };
+    if ret == -1 {
+        Ok(None)
+    } else {
+        field_bytes_result(ret).map(Some)
+    }
+}
+
+/// Starts an inner asset transaction group. Application-only; invalid lifecycle
+/// transitions and clear-state restrictions trap as in the AVM.
+#[inline]
+pub fn itxn_begin() {
+    unsafe { sys::itxn_begin() }
+}
+
+/// Appends an application log. AVM log count/total-byte limits apply; failures trap.
+#[inline]
+pub fn log(bytes: &[u8]) {
+    unsafe { sys::log(bytes.as_ptr() as usize as i32, bytes.len() as i32) }
+}
+
+/// Adds the next inner transaction to the pending group.
+#[inline]
+pub fn itxn_next() {
+    unsafe { sys::itxn_next() }
+}
+
+/// Sets an integer field. Only asset config/transfer fields and common header
+/// fields are exposed; TypeEnum accepts acfg=3 or axfer=4. Wrong types trap.
+#[inline]
+pub fn itxn_field_uint(field: TxnField, value: u64) {
+    unsafe { sys::itxn_field_uint(field as i32, value as i64) }
+}
+
+/// Sets a byte-string field, copying the bytes into the host transaction.
+/// Wrong types, unavailable resources, oversized values, and bad memory trap.
+#[inline]
+pub fn itxn_field_bytes(field: TxnField, bytes: &[u8]) {
+    unsafe {
+        sys::itxn_field_bytes(
+            field as i32,
+            bytes.as_ptr() as usize as i32,
+            bytes.len() as i32,
+        )
+    }
+}
+
+/// Submits the pending asset group through the AVM ledger path. Fees and all
+/// protocol/resource limits still apply. No inner app calls are supported.
+#[inline]
+pub fn itxn_submit() {
+    unsafe { sys::itxn_submit() }
+}
+
+/// The last submitted inner transaction's CreatedAssetID. Traps before any
+/// submission; returns 0 if the last transaction did not create an asset.
+#[inline]
+pub fn itxn_created_asset_id() -> u64 {
+    unsafe { sys::itxn_created_asset_id() as u64 }
 }
 
 /// Reads the uint64 global `key` from the current application, the AVM's

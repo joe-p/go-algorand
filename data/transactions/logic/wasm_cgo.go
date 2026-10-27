@@ -31,11 +31,14 @@ typedef struct {
 } WasmLsigArg;
 
 // wasm_txn_field_cb is implemented in Go (see wasm_host.go). Rust calls it to
-// fetch `txn` fields while the guest runs. `index` selects the element for an
-// array field (`txna`), and `expect_array` says whether an array field is
-// expected.
+// fetch transaction or context fields while the guest runs. `source` selects
+// current txn (0), group txn (1, using group_index), or global context (2).
+// `index` selects the element for an array field (`txna`), and `expect_array`
+// says whether an array field is expected.
 typedef int32_t (*wasm_txn_field_cb)(
 	uintptr_t ctx,
+	uint32_t source,
+	uint32_t group_index,
 	uint32_t field,
 	uint32_t index,
 	uint32_t expect_array,
@@ -73,6 +76,26 @@ typedef int32_t (*wasm_global_get_cb)(
 	uint8_t *err_buf,
 	size_t err_buf_len);
 
+// Asset query kind 0 is balance (account points to 32 bytes), kind 1 is unit
+// name (account ignored). Missing resources set out_exists=0, distinct from
+// unavailable resources, which fail. Uint results are 8 little-endian bytes.
+typedef int32_t (*wasm_asset_get_cb)(
+	uintptr_t ctx, uint32_t kind, uint64_t asset, const uint8_t *account,
+	uint8_t *buf, size_t buf_cap, size_t *out_len, uint8_t *out_exists,
+	uint8_t *err_buf, size_t err_buf_len);
+
+// Operations: 0=begin, 1=next, 2=uint field, 3=bytes field, 4=submit,
+// 5=last inner CreatedAssetID. Asset transactions only, never inner apps.
+typedef int32_t (*wasm_inner_txn_cb)(
+	uintptr_t ctx, uint32_t op, uint32_t field, uint64_t value,
+	const uint8_t *data, size_t data_len, uint64_t *result,
+	uint8_t *err_buf, size_t err_buf_len);
+
+typedef int32_t (*wasm_log_cb)(uintptr_t ctx, const uint8_t *data, size_t data_len,
+	uint8_t *err_buf, size_t err_buf_len);
+extern int32_t goWasmLog(uintptr_t ctx, const uint8_t *data, size_t data_len,
+	uint8_t *err_buf, size_t err_buf_len);
+
 // wasm_global_put_cb is implemented in Go (see wasm_host.go). Rust calls it to
 // write key/value to the current app's global state. `val_is_uint` selects a
 // uint (8 little-endian bytes) or byte-string value.
@@ -97,6 +120,8 @@ typedef int32_t (*wasm_global_del_cb)(
 
 extern int32_t goWasmTxnField(
 	uintptr_t ctx,
+	uint32_t source,
+	uint32_t group_index,
 	uint32_t field,
 	uint32_t index,
 	uint32_t expect_array,
@@ -135,6 +160,16 @@ extern int32_t goWasmGlobalDel(
 	const uint8_t *key, size_t key_len,
 	uint8_t *err_buf, size_t err_buf_len);
 
+extern int32_t goWasmAssetGet(
+	uintptr_t ctx, uint32_t kind, uint64_t asset, const uint8_t *account,
+	uint8_t *buf, size_t buf_cap, size_t *out_len, uint8_t *out_exists,
+	uint8_t *err_buf, size_t err_buf_len);
+
+extern int32_t goWasmInnerTxn(
+	uintptr_t ctx, uint32_t op, uint32_t field, uint64_t value,
+	const uint8_t *data, size_t data_len, uint64_t *result,
+	uint8_t *err_buf, size_t err_buf_len);
+
 // Go cannot take the address of an exported function, so expose it through a
 // C helper that returns the function pointer.
 static wasm_txn_field_cb get_wasm_txn_field_cb(void) {
@@ -157,6 +192,15 @@ static wasm_global_del_cb get_wasm_global_del_cb(void) {
 	return goWasmGlobalDel;
 }
 
+static wasm_asset_get_cb get_wasm_asset_get_cb(void) {
+	return goWasmAssetGet;
+}
+
+static wasm_inner_txn_cb get_wasm_inner_txn_cb(void) {
+	return goWasmInnerTxn;
+}
+static wasm_log_cb get_wasm_log_cb(void) { return goWasmLog; }
+
 int32_t wasm_lsig_run(
 	const uint8_t *code, size_t code_len,
 	const WasmLsigArg *args, size_t args_len,
@@ -169,6 +213,9 @@ int32_t wasm_lsig_run(
 	wasm_global_get_cb global_get_cb,
 	wasm_global_put_cb global_put_cb,
 	wasm_global_del_cb global_del_cb,
+	wasm_asset_get_cb asset_get_cb,
+	wasm_inner_txn_cb inner_txn_cb,
+	wasm_log_cb log_cb,
 	uintptr_t ctx,
 	uint32_t is_app);
 
@@ -252,6 +299,9 @@ func runWasmProgram(program []byte, args [][]byte, fuel uint64, cx *EvalContext)
 		C.get_wasm_global_get_cb(),
 		C.get_wasm_global_put_cb(),
 		C.get_wasm_global_del_cb(),
+		C.get_wasm_asset_get_cb(),
+		C.get_wasm_inner_txn_cb(),
+		C.get_wasm_log_cb(),
 		C.uintptr_t(handle),
 		isApp,
 	)

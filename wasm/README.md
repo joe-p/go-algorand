@@ -18,12 +18,17 @@ by wasmi instead of the AVM. Two kinds of program are supported:
   both AVM, and an existing app cannot be updated from one kind to the other.
 
 Both are currently only honored in the future consensus version. A guest can
-read the current transaction's fields (including the application arguments), run
+read current and grouped transaction fields, read selected context fields, run
 `ed25519verify_bare`, read and write the current application's global state
 (application programs only), and (for a LogicSig) read its arguments. It cannot
-yet touch local state, boxes, or inner transactions.
+yet touch local state or boxes. Applications can also query asset balances and
+unit names and submit inner asset transactions through shared AVM paths.
 
 ## Guest ABI
+
+Embedding ABI note: `wasm_lsig_run` now takes `inner_txn_cb` followed by
+`log_cb` immediately after `asset_get_cb`, before `ctx`. Embedders must update their declaration and
+rebuild the static library; guest imports remain opt-in.
 
 The module must export:
 
@@ -57,7 +62,58 @@ The module may import, from the `env` module:
 - `txna_bytes(field: i32, index: i32, out: i32, len: i32) -> i32`: like
   `txn_bytes`, but for an array field element. The application arguments are
   `txna_bytes(ApplicationArgs=26, i, ...)`; the argument count is
-  `txn_uint(NumAppArgs=27)`.
+   `txn_uint(NumAppArgs=27)`.
+- `gtxn_uint(group_index: i32, field: i32) -> i64`: scalar uint field of a
+  transaction in the current group, with the AVM's group-index, type, mode,
+  version, and past-transaction-only effects checks.
+- `gtxn_bytes(group_index: i32, field: i32, out: i32, len: i32) -> i32`:
+  scalar byte field of a group transaction; buffer and length-query semantics
+  match `txn_bytes`. Array group reads are not yet exposed.
+- `global_uint(field: i32) -> i64` / `global_bytes(field: i32, out: i32,
+  len: i32) -> i32`: selected AVM context fields, **not application state**.
+  Currently supports `GroupSize=4`, `CurrentApplicationID=8`, and
+  `CurrentApplicationAddress=10`. The latter two are application-only and use
+  the assigned app ID even during creation. Other fields trap; in particular,
+  `OpcodeBudget` is deferred until live WASM fuel can be reflected accurately.
+  Types and byte-buffer semantics match the transaction reads.
+- `asset_balance(account: i32, asset: i64, out: i32) -> i32`: application-only
+  holding query. `account` points to a 32-byte address; `out` must be valid for
+  8 bytes. Returns 1 and writes the balance as an unsigned little-endian uint64
+  when the holding exists, or 0 without writing if absent. Zero balance is not
+  absence. Invalid memory and unavailable resources trap. The asset operand
+  follows AVM reference resolution (prefer explicit asset IDs).
+- `asset_unit_name(asset: i64, out: i32, len: i32) -> i32`: application-only
+  parameter query. Returns the name's byte length (0 for an existing empty name),
+  or -1 for a missing asset. `len == 0` queries length without touching guest
+  memory. -2 means buffer too small; -3 means invalid memory/negative length.
+  These errors do not write partial results. Missing assets ignore the output
+  pointer, but negative lengths still return -3. Unavailable resources trap,
+  rather than reporting absence. Both queries use shared AVM helpers, including
+  paired-holding availability under group resource sharing.
+- `itxn_begin()` / `itxn_next()`: application-only inner asset group construction,
+  with the AVM's defaults and lifecycle/version/clear-state checks.
+- `itxn_field_uint(field: i32, value: i64)` / `itxn_field_bytes(field: i32,
+  ptr: i32, len: i32)`: assign common header or asset configuration/transfer
+  fields using AVM field numbers and validation. Only `acfg`/`axfer` types are
+  allowed. Byte fields are copied; invalid memory, types, sizes, or resources
+  trap. Empty bytes require no memory read, but negative pointers still trap.
+- `itxn_submit()`: submit through the AVM execution path, enforcing fees,
+  resource availability, authorization, group/inner limits, and ledger checks.
+  Rejection, traps, and fuel exhaustion roll back with the outer group. Raw
+  begin uses AVM fee defaults; SDK asset helpers explicitly set Fee=0.
+- `itxn_created_asset_id() -> i64`: the last submitted inner transaction's
+  CreatedAssetID; 0 for non-creation, trapping before any submission. Other inner
+  result fields and inner application calls are not exposed. Inner app calls
+  require live synchronization of the WASM and pooled AVM budgets first.
+  Host fuel: begin, next, and submit each charge a flat 10 fuel; their work is
+  charged at the protocol level, so submit has no per-transaction host charge.
+  Field writes charge 200 (+ byte length); result reads charge 125.
+- `log(ptr: i32, len: i32)`: appends application log bytes through shared AVM
+  count/total-byte checks (32 calls, 1024 bytes total). Application-only, AVM v5+.
+  Bad memory, negative pointers/lengths, and values over 4096 bytes trap;
+  empty logs consume a call without reading memory. Rejection/traps roll back
+  logs with the outer group. Provisional fuel is 200 + payload byte length,
+  charged before host work; calibrate before release.
 - `app_global_get_uint(key: i32, key_len: i32) -> i64`: the uint64 value at
   `key` in the current application's global state, the AVM's `app_global_get`. A
   missing key reads as 0. A stored byte-string value traps the guest.
@@ -88,8 +144,8 @@ and global-state reads/writes go through the same ledger accessors the AVM
 opcodes use, so the AVM's semantics (typing, version gating, allowed modes, the
 4096-byte value limit, schema and length limits, and ed25519 validation) have a
 single source of truth. Each read invokes Go once; length queries do not copy the
-payload. For now the `txn`/`txna` opcodes are limited to the current
-transaction's fields (not `gtxn`, `gtxna`, or `itxn`), only global (not local)
+payload. Scalar group fields (`gtxn`) are available; array group fields
+(`gtxna`) and general inner field reads are not. Only global (not local)
 application state is exposed, and `ed25519verify_bare` is the only crypto
 opcode. More opcodes will be added to the same `env` module.
 
@@ -113,6 +169,13 @@ opcode. More opcodes will be added to the same `env` module.
   `txn_bytes` 190, `txna_bytes` 200, global get uint/bytes 130/170, global put
   uint/bytes 410/390, and global delete 140 fuel. These fixed charges include
   length queries and invalid reads, on top of WASM instruction fuel.
+   Group/context uint reads charge 125 fuel; group byte reads charge 225 and
+   context byte reads charge 190, before validation or callbacks.
+   Asset balance queries charge **900 fuel** and unit-name queries **350 fuel**,
+   before mode checks, memory access, or ledger work. These weights account for
+   both present and absent resources in the calibration fixtures. Inner begin,
+   next, and submit each charge a flat **10 fuel** because their work is charged
+   at the protocol level; there is no additional per-inner submit host charge.
   `ed25519verify_bare` has an explicit 28,500-fuel host charge (2850 AVM budget
   units, versus the TEAL opcode's 1900; 28,527 fuel for the whole call under the
   operator table). The raw host charge is independent of the conversion. The charge occurs
@@ -139,10 +202,17 @@ opcode. More opcodes will be added to the same `env` module.
 
 - `wasm_lsig_run(code, code_len, args, args_len, fuel, fuel_used, args_read,
   err_buf, err_buf_len, txn_cb, ed25519verify_bare_cb, global_get_cb,
-  global_put_cb, global_del_cb, ctx, is_app)`: `1` approved, `0` rejected, `-1`
-  error. `txn_cb` is the host's transaction-field provider,
+  global_put_cb, global_del_cb, asset_get_cb, ctx, is_app)`: `1` approved, `0` rejected, `-1`
+  error. `txn_cb` is the host's transaction/context-field provider (its callback
+  now receives `source` and `group_index` before `field`; source 0=current,
+  1=group, 2=context, so embedders must rebuild/update the callback),
   `ed25519verify_bare_cb` its ed25519 verifier, `global_get_cb`/`global_put_cb`/
-  `global_del_cb` its global-state accessors, `ctx` an opaque handle they receive
+  `global_del_cb` its global-state accessors, and `asset_get_cb` its asset reader.
+  The new asset callback parameter changes the C ABI; embedders must rebuild and
+  update their `wasm_lsig_run` calls. Asset query kind 0 reads a holding balance
+  (32-byte account pointer), kind 1 a unit name (account ignored); it reports
+  existence separately from byte length and encodes uints as 8 little-endian
+  bytes. `ctx` is an opaque handle they receive
   back, and `is_app` non-zero when the program is an application program (which
   disables the signature-only `arg`/`arg_count` and enables `app_global_*`).
 - `wasm_lsig_validate(code, code_len, err_buf, err_buf_len)`: `0` valid,

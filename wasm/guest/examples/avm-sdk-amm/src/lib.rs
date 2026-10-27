@@ -50,17 +50,15 @@ pub struct ConstantProductAMM {
 #[contract(alloc)]
 impl ConstantProductAMM {
     /// Bare NoOp creation, matching createApplication in the source.
-    pub fn approve(&self) -> Result<(), Error> {
+    pub fn approve(&self) {
         assert!(txn::application_id().id == 0 && txn::uint(TxnField::OnCompletion) == 0);
         self.governor.set(txn::sender());
-        Ok(())
     }
 
     #[abimethod]
-    pub fn set_governor(&self, governor: Address) -> Result<(), Error> {
+    pub fn set_governor(&self, governor: Address) {
         self.assert_governor();
         self.governor.set(governor);
-        Ok(())
     }
 
     #[abimethod]

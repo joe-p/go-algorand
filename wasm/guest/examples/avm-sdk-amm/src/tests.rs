@@ -74,12 +74,30 @@ struct Mock {
     logs: RefCell<Vec<Vec<u8>>>,
 }
 
+/// A rejected call either panics or returns `Err`; infallible methods can only
+/// signal rejection by panicking.
+trait Rejected {
+    fn rejected(&self) -> bool;
+}
+
+impl Rejected for () {
+    fn rejected(&self) -> bool {
+        false
+    }
+}
+
+impl<T> Rejected for Result<T, Error> {
+    fn rejected(&self) -> bool {
+        self.is_err()
+    }
+}
+
 impl Mock {
     // Failed assertions panic natively and trap on WASM. Invoke methods directly
     // for rejection tests: unwinding through the extern "C" program export aborts.
-    fn rejects<T>(&self, call: impl FnOnce(&ConstantProductAMM) -> Result<T, Error>) {
-        if let Ok(result) = catch_unwind(AssertUnwindSafe(|| call(&ConstantProductAMM::new()))) {
-            assert!(result.is_err());
+    fn rejects<R: Rejected>(&self, call: impl FnOnce(&ConstantProductAMM) -> R) {
+        if let Ok(outcome) = catch_unwind(AssertUnwindSafe(|| call(&ConstantProductAMM::new()))) {
+            assert!(outcome.rejected());
         }
     }
     fn new() -> Self {

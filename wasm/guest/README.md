@@ -85,6 +85,16 @@ This is a separate Cargo workspace from the host executor so `make wasmlib`
    failures trap, including unavailable account/asset holding pairs under group
    sharing. Both methods are mockable through `Avm`; their defaults panic.
 
+   Both modes can use host-backed arithmetic through `math::mulw(a, b)`
+   (returns high/low product words), `math::divmodw(a_hi, a_lo, b_hi, b_lo)`
+   (returns quotient high/low and remainder high/low), and `math::sqrt(n)`.
+   These match unsigned AVM opcode semantics; division by zero traps.
+   `math::sqrtw(high, low)` is a WASM extension for the floor square root of
+   a full 128-bit operand. Native mocks must override the corresponding `Avm`
+   methods. These helpers avoid embedding software wide arithmetic in guests;
+   their fixed host fuel weights are 15/25/10/25 respectively, calibrated on
+   linux/arm64 toward 1 ns/fuel (see `../../WASM_PERF.md`).
+
   A contract is usually a struct of state fields plus an `impl` block, both
   marked `#[contract]`. On the struct, each field's key is its name
   (`#[key = "..."]` overrides it) and the macro computes the global-state schema

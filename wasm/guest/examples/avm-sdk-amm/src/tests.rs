@@ -115,6 +115,19 @@ impl Mock {
 }
 
 impl Avm for Mock {
+    fn mulw(&self, a: u64, b: u64) -> (u64, u64) {
+        let product = u128::from(a) * u128::from(b);
+        ((product >> 64) as u64, product as u64)
+    }
+    fn divmodw(&self, a_high: u64, a_low: u64, b_high: u64, b_low: u64) -> (u64, u64, u64, u64) {
+        let a = (u128::from(a_high) << 64) | u128::from(a_low);
+        let b = (u128::from(b_high) << 64) | u128::from(b_low);
+        let (q, r) = (a / b, a % b);
+        ((q >> 64) as u64, q as u64, (r >> 64) as u64, r as u64)
+    }
+    fn sqrtw(&self, high: u64, low: u64) -> u64 {
+        ((u128::from(high) << 64) | u128::from(low)).isqrt() as u64
+    }
     fn arg_count(&self) -> u32 {
         unimplemented!()
     }
@@ -488,6 +501,7 @@ fn reject_malformed_deposits_before_any_inner_transaction() {
 
 #[test]
 fn rounding_overflow_and_zero_denominators() {
+    let _host = set_host(Mock::new());
     assert_eq!(initial_tokens(0, u64::MAX), 0);
     assert_eq!(initial_tokens(2, 4), 2);
     assert_eq!(initial_tokens(u64::MAX, u64::MAX), u64::MAX);

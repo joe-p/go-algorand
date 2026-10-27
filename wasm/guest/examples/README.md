@@ -15,6 +15,7 @@ wasm-guest-fixtures` rebuilds and copies all of them.
 | `avm-sdk-arc4-types/` | `app_avm_sdk_arc4_types.wasm` | ARC-4 application | `avm-sdk` |
 | `avm-sdk-arc4-resources/` | `app_avm_sdk_arc4_resources.wasm` | ARC-4 references/returns | `avm-sdk` |
 | `avm-sdk-amm/` | not copied (local build: `avm_sdk_amm.wasm`) | ARC-4 AMM application | `avm-sdk` |
+| `avm-sdk-math/` | `sdk_math.wasm` | application / LogicSig | `avm-sdk` |
 
 - **`rust-counter`** reads a big-endian delta and the sender and updates a
   global counter plus a per-sender total, with fixed buffers and no allocation.
@@ -41,6 +42,11 @@ wasm-guest-fixtures` rebuilds and copies all of them.
   `go test ./data/transactions/logic -run TestWasmARC4ResourceArgumentsAndReturns -v`.
 
 ## Size and cost
+
+`avm-sdk-math/` exercises host-backed `mulw`, `divmodw`, `sqrt`, and the
+128-bit `sqrtw` extension. Its compiled Rust fixture runs in both modes:
+`cargo test -p avm-sdk-runner --test run_math` from `wasm/guest`, or
+`go test ./data/transactions/logic -run '^TestWasmSDKMath$' -v`.
 
 `avm-sdk-amm/` is a standalone Rust port of TEALScript's constant-product AMM,
 with corrected initial LP issuance and swap direction. See its [README](avm-sdk-amm/README.md)
@@ -69,9 +75,12 @@ needs to pool enough budget for that total.
 | | `join` | | | | 2,184 | 7,181 | 11 |
 | | `record` | | | | 3,677 | 8,674 | 13 |
 | | `wide` | | | | 2,949 | 7,946 | 12 |
-| `avm_sdk_amm.wasm` (local build) | | 13,103 | 1 | — | — | — | — |
+| `avm_sdk_amm.wasm` (local build) | | 11,580 | 1 | — | — | — | — |
+| `sdk_math.wasm` | | 722 | 1 | — | — | — | — |
 
-AMM costs have not yet been measured; dashes indicate unavailable measurements.
+AMM and math fixture costs have not yet been measured; dashes indicate unavailable
+measurements. Host-backed wide arithmetic and square roots reduced the AMM from
+13,103 to 11,580 bytes, without narrowing arithmetic or changing rounding.
 
 The signed-claim and LogicSig executions each include the 2,850-unit
 `ed25519verify_bare` host charge. The LogicSig runs under its own 20,000-unit

@@ -19,6 +19,11 @@ exercise ARC-4 routing, state, deposit validation, and inner transactions with
 a mock host; they do not model protocol budgets, fee pooling, minimum balances,
 resource availability, or atomic rollback.
 
+The stripped release module is 11,580 bytes (one memory page), down from 13,103
+bytes before moving wide arithmetic and square roots to host imports. It now
+requires an executor exposing `mulw`, `divmodw`, and `sqrtw`; these are not
+software arithmetic implementations bundled in each guest.
+
 ## Interface
 
 Create with a bare NoOp call to record the creator as governor. Allocate four
@@ -56,9 +61,10 @@ swaps and burns, as in the source (not after mints).
 - Initial mint requires zero previously issued LP and zero pre-deposit reserves;
   donations into an uninitialized or fully withdrawn pool prevent reinitialization.
 - A complete burn sets the ratio to zero rather than dividing by zero.
-- Products use u128 intermediates and checked conversion/division. Swap's
+- Products use host-backed `mulw`/`divmodw` with checked conversion/division. Swap's
   denominator retains the source's checked uint64 arithmetic; oversized inputs
-  fail instead of wrapping. Initial square root supports the full u64 × u64 product.
+  fail instead of wrapping. Initial square root uses the WASM `sqrtw` extension
+  to support the full u64 × u64 product.
 - Inner transactions explicitly pay zero fees, relying on outer fee credit.
 
 ## Execution requirements and limitations

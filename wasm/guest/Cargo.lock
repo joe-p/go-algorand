@@ -56,6 +56,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "avm-sdk-math"
+version = "0.1.0"
+dependencies = [
+ "avm-sdk",
+]
+
+[[package]]
 name = "avm-sdk-runner"
 version = "0.1.0"
 dependencies = [

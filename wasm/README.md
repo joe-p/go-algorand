@@ -36,6 +36,26 @@ The module must export:
 
 The module may import, from the `env` module:
 
+- `mulw(a: i64, b: i64, out: i32)`: unsigned 64×64 multiplication, matching
+  AVM `mulw`. Writes 16 bytes: product high word, then low word.
+- `divmodw(a_high: i64, a_low: i64, b_high: i64, b_low: i64, out: i32)`:
+  unsigned 128-bit division, matching AVM `divmodw`. Writes 32 bytes: quotient
+  high/low, then remainder high/low. A zero denominator traps; a quotient
+  larger than uint64 is valid and retains its high word.
+- `sqrt(n: i64) -> i64`: floor square root of an unsigned uint64, matching
+  AVM `sqrt`.
+- `sqrtw(high: i64, low: i64) -> i64`: floor square root of an unsigned
+  128-bit high/low pair. This is a WASM extension, not an AVM opcode, and the
+  unsigned result fits in uint64.
+  All four arithmetic imports work in application and signature mode, use
+  unsigned bit patterns in i64 operands/results, and execute integer-only
+  host arithmetic (no Go callback). Output words are individually little-endian;
+  wide values are high-word-first. Output pointers may be unaligned; negative
+  pointers, missing memory, or an out-of-bounds destination trap without partial
+  writes. Calibrated fixed host charges are 15/25/10/25 fuel respectively,
+  charged before any work, including on failure. These are not TEAL opcode
+  costs; see `WASM_PERF.md` for the linux/arm64 calibration and remaining
+  cross-machine/worst-case validation requirements.
 - `arg_count() -> i32`: the number of LogicSig arguments. Signature-only: it
   traps when the module runs as an application program.
 - `arg(i: i32, out: i32, len: i32) -> i32`: copy argument `i` into linear

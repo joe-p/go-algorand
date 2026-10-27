@@ -37,6 +37,13 @@
 //!             the value of a uint64 transaction field (the AVM's `txn` for
 //!             fields that push an integer). An invalid field, or a field whose
 //!             value is a byte string, traps the guest.
+//!       - `mulw(a: i64, b: i64, out: i32)` and
+//!         `divmodw(a_hi: i64, a_lo: i64, b_hi: i64, b_lo: i64, out: i32)`
+//!         unsigned wide arithmetic with high-word-first, little-endian
+//!         output words; zero divisors and invalid destinations trap.
+//!       - `sqrt(n: i64) -> i64` and `sqrtw(hi: i64, lo: i64) -> i64`
+//!         integer floor square roots of unsigned 64/128-bit operands.
+//!         Arithmetic imports are available in both evaluation modes.
 //!       - `txn_bytes(field: i32, out: i32, len: i32) -> i32`
 //!             copy a byte-string transaction field into linear memory at
 //!             `out`, up to `len` bytes. Returns the number of bytes copied.
@@ -67,6 +74,7 @@
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
+mod math;
 mod setup;
 
 use wasmi::{
@@ -1356,6 +1364,18 @@ fn instantiate_prepaid(
 fn new_linker(engine: &Engine) -> Result<Linker<HostState>, String> {
     let mut linker = Linker::new(engine);
     linker
+        .func_wrap("env", "mulw", math::mulw)
+        .map_err(|e| e.to_string())?;
+    linker
+        .func_wrap("env", "divmodw", math::divmodw)
+        .map_err(|e| e.to_string())?;
+    linker
+        .func_wrap("env", "sqrt", math::sqrt)
+        .map_err(|e| e.to_string())?;
+    linker
+        .func_wrap("env", "sqrtw", math::sqrtw)
+        .map_err(|e| e.to_string())?;
+    linker
         .func_wrap("env", "log", app_log)
         .map_err(|e| e.to_string())?;
     linker
@@ -1487,6 +1507,24 @@ fn validate_inner(wasm: &[u8]) -> Result<(), String> {
     for import in module.imports() {
         let ok = import.module() == "env"
             && match import.name() {
+                "mulw" => func_type_is(
+                    import.ty(),
+                    &[ValType::I64, ValType::I64, ValType::I32],
+                    &[],
+                ),
+                "divmodw" => func_type_is(
+                    import.ty(),
+                    &[
+                        ValType::I64,
+                        ValType::I64,
+                        ValType::I64,
+                        ValType::I64,
+                        ValType::I32,
+                    ],
+                    &[],
+                ),
+                "sqrt" => func_type_is(import.ty(), &[ValType::I64], &[ValType::I64]),
+                "sqrtw" => func_type_is(import.ty(), &[ValType::I64; 2], &[ValType::I64]),
                 "arg_count" => func_type_is(import.ty(), &[], &[ValType::I32]),
                 "log" => func_type_is(import.ty(), &[ValType::I32; 2], &[]),
                 "itxn_begin" | "itxn_next" | "itxn_submit" => func_type_is(import.ty(), &[], &[]),

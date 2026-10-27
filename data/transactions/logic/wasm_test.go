@@ -70,6 +70,25 @@ func TestWasmApproveReject(t *testing.T) {
 	require.False(t, pass)
 }
 
+func TestWasmSDKMath(t *testing.T) {
+	partitiontest.PartitionTest(t)
+	program := loadWasm(t, "sdk_math.wasm")
+	// The compiled Rust fixture exercises avm-sdk/avm-sys and all four host
+	// imports with full-width unsigned values and independently known results.
+	t.Run("signature", func(t *testing.T) {
+		pass, _, err := EvalSignatureProgram(program, nil, 0, optSigParams(wasmProto))
+		require.NoError(t, err)
+		require.True(t, pass)
+	})
+	t.Run("application", func(t *testing.T) {
+		// Pool three normal app calls to cover module setup and execution.
+		app := transactions.SignedTxn{Txn: transactions.Transaction{Type: protocol.ApplicationCallTx}}
+		pass, _, err := EvalContract(program, 0, 888, wasmAppParams(app, app, app))
+		require.NoError(t, err)
+		require.True(t, pass)
+	})
+}
+
 func TestWasmReadsArg(t *testing.T) {
 	partitiontest.PartitionTest(t)
 

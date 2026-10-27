@@ -105,6 +105,40 @@ pub use avm_sys::{ArgError, GlobalField, TxnError, TxnField, MAX_ARG_BYTES};
 pub use error::Error;
 pub use global::{GlobalBytes, GlobalUint, StateField};
 
+/// Host-backed unsigned arithmetic, available in application and signature mode.
+pub mod math {
+    use crate::host;
+    #[cfg(target_arch = "wasm32")]
+    use crate::Avm;
+
+    /// Full unsigned product as (high word, low word), matching AVM mulw.
+    #[inline]
+    pub fn mulw(a: u64, b: u64) -> (u64, u64) {
+        host().mulw(a, b)
+    }
+
+    /// 128-bit unsigned division. Operands are high/low words; the result is
+    /// (quotient high, quotient low, remainder high, remainder low).
+    /// A zero denominator traps, matching AVM divmodw.
+    #[inline]
+    pub fn divmodw(a_high: u64, a_low: u64, b_high: u64, b_low: u64) -> (u64, u64, u64, u64) {
+        host().divmodw(a_high, a_low, b_high, b_low)
+    }
+
+    /// Integer floor square root of a uint64, matching AVM sqrt.
+    #[inline]
+    pub fn sqrt(n: u64) -> u64 {
+        host().sqrt(n)
+    }
+
+    /// Integer floor square root of a 128-bit high/low pair. WASM extension;
+    /// the full-width result fits in u64.
+    #[inline]
+    pub fn sqrtw(high: u64, low: u64) -> u64 {
+        host().sqrtw(high, low)
+    }
+}
+
 /// Appends an application log. Protocol count and total-byte limits apply.
 #[inline]
 pub fn log(bytes: &[u8]) {

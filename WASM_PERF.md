@@ -441,6 +441,69 @@ misses, or other CPUs. In particular, query weights still need confirmation on
 production ledger state. They are a practical calibration starting point, not
 a consensus-safe worst-case proof.
 
+## Arithmetic host imports: calibration (2026-10-27)
+
+`TestWasmMathHostCallCost` in
+`data/transactions/logic/wasm_math_hostcost_test.go` measures `mulw`, `divmodw`,
+`sqrt`, and the WASM-only `sqrtw` extension through the release executor's real
+Go/cgo entry point. The arithmetic itself stays in Rust: unlike transaction and
+ledger operations, it does **not** cross Rust→C→Go on each iteration.
+
+```sh
+make wasmlib
+WASM_OPCOST=1 GOMAXPROCS=1 go test ./data/transactions/logic -run '^TestWasmMathHostCallCost$' -v -count=3
+```
+
+Measured on linux/arm64, 8-core Apple CPU, Go 1.25.3. Each case uses 4,000
+iterations and 200 interleaved pairs of N=0/N=4,000 evaluations of the same
+module, alternating their order. Temporary WAT compilation and test-ledger
+construction are outside timing; fixed module setup cancels. Only the test
+application budget is raised. Expected products, quotients/remainders, and roots
+are checked against Go `math/bits` / `math/big` results after each nonzero loop.
+The harness also checks measured fuel against its assumed host and guest prices
+to catch stale static-library links.
+
+The initial sweep used provisional host weights **30/100/100/150**. The largest
+per-import median host estimates were approximately **7.0/15.7/3.8/14.7 ns**.
+Following the existing 1 ns/fuel target, weights were rounded upward with
+additional headroom to **15/25/10/25 fuel**, then the entire sweep was repeated.
+Below, each range spans the **per-case medians of three post-change runs**, not
+individual samples or a worst-case bound:
+
+| import | applied host fuel | fuel/iteration | ns/iteration | ns/fuel | estimated host ns |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `mulw` | 15 | 38 | 29.8–31.8 | 0.78–0.84 | 6.8–8.8 |
+| `divmodw` | 25 | 50 | 34.0–41.9 | 0.68–0.84 | 9.0–16.9 |
+| `sqrt` | 10 | 32 | 23.6–26.7 | 0.74–0.83 | 1.6–4.7 |
+| `sqrtw` | 25 | 48 | 24.9–37.6 | 0.52–0.78 | 1.9–14.6 |
+
+Whole iterations retain loop control, argument preparation, the 10-fuel `call`,
+and result handling. Final result checks add less than 0.02 fuel/iteration.
+`estimated host ns = ns/iteration - (fuel/iteration - host fuel)` assumes guest
+work costs 1 ns/fuel; it is **not** an isolated timing of the host function. The
+empty-loop control measures approximately **8.3 ns for 10 fuel**, illustrating
+that this subtraction overestimates some guest overhead. The selected weights
+retain approximately 5–10 fuel beyond the largest post-change median host
+estimates, rather than trimming to the smallest successful input's estimate.
+Host charges are additional to guest charges and are not TEAL opcode prices;
+the 10:1 conversion to AVM budget units is unchanged.
+
+Operand sweeps cover zero/full-width products; aligned, unaligned, and
+end-of-memory destinations; 128-bit division by 1, 16-/63-/64-/65-/128-bit
+divisors and divisors larger than the dividend; and square roots around width
+and square boundaries through the full 128-bit domain. Division is most
+expensive around the 128/64 and 128/65 cases; `sqrtw` becomes more expensive
+for larger operands. A single fixed weight covers the measured cases of each
+import. All calls, including traps, are charged before arithmetic or memory
+access; separate tests retain exact-fuel and no-partial-write guarantees.
+
+These are warmed, repeated-operand successful-call measurements on one CPU,
+not an exhaustive input sweep, failure-path timing study, cold-cache analysis,
+or consensus-safe worst-case proof. Individual runs contain timing outliers
+above the displayed median ranges. Other architectures and adversarial operand
+patterns still need validation before production use. Timing is never consulted
+by evaluation: the applied weights are fixed deterministic constants.
+
 ## Instruction opcodes
 
 `opcode_cost_table` (`wasm/src/lib.rs`, an `#[ignore]`d test) runs each allowed

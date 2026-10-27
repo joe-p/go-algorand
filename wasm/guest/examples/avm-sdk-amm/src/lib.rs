@@ -19,7 +19,9 @@
 #![cfg_attr(target_arch = "wasm32", no_std)]
 
 use avm_sdk::arc4::{Address, Asset, AssetTransferTxn, PaymentTxn, Transaction};
-use avm_sdk::{asset, contract, globals, itxn, txn, Error, GlobalBytes, GlobalUint, TxnField};
+use avm_sdk::{
+    asset, contract, globals, itxn, math, txn, Error, GlobalBytes, GlobalUint, TxnField,
+};
 
 avm_sdk::panic_handler!();
 
@@ -255,25 +257,16 @@ fn verify_transfer(transfer: AssetTransferTxn, id: u64) -> Result<u64, Error> {
 }
 
 fn mul_div(a: u64, b: u64, denominator: u64) -> Result<u64, Error> {
-    let value = (u128::from(a) * u128::from(b))
-        .checked_div(u128::from(denominator))
-        .ok_or(Error::InvalidValue)?;
-    u64::try_from(value).map_err(|_| Error::InvalidValue)
+    require(denominator != 0)?;
+    let (high, low) = math::mulw(a, b);
+    let (quotient_high, quotient_low, _, _) = math::divmodw(high, low, 0, denominator);
+    require(quotient_high == 0)?;
+    Ok(quotient_low)
 }
 
 fn initial_tokens(a: u64, b: u64) -> u64 {
-    let product = u128::from(a) * u128::from(b);
-    // Binary search with an exclusive u128 upper bound, including u64::MAX.
-    let (mut low, mut high) = (0u128, 1u128 << 64);
-    while low + 1 < high {
-        let mid = (low + high) / 2;
-        if mid * mid <= product {
-            low = mid;
-        } else {
-            high = mid;
-        }
-    }
-    low as u64
+    let (high, low) = math::mulw(a, b);
+    math::sqrtw(high, low)
 }
 
 fn mint_tokens(issued: u64, a_supply: u64, b_supply: u64, a: u64, b: u64) -> Result<u64, Error> {

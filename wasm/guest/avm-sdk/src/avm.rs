@@ -28,6 +28,29 @@ use avm_sys::{self, ArgError, GlobalField, TxnError, TxnField};
 /// invalid transaction field, an oversized value, a type mismatch) are not
 /// `Result`; a trap ends the program, as in the AVM.
 pub trait Avm {
+    /// Full unsigned product as (high, low), matching AVM mulw.
+    fn mulw(&self, _a: u64, _b: u64) -> (u64, u64) {
+        unimplemented!("mulw")
+    }
+    /// 128-bit unsigned division as (quotient high/low, remainder high/low).
+    /// A zero denominator traps, matching AVM divmodw.
+    fn divmodw(
+        &self,
+        _a_high: u64,
+        _a_low: u64,
+        _b_high: u64,
+        _b_low: u64,
+    ) -> (u64, u64, u64, u64) {
+        unimplemented!("divmodw")
+    }
+    /// Integer floor square root, matching AVM sqrt.
+    fn sqrt(&self, _n: u64) -> u64 {
+        unimplemented!("sqrt")
+    }
+    /// Integer floor square root of a 128-bit high/low pair (WASM extension).
+    fn sqrtw(&self, _high: u64, _low: u64) -> u64 {
+        unimplemented!("sqrtw")
+    }
     /// Appends an application log, subject to AVM count and total-byte limits.
     fn log(&self, _bytes: &[u8]) {
         unimplemented!("log")
@@ -170,6 +193,22 @@ pub struct HostAvm;
 static HOST_AVM: HostAvm = HostAvm;
 
 impl Avm for HostAvm {
+    #[inline]
+    fn mulw(&self, a: u64, b: u64) -> (u64, u64) {
+        avm_sys::mulw(a, b)
+    }
+    #[inline]
+    fn divmodw(&self, a_high: u64, a_low: u64, b_high: u64, b_low: u64) -> (u64, u64, u64, u64) {
+        avm_sys::divmodw(a_high, a_low, b_high, b_low)
+    }
+    #[inline]
+    fn sqrt(&self, n: u64) -> u64 {
+        avm_sys::sqrt(n)
+    }
+    #[inline]
+    fn sqrtw(&self, high: u64, low: u64) -> u64 {
+        avm_sys::sqrtw(high, low)
+    }
     #[inline]
     fn log(&self, bytes: &[u8]) {
         avm_sys::log(bytes)

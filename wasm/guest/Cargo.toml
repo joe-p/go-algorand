@@ -24,6 +24,7 @@ members = [
     "avm-sdk",
     "avm-sdk-macros",
     "examples/avm-sdk-amm",
+    "examples/avm-sdk-math",
     "examples/avm-sdk-arc4-counter",
     "examples/avm-sdk-arc4-resources",
     "examples/avm-sdk-arc4-types",

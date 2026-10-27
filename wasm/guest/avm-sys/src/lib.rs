@@ -110,6 +110,10 @@ mod sys {
 
     #[link(wasm_import_module = "env")]
     extern "C" {
+        pub fn mulw(a: i64, b: i64, out: i32);
+        pub fn divmodw(a_high: i64, a_low: i64, b_high: i64, b_low: i64, out: i32);
+        pub fn sqrt(n: i64) -> i64;
+        pub fn sqrtw(high: i64, low: i64) -> i64;
         pub fn arg_count() -> i32;
         pub fn arg(index: i32, out: i32, len: i32) -> i32;
         pub fn txn_uint(field: i32) -> i64;
@@ -163,6 +167,18 @@ mod sys {
 
     pub unsafe fn arg_count() -> i32 {
         unavailable!("arg_count")
+    }
+    pub unsafe fn mulw(_a: i64, _b: i64, _out: i32) {
+        unavailable!("mulw")
+    }
+    pub unsafe fn divmodw(_a_high: i64, _a_low: i64, _b_high: i64, _b_low: i64, _out: i32) {
+        unavailable!("divmodw")
+    }
+    pub unsafe fn sqrt(_n: i64) -> i64 {
+        unavailable!("sqrt")
+    }
+    pub unsafe fn sqrtw(_high: i64, _low: i64) -> i64 {
+        unavailable!("sqrtw")
     }
     pub unsafe fn arg(_index: i32, _out: i32, _len: i32) -> i32 {
         unavailable!("arg")
@@ -428,6 +444,46 @@ pub fn arg_into(index: u32, buf: &mut [u8]) -> Result<&[u8], ArgError> {
             _ => ArgError::Unknown,
         })
     }
+}
+
+/// Full unsigned product, returned as (high word, low word), like AVM mulw.
+#[inline]
+pub fn mulw(a: u64, b: u64) -> (u64, u64) {
+    let mut words = [0u64; 2];
+    // WASM memory is little-endian. The host writes two complete u64 words.
+    unsafe { sys::mulw(a as i64, b as i64, words.as_mut_ptr() as usize as i32) };
+    (words[0], words[1])
+}
+
+/// Unsigned 128-bit division, like AVM divmodw. Inputs are high/low words;
+/// outputs are (quotient high, quotient low, remainder high, remainder low).
+/// A zero denominator traps. A full-width quotient does not overflow.
+#[inline]
+pub fn divmodw(a_high: u64, a_low: u64, b_high: u64, b_low: u64) -> (u64, u64, u64, u64) {
+    let mut words = [0u64; 4];
+    unsafe {
+        sys::divmodw(
+            a_high as i64,
+            a_low as i64,
+            b_high as i64,
+            b_low as i64,
+            words.as_mut_ptr() as usize as i32,
+        )
+    };
+    (words[0], words[1], words[2], words[3])
+}
+
+/// Integer floor square root of a uint64, like AVM sqrt.
+#[inline]
+pub fn sqrt(n: u64) -> u64 {
+    unsafe { sys::sqrt(n as i64) as u64 }
+}
+
+/// Integer floor square root of an unsigned 128-bit high/low pair.
+/// This is a WASM extension, not an AVM opcode; the result fits in u64.
+#[inline]
+pub fn sqrtw(high: u64, low: u64) -> u64 {
+    unsafe { sys::sqrtw(high as i64, low as i64) as u64 }
 }
 
 /// Reads a uint64 transaction field, like the AVM's `txn`.

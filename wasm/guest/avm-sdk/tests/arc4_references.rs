@@ -17,12 +17,12 @@
 mod common;
 use avm_sdk::arc4::{Account, Arc4Contract, AssetTransferTxn, PaymentTxn, Transaction};
 use avm_sdk::testing::set_host;
-use avm_sdk::{contract, Address, Application, Asset, GlobalUint};
+use avm_sdk::{contract, Address, Application, Asset, GlobalU64};
 use common::CallAvm;
 
 #[contract]
 struct References {
-    calls: GlobalUint,
+    calls: GlobalU64,
 }
 
 #[contract]
@@ -100,11 +100,11 @@ fn references_convert_to_and_from_native_types() {
     assert_eq!(Address::ZERO, Address([0; 32]));
 
     let _host = set_host(CallAvm::call(&[]));
-    let asset_slot = GlobalUint::<Asset>::new_typed(b"asset");
+    let asset_slot = GlobalU64::<Asset>::new_typed(b"asset");
     asset_slot.set(asset);
     assert_eq!(asset_slot.get(), asset);
 
-    let app_slot = GlobalUint::<Application>::new_typed(b"application");
+    let app_slot = GlobalU64::<Application>::new_typed(b"application");
     app_slot.set(application);
     assert_eq!(app_slot.get(), application);
 }

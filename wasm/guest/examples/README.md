@@ -27,7 +27,7 @@ wasm-guest-fixtures` rebuilds and copies all of them.
   through the vendored `ed25519-dalek` fork, which calls the host's
   `ed25519verify_bare`.
 - **`avm-sdk-counter`** is `rust-counter` rewritten with `avm-sdk`: a
-  `#[contract]` struct with `GlobalUint` state, building the per-sender key in
+  `#[contract]` struct with `GlobalU64` state, building the per-sender key in
   a `Vec` to exercise the bump allocator.
 - **`avm-sdk-arc4-counter`** routes `increment(uint64)void` and
   `set_label(string)void` by selector, without allocating.

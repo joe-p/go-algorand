@@ -16,11 +16,11 @@
 
 //! The current application's global state.
 //!
-//! [`GlobalUint`] and [`GlobalBytes`] are typed handles for keys known at
+//! [`GlobalU64`] and [`GlobalBytes`] are typed handles for keys known at
 //! compile time; the free functions take runtime keys. Both handles implement
 //! [`StateField`], so they can be fields of a `#[contract]` struct.
 //!
-//! [`GlobalUint`] accepts any value that converts to and from `u64`.
+//! [`GlobalU64`] accepts any value that converts to and from `u64`.
 //! [`GlobalBytes`] accepts any [`StateBytes`] value, such as
 //! [`crate::Address`] or `[u8; N]`.
 
@@ -40,27 +40,27 @@ use crate::{host, trap, Error};
 /// on each access, so it can be a `const`:
 ///
 /// ```ignore
-/// const COUNT: GlobalUint = GlobalUint::new(b"count");
+/// const COUNT: GlobalU64 = GlobalU64::new(b"count");
 /// ```
 ///
-/// `new` is the `u64` constructor; use [`GlobalUint::new_typed`] for another
+/// `new` is the `u64` constructor; use [`GlobalU64::new_typed`] for another
 /// value type. Use [`get_uint`] and [`put_uint`] for runtime keys.
-pub struct GlobalUint<T = u64> {
+pub struct GlobalU64<T = u64> {
     key: &'static [u8],
     phantom: PhantomData<T>,
 }
 
-impl GlobalUint<u64> {
+impl GlobalU64<u64> {
     /// Creates a `u64` handle for `key` on the current application.
     pub const fn new(key: &'static [u8]) -> Self {
         Self::new_typed(key)
     }
 }
 
-impl<T> GlobalUint<T> {
+impl<T> GlobalU64<T> {
     /// Creates a handle for `key` with an explicit value type.
     pub const fn new_typed(key: &'static [u8]) -> Self {
-        GlobalUint {
+        GlobalU64 {
             key,
             phantom: PhantomData,
         }
@@ -79,7 +79,7 @@ impl<T> GlobalUint<T> {
     }
 }
 
-impl<T> GlobalUint<T>
+impl<T> GlobalU64<T>
 where
     T: From<u64> + Into<u64>,
 {
@@ -100,7 +100,7 @@ where
 ///
 /// Reads take a caller-provided buffer. A missing key reads as empty. Use
 /// [`GlobalBytes::try_read`] when the value may exceed the buffer;
-/// [`GlobalBytes::read`] traps on that, matching the AVM. Like [`GlobalUint`],
+/// [`GlobalBytes::read`] traps on that, matching the AVM. Like [`GlobalU64`],
 /// a handle holds only its key.
 ///
 /// The default `T = [u8]` is the raw byte-string handle. Use another value type
@@ -271,7 +271,7 @@ pub trait StateField {
     fn from_key(key: &'static [u8]) -> Self;
 }
 
-impl<T> StateField for GlobalUint<T> {
+impl<T> StateField for GlobalU64<T> {
     const GLOBAL_UINTS: u32 = 1;
 
     #[inline]

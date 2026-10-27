@@ -25,7 +25,7 @@
 #![cfg_attr(target_arch = "wasm32", no_std)]
 
 use avm_sdk::arc4::{Address, DynArray};
-use avm_sdk::{contract, Error, GlobalBytes, GlobalUint};
+use avm_sdk::{contract, Error, GlobalBytes, GlobalU64};
 
 avm_sdk::panic_handler!();
 
@@ -34,7 +34,7 @@ const MAX_TEXT: usize = 128;
 
 #[contract]
 pub struct Types {
-    total: GlobalUint,
+    total: GlobalU64,
     text: GlobalBytes,
 }
 

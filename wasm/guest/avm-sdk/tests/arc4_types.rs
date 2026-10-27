@@ -20,12 +20,12 @@ mod common;
 
 use avm_sdk::arc4::{Address, Arc4Contract, Byte, DynArray, UFixed, U256};
 use avm_sdk::testing::set_host;
-use avm_sdk::{contract, GlobalBytes, GlobalUint};
+use avm_sdk::{contract, GlobalBytes, GlobalU64};
 use common::CallAvm;
 
 #[contract]
 pub struct Types {
-    total: GlobalUint,
+    total: GlobalU64,
     text: GlobalBytes,
 }
 

@@ -27,7 +27,7 @@ use crate::{address::Address, host, txn, TxnError, TxnField};
 ///
 /// ARC-4 methods receive resolved IDs; [`Asset::resolve`] maps a zero-based
 /// foreign-asset index to its ID. Asset queries, inner transactions, and typed
-/// state slots such as `GlobalUint<Asset>` use this same type. It converts to
+/// state slots such as `GlobalU64<Asset>` use this same type. It converts to
 /// and from `u64`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Asset {

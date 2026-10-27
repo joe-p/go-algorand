@@ -27,7 +27,7 @@ use std::rc::Rc;
 use avm_sdk::testing::set_host;
 use avm_sdk::{
     arg, asset, ed25519_verify_bare, global, globals, txn, Address, Application, ArgError, Asset,
-    Avm, Error, GlobalBytes, GlobalField, GlobalUint, TxnError, TxnField,
+    Avm, Error, GlobalBytes, GlobalField, GlobalU64, TxnError, TxnField,
 };
 
 #[derive(Clone)]
@@ -222,7 +222,7 @@ impl Avm for MockAvm {
 }
 
 /// A handle declared before any host exists; it resolves the host per access.
-const COUNT: GlobalUint = GlobalUint::new(b"count");
+const COUNT: GlobalU64 = GlobalU64::new(b"count");
 
 fn copy_field(value: &[u8], buf: &mut [u8]) -> Result<usize, TxnError> {
     if !buf.is_empty() {
@@ -355,7 +355,7 @@ fn global_uint_round_trip() {
 #[test]
 fn global_uint_typed() {
     let _host = set_host(MockAvm::default());
-    let slot = GlobalUint::<u64>::new_typed(b"typed");
+    let slot = GlobalU64::<u64>::new_typed(b"typed");
 
     slot.set(3);
     assert_eq!(global::get_uint(b"typed"), 3);

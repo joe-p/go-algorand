@@ -47,7 +47,7 @@ This is a separate Cargo workspace from the host executor so `make wasmlib`
 - **`avm-sdk/`** (`avm-sdk`) — the guest SDK. It depends on `avm-sys` and adds
   host operations grouped into `arg`, `txn`, and `global` modules, typed
   transaction helpers (`txn::sender`, `txn::application_id`, application
-  arguments), `const`-constructible `GlobalUint` / `GlobalBytes` handles, the
+  arguments), `const`-constructible `GlobalU64` / `GlobalBytes` handles, the
   `#[contract]` and `#[program_entry]` attribute macros, and the lower-level
   `entry!` macro. It is `no_std` on wasm and does not allocate unless the guest
   opts in with `alloc` (`#[contract(alloc)]` on the impl, or
@@ -166,7 +166,7 @@ This is a separate Cargo workspace from the host executor so `make wasmlib`
   ```rust
   #[contract]
   pub struct Counter {
-      count: GlobalUint,
+      count: GlobalU64,
   }
 
   #[contract]
@@ -238,7 +238,7 @@ This is a separate Cargo workspace from the host executor so `make wasmlib`
   method. `address::Address` is the ARC-4 `address` value (also re-exported at
   the crate root); it converts to and from `[u8; 32]`. `Asset` and `Application`
   convert to and from `u64`. Resolved values work directly with SDK helpers and
-  typed state slots such as `GlobalUint<Asset>` or `GlobalBytes<Address>`.
+  typed state slots such as `GlobalU64<Asset>` or `GlobalBytes<Address>`.
   `Address` and `[u8; N]` implement `StateBytes`, so typed byte state supports
   `get()` / `set()`; use `try_get(buf)` for a fallible read.
   `Transaction`, `PaymentTxn`, `KeyRegistrationTxn`, `AssetConfigTxn`,
@@ -316,7 +316,7 @@ This is a separate Cargo workspace from the host executor so `make wasmlib`
   `../../WASM_CONTRACTS.md`.
 
 - **`examples/avm-sdk-counter/`** — `rust-counter` rewritten with `avm-sdk`.
-  It is a `#[contract]` struct with a `GlobalUint` counter, uses the
+  It is a `#[contract]` struct with a `GlobalU64` counter, uses the
   transaction helpers for the sender and application arguments, and builds the
   per-sender key in a `Vec` to exercise the optional bump allocator. The Rust
   runner executes its committed fixture with stub transaction and global-state

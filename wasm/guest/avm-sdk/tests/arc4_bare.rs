@@ -20,12 +20,12 @@
 mod common;
 
 use avm_sdk::testing::set_host;
-use avm_sdk::{contract, GlobalUint};
+use avm_sdk::{contract, GlobalU64};
 use common::{CallAvm, OPT_IN};
 
 #[contract]
 pub struct Bare {
-    calls: GlobalUint,
+    calls: GlobalU64,
 }
 
 #[contract]

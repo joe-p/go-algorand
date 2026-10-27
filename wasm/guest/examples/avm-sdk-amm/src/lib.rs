@@ -24,7 +24,7 @@ use alloc::vec::Vec;
 use avm_sdk::arc4::{AssetTransferTxn, PaymentTxn};
 use avm_sdk::{
     assert, assert_eq, assert_ne, asset, contract, globals, itxn, math, txn, Address, Asset, Error,
-    GlobalBytes, GlobalUint, TxnField,
+    GlobalBytes, GlobalU64, TxnField,
 };
 
 avm_sdk::panic_handler!();
@@ -38,13 +38,13 @@ pub struct ConstantProductAMM {
     #[key = "g"]
     governor: GlobalBytes<Address>,
     #[key = "a"]
-    asset_a: GlobalUint<Asset>,
+    asset_a: GlobalU64<Asset>,
     #[key = "b"]
-    asset_b: GlobalUint<Asset>,
+    asset_b: GlobalU64<Asset>,
     #[key = "p"]
-    pool_token: GlobalUint<Asset>,
+    pool_token: GlobalU64<Asset>,
     #[key = "r"]
-    ratio: GlobalUint,
+    ratio: GlobalU64,
 }
 
 #[contract(alloc)]

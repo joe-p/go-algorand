@@ -21,7 +21,7 @@
 //!
 //! - [`arg`], [`txn`], and [`global`]: the host operations as free functions,
 //!   plus typed helpers (`txn::sender`, `txn::app_arg_into`, ...).
-//! - [`GlobalUint`] and [`GlobalBytes`], `const`-constructible handles for the
+//! - [`GlobalU64`] and [`GlobalBytes`], `const`-constructible handles for the
 //!   current application's global state.
 //! - [`contract`], an attribute macro for a contract's state struct and its
 //!   `impl` block. On the struct it derives each key from the field name and
@@ -46,11 +46,11 @@
 //! # Example
 //!
 //! ```ignore
-//! use avm_sdk::{contract, txn, Error, GlobalUint};
+//! use avm_sdk::{contract, txn, Error, GlobalU64};
 //!
 //! #[contract]
 //! pub struct Counter {
-//!     count: GlobalUint,
+//!     count: GlobalU64,
 //! }
 //!
 //! #[contract]
@@ -113,7 +113,7 @@ pub use avm::{host, Avm, Host, HostAvm};
 pub use avm_sdk_macros::{contract, program_entry};
 pub use avm_sys::{ArgError, GlobalField, TxnError, TxnField, MAX_ARG_BYTES};
 pub use error::Error;
-pub use global::{GlobalBytes, GlobalUint, StateBytes, StateField};
+pub use global::{GlobalBytes, GlobalU64, StateBytes, StateField};
 
 /// Host-backed unsigned arithmetic, available in application and signature mode.
 pub mod math {

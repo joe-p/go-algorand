@@ -140,7 +140,7 @@ pub fn program_entry(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// block holding the program logic.
 ///
 /// On the **struct**, each field's state key is its name; `#[key = "..."]`
-/// overrides it. Fields must implement `avm_sdk::StateField` (`GlobalUint`,
+/// overrides it. Fields must implement `avm_sdk::StateField` (`GlobalU64`,
 /// `GlobalBytes`). The macro generates `pub fn new() -> Self`, building every
 /// field from its key, and `avm_sdk::Contract`, whose `GLOBAL_UINTS` /
 /// `GLOBAL_BYTES` are the global-state schema the application needs at
@@ -159,7 +159,7 @@ pub fn program_entry(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// ```ignore
 /// #[avm_sdk::contract]
 /// pub struct Counter {
-///     count: GlobalUint,
+///     count: GlobalU64,
 ///     #[key = "o"]
 ///     owner: GlobalBytes,
 /// }

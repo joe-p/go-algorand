@@ -27,7 +27,7 @@
 
 #![cfg_attr(target_arch = "wasm32", no_std)]
 
-use avm_sdk::{contract, Error, GlobalBytes, GlobalUint};
+use avm_sdk::{contract, Error, GlobalBytes, GlobalU64};
 
 avm_sdk::panic_handler!();
 
@@ -40,7 +40,7 @@ pub const MAX_LABEL: usize = 32;
 #[contract]
 pub struct Counter {
     /// The running total.
-    count: GlobalUint,
+    count: GlobalU64,
     /// A free-form label.
     label: GlobalBytes,
 }

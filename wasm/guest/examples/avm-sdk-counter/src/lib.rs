@@ -27,7 +27,7 @@
 extern crate alloc;
 
 use alloc::vec::Vec;
-use avm_sdk::{contract, global, txn, Error, GlobalUint};
+use avm_sdk::{contract, global, txn, Error, GlobalU64};
 
 avm_sdk::panic_handler!();
 
@@ -39,7 +39,7 @@ const MAX_COUNT: u64 = 1_000_000;
 #[contract]
 pub struct Counter {
     /// The running total across all senders.
-    count: GlobalUint,
+    count: GlobalU64,
 }
 
 // `#[contract]` on the impl exports `program`, which calls `approve`.

@@ -24,7 +24,7 @@ use std::collections::BTreeMap;
 
 use avm_sdk::testing::set_host;
 use avm_sdk::{
-    contract, Address, ArgError, Avm, Contract, Error, GlobalBytes, GlobalUint, TxnError, TxnField,
+    contract, Address, ArgError, Avm, Contract, Error, GlobalBytes, GlobalU64, TxnError, TxnField,
 };
 
 /// A host with global state only; transaction fields read as 0.
@@ -87,9 +87,9 @@ impl Avm for StateOnly {
 
 #[contract]
 pub struct Registry {
-    count: GlobalUint,
+    count: GlobalU64,
     #[key = "cap"]
-    limit: GlobalUint,
+    limit: GlobalU64,
     owner: GlobalBytes,
     delegate: GlobalBytes<Address>,
 }

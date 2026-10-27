@@ -68,12 +68,14 @@ mod reference;
 mod tuple;
 mod utf8;
 
+pub use crate::application::Application;
+pub use crate::asset::Asset;
 pub use array::{DynArray, Iter};
 pub use desc::{validate, Desc};
 pub use encode::{log_return, Encode, EncodeError, RETURN_PREFIX};
 pub use reference::{
-    Account, Application, ApplicationCallTxn, Asset, AssetConfigTxn, AssetFreezeTxn,
-    AssetTransferTxn, KeyRegistrationTxn, PaymentTxn, Transaction,
+    Account, ApplicationCallTxn, AssetConfigTxn, AssetFreezeTxn, AssetTransferTxn,
+    KeyRegistrationTxn, PaymentTxn, Transaction,
 };
 
 use crate::{trap, Error};

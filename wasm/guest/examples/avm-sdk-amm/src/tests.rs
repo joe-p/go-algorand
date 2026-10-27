@@ -325,8 +325,8 @@ fn bootstrap_creates_pool_and_opt_ins_and_returns_id() {
     host.rejects(|amm| {
         amm.bootstrap(
             PaymentTxn::resolve(0, 1).unwrap(),
-            Asset { id: A },
-            Asset { id: B },
+            Asset::from(A),
+            Asset::from(B),
         )
     });
 }
@@ -514,8 +514,8 @@ fn reject_malformed_deposits_before_any_inner_transaction() {
         host.rejects(|amm| {
             amm.swap(
                 AssetTransferTxn::resolve(0, 1).ok_or(Error::InvalidValue)?,
-                Asset { id: A },
-                Asset { id: B },
+                Asset::from(A),
+                Asset::from(B),
             )
         });
         assert!(host.inner.borrow().is_empty());
@@ -576,8 +576,8 @@ fn bootstrap_rejects_missing_or_oversized_unit_names() {
             host.rejects(|amm| {
                 amm.bootstrap(
                     PaymentTxn::resolve(0, 1).unwrap(),
-                    Asset { id: A },
-                    Asset { id: B },
+                    Asset::from(A),
+                    Asset::from(B),
                 )
             });
             assert!(host.inner.borrow().is_empty());

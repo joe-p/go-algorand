@@ -15,11 +15,9 @@
 // along with go-algorand.  If not, see <https://www.gnu.org/licenses/>.
 
 mod common;
-use avm_sdk::arc4::{
-    Account, Application, Arc4Contract, Asset, AssetTransferTxn, PaymentTxn, Transaction,
-};
+use avm_sdk::arc4::{Account, Arc4Contract, AssetTransferTxn, PaymentTxn, Transaction};
 use avm_sdk::testing::set_host;
-use avm_sdk::{contract, GlobalUint};
+use avm_sdk::{contract, Application, Asset, GlobalUint};
 use common::CallAvm;
 
 #[contract]
@@ -84,6 +82,26 @@ impl References {
         assert_eq!(account.address, [42; 32]);
         assert_eq!(tx.group_index(), 0);
     }
+}
+
+#[test]
+fn references_convert_to_and_from_uint64() {
+    let asset: Asset = 777.into();
+    assert_eq!(asset.id, 777);
+    assert_eq!(u64::from(asset), 777);
+
+    let application = Application::from(999);
+    assert_eq!(application.id, 999);
+    assert_eq!(u64::from(application), 999);
+
+    let _host = set_host(CallAvm::call(&[]));
+    let asset_slot = GlobalUint::<Asset>::new_typed(b"asset");
+    asset_slot.set(asset);
+    assert_eq!(asset_slot.get(), asset);
+
+    let app_slot = GlobalUint::<Application>::new_typed(b"application");
+    app_slot.set(application);
+    assert_eq!(app_slot.get(), application);
 }
 
 #[test]

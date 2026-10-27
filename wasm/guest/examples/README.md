@@ -112,8 +112,9 @@ cap does not establish normal-budget deployability. Post-processing is optional,
 not part of the default Cargo build or `make wasm-guest-fixtures`.
 
 The current AMM enables the SDK's `alloc` feature and `#[contract(alloc)]`,
-uses owned `asset::unit_name(id)` values, and constructs the pool name with
-`[b"DPT-".as_slice(), a, b"-", b].concat()`. Trap-only assertions are unchanged.
+uses owned `asset::unit_name(asset: Asset)` values, and constructs the pool name
+with `[b"DPT-".as_slice(), a, b"-", b].concat()`. Trap-only assertions are
+unchanged.
 
 | Name handling | Cargo release bytes | after `wasm-opt -Oz` |
 | --- | ---: | ---: |
@@ -156,8 +157,8 @@ inner submissions, and return log. The real executor also validated both builds
 and passed creation/assertion-failure smoke tests with a lifted budget. These
 checks do not establish normal-budget deployability or full ledger integration.
 The bump allocator does not reclaim individual allocations. Allocation-free
-callers can use `asset::unit_name_into(id, &mut buffer)` without the `alloc`
-feature.
+callers can use `asset::unit_name_into(asset: Asset, &mut buffer)` without the
+`alloc` feature.
 
 To reproduce post-processing, from `wasm/guest`:
 

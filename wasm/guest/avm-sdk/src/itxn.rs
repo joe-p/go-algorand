@@ -19,7 +19,7 @@
 
 #[cfg(target_arch = "wasm32")]
 use crate::Avm;
-use crate::{globals, host, Error, TxnField};
+use crate::{asset::Asset, globals, host, Error, TxnField};
 
 /// Begins a group with one pending transaction; mirrors `itxn_begin` defaults.
 #[inline]
@@ -51,10 +51,11 @@ pub fn submit() {
     host().itxn_submit()
 }
 
-/// Last submitted inner transaction's created asset ID (0 for non-creation).
+/// Last submitted inner transaction's created asset. A non-creation
+/// transaction yields `Asset { id: 0 }`.
 #[inline]
-pub fn created_asset_id() -> u64 {
-    host().itxn_created_asset_id()
+pub fn created_asset_id() -> Asset {
+    host().itxn_created_asset_id().into()
 }
 
 /// Minimal creation parameters for a pool token. Omitted authorities remain
@@ -72,8 +73,8 @@ pub struct AssetCreation<'a> {
 }
 
 impl AssetCreation<'_> {
-    /// Creates the asset in a standalone inner group and returns its ID.
-    pub fn submit(&self) -> u64 {
+    /// Creates the asset in a standalone inner group and returns it.
+    pub fn submit(&self) -> Asset {
         begin();
         set_uint(TxnField::TypeEnum, 3);
         set_uint(TxnField::Fee, self.fee);
@@ -94,18 +95,18 @@ impl AssetCreation<'_> {
 
 /// Sends an asset from the application with Fee=0, using outer fee credit.
 /// The receiver and asset/holding must be available under AVM resource rules.
-pub fn asset_transfer(asset: u64, receiver: &[u8; 32], amount: u64) {
+pub fn asset_transfer(asset: Asset, receiver: &[u8; 32], amount: u64) {
     begin();
     set_uint(TxnField::TypeEnum, 4);
     set_uint(TxnField::Fee, 0);
-    set_uint(TxnField::XferAsset, asset);
+    set_uint(TxnField::XferAsset, asset.id);
     set_uint(TxnField::AssetAmount, amount);
     set_bytes(TxnField::AssetReceiver, receiver);
     submit();
 }
 
 /// Opts the application into an asset via a zero-amount transfer to itself.
-pub fn asset_opt_in(asset: u64) -> Result<(), Error> {
+pub fn asset_opt_in(asset: Asset) -> Result<(), Error> {
     asset_transfer(asset, &globals::application_address()?, 0);
     Ok(())
 }

@@ -48,7 +48,7 @@ impl Counter {
     pub fn approve(&self) -> Result<(), Error> {
         // Creation executes the approval program as well. Deploying must not
         // perform the action, so a create (ApplicationID 0) simply approves.
-        if txn::application_id() == 0 {
+        if txn::application_id().id == 0 {
             return Ok(());
         }
         if txn::app_args_count() != 1 {

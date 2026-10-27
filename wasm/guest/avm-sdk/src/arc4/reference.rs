@@ -20,36 +20,6 @@
 use crate::rust_alloc::vec::Vec;
 use crate::{txn, Error, TxnError, TxnField};
 
-/// A resolved ARC-4 `asset` (the actual asset ID, not the encoded uint8 index).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Asset {
-    pub id: u64,
-}
-
-impl Asset {
-    /// Resolves a zero-based index into this call's foreign assets.
-    pub fn resolve(index: u8) -> Option<Self> {
-        (u64::from(index) < txn::uint(TxnField::NumAssets)).then(|| Self {
-            id: txn::array_uint(TxnField::Assets, u32::from(index)),
-        })
-    }
-}
-
-/// A resolved ARC-4 `application`; index 0 means the current transaction's
-/// ApplicationID (0 during creation), not the assigned creation ID.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Application {
-    pub id: u64,
-}
-
-impl Application {
-    pub fn resolve(index: u8) -> Option<Self> {
-        (u64::from(index) <= txn::uint(TxnField::NumApplications)).then(|| Self {
-            id: txn::array_uint(TxnField::Applications, u32::from(index)),
-        })
-    }
-}
-
 /// A resolved ARC-4 `account`; index 0 means the sender, indices 1.. select
 /// this call's foreign accounts. This is distinct from an ARC-4 `address`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

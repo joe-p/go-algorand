@@ -61,31 +61,33 @@ This is a separate Cargo workspace from the host executor so `make wasmlib`
 
    Group scalar reads are `txn::group_uint` / `txn::group_bytes`. Context
    fields live in **`globals`**, separately from application state in `global`:
-   `globals::group_size()`, `globals::application_id()` (assigned ID, even at
-   creation), and `globals::application_address()`. Only those three context
-   fields are currently exposed. Byte reads accept an empty buffer to query
-   length without copying. Group array reads remain
+   `globals::group_size()`, `globals::application_id()` (returns `Application`;
+   the assigned ID, even at creation), and `globals::application_address()`.
+   Only those three context fields are currently exposed. Byte reads accept an
+   empty buffer to query length without copying. Group array reads remain
    unavailable. Native mocks can override the four new `Avm` methods; their
    defaults panic so an unmodeled read cannot silently pass.
 
    Application-only inner assets use `itxn::AssetCreation { .. }.submit()`
-   (returns the created ID), `itxn::asset_opt_in(asset_id)`, and
-   `itxn::asset_transfer(asset_id, &receiver, amount)`. These helpers set Fee=0
-   and require outer fee credit. Low-level `begin`, `next`, `set_uint`,
-   `set_bytes`, `submit`, and `created_asset_id` mirror the AVM asset transaction
-   lifecycle and defaults. Protocol/ledger failures trap; rollback is handled
-   atomically by the outer transaction group. Inner app calls are not supported,
-   and inner host fuel charges are provisional pending calibration.
+   (returns the created `Asset`), `itxn::asset_opt_in(asset: Asset)`, and
+   `itxn::asset_transfer(asset: Asset, &receiver, amount)`. These helpers set
+   Fee=0 and require outer fee credit. Low-level `begin`, `next`, `set_uint`,
+   `set_bytes`, `submit`, and `created_asset_id` (which also returns `Asset`)
+   mirror the AVM asset transaction lifecycle and defaults. Protocol/ledger
+   failures trap; rollback is handled atomically by the outer transaction
+   group. Inner app calls are not supported, and inner host fuel charges are
+   provisional pending calibration.
 
-   Application-only asset queries are `asset::balance(&address, asset_id)` and
-   `asset::unit_name_into(asset_id, &mut buffer)`. They distinguish missing resources
-   (`None`) from existing zero balances/empty names (`Some(0)`). An empty name
-   buffer queries the required length. Missing holdings/assets are not the same
-   as unavailable resources: missing returns `None`, but AVM resource-access
-   failures trap, including unavailable account/asset holding pairs under group
-   sharing. Both methods are mockable through `Avm`; their defaults panic.
+   Application-only asset queries are `asset::balance(&address, asset: Asset)`
+   and `asset::unit_name_into(asset: Asset, &mut buffer)`. They distinguish
+   missing resources (`None`) from existing zero balances/empty names
+   (`Some(0)`). An empty name buffer queries the required length. Missing
+   holdings/assets are not the same as unavailable resources: missing returns
+   `None`, but AVM resource-access failures trap, including unavailable
+   account/asset holding pairs under group sharing. Both methods are mockable
+   through `Avm`; their defaults panic.
 
-   With the SDK's Cargo feature `alloc`, `asset::unit_name(asset_id)` returns
+   With the SDK's Cargo feature `alloc`, `asset::unit_name(asset: Asset)` returns
    `Result<Option<Vec<u8>>, TxnError>` instead. It allocates eight bytes (the
    protocol maximum), calls the host once, validates the returned length, and
    truncates to the actual name. Missing assets return `None`; existing empty
@@ -169,7 +171,7 @@ This is a separate Cargo workspace from the host executor so `make wasmlib`
   #[contract]
   impl Counter {
       pub fn approve(&self) -> Result<(), Error> {
-          if txn::application_id() == 0 {
+          if txn::application_id().id == 0 {
               return Ok(());
           }
           self.count.set(self.count.get() + 1);
@@ -226,11 +228,14 @@ This is a separate Cargo workspace from the host executor so `make wasmlib`
   | `T[]` | `arc4::DynArray<T>` |
   | `(T1,T2,…)` | Rust tuples, up to 16 elements |
 
-  Top-level `arc4::Account`, `Asset`, and `Application` consume uint8 indices
-  into the call's foreign arrays. Account/application index 0 resolves to
-  sender/current transaction ApplicationID (0 at creation); asset index 0 is
+  Top-level `arc4::Account`, `application::Application`, and `asset::Asset`
+  consume uint8 indices into the call's foreign arrays (`Application` and
+  `Asset` are also re-exported by `arc4`). Account/application index 0 resolves
+  to sender/current transaction ApplicationID (0 at creation); asset index 0 is
   the first foreign asset. Values passed to methods contain resolved addresses
   or IDs, not indices. Invalid indices reject before running the method.
+  `Asset` and `Application` convert to and from `u64`, so resolved IDs work
+  directly with SDK helpers and typed state slots such as `GlobalUint<Asset>`.
   `Transaction`, `PaymentTxn`, `KeyRegistrationTxn`, `AssetConfigTxn`,
   `AssetTransferTxn`, `AssetFreezeTxn`, and `ApplicationCallTxn` consume no
   application argument. They select immediately preceding group transactions

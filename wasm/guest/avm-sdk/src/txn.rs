@@ -22,7 +22,7 @@ use avm_sys::{TxnError, TxnField, MAX_ARG_BYTES};
 use crate::rust_alloc::vec::Vec;
 #[cfg(target_arch = "wasm32")]
 use crate::Avm;
-use crate::{host, Error};
+use crate::{application::Application, host, Error};
 
 /// Reads a uint64 transaction field. Traps if the field is invalid or is a
 /// byte-string field.
@@ -124,10 +124,10 @@ pub fn sender() -> Result<[u8; 32], Error> {
     address(TxnField::Sender)
 }
 
-/// The current application's ID, or 0 during creation.
+/// The current application's ID, or `Application { id: 0 }` during creation.
 #[inline]
-pub fn application_id() -> u64 {
-    uint(TxnField::ApplicationID)
+pub fn application_id() -> Application {
+    Application::from(uint(TxnField::ApplicationID))
 }
 
 /// The number of application arguments, for an application program.

@@ -26,8 +26,8 @@ use std::rc::Rc;
 
 use avm_sdk::testing::set_host;
 use avm_sdk::{
-    arg, asset, ed25519_verify_bare, global, globals, txn, ArgError, Avm, Error, GlobalBytes,
-    GlobalField, GlobalUint, TxnError, TxnField,
+    arg, asset, ed25519_verify_bare, global, globals, txn, Application, ArgError, Asset, Avm,
+    Error, GlobalBytes, GlobalField, GlobalUint, TxnError, TxnField,
 };
 
 #[derive(Clone)]
@@ -252,7 +252,7 @@ fn grouped_transactions_and_context_helpers() {
 
     assert_eq!(txn::group_uint(0, TxnField::Amount), u64::MAX);
     assert_eq!(globals::group_size(), 3);
-    assert_eq!(globals::application_id(), 888);
+    assert_eq!(globals::application_id(), Application::from(888));
     assert_eq!(globals::application_address().unwrap(), [0x12; 32]);
     assert_eq!(
         txn::group_bytes(0, TxnField::Receiver, &mut []).unwrap(),
@@ -303,18 +303,24 @@ fn asset_queries_distinguish_missing_and_empty() {
     avm.unit_names.insert(781, vec![b'X'; 9]);
     let _host = set_host(avm);
 
-    assert_eq!(asset::balance(&account, 777), Some(u64::MAX));
-    assert_eq!(asset::balance(&account, 778), Some(0));
-    assert_eq!(asset::balance(&account, 779), None);
-    assert_eq!(asset::unit_name_into(777, &mut []).unwrap(), Some(4));
+    assert_eq!(asset::balance(&account, 777.into()), Some(u64::MAX));
+    assert_eq!(asset::balance(&account, 778.into()), Some(0));
+    assert_eq!(asset::balance(&account, 779.into()), None);
+    assert_eq!(asset::unit_name_into(777.into(), &mut []).unwrap(), Some(4));
     let mut buf = [0xFF; 8];
-    assert_eq!(asset::unit_name_into(777, &mut buf).unwrap(), Some(4));
+    assert_eq!(
+        asset::unit_name_into(777.into(), &mut buf).unwrap(),
+        Some(4)
+    );
     assert_eq!(&buf[..4], b"USDC");
-    assert_eq!(asset::unit_name_into(778, &mut buf).unwrap(), Some(0));
-    assert_eq!(asset::unit_name_into(779, &mut buf).unwrap(), None);
+    assert_eq!(
+        asset::unit_name_into(778.into(), &mut buf).unwrap(),
+        Some(0)
+    );
+    assert_eq!(asset::unit_name_into(779.into(), &mut buf).unwrap(), None);
     let mut small = [0xFF; 3];
     assert_eq!(
-        asset::unit_name_into(777, &mut small),
+        asset::unit_name_into(777.into(), &mut small),
         Err(TxnError::BufferTooSmall)
     );
     assert_eq!(small, [0xFF; 3]);
@@ -322,11 +328,14 @@ fn asset_queries_distinguish_missing_and_empty() {
     #[cfg(feature = "alloc")]
     {
         _host.unit_name_reads.borrow_mut().clear();
-        assert_eq!(asset::unit_name(777).unwrap(), Some(b"USDC".to_vec()));
-        assert_eq!(asset::unit_name(778).unwrap(), Some(vec![]));
-        assert_eq!(asset::unit_name(779).unwrap(), None);
-        assert_eq!(asset::unit_name(780).unwrap(), Some(vec![0xff; 8]));
-        assert_eq!(asset::unit_name(781), Err(TxnError::BufferTooSmall));
+        assert_eq!(
+            asset::unit_name(777.into()).unwrap(),
+            Some(b"USDC".to_vec())
+        );
+        assert_eq!(asset::unit_name(778.into()).unwrap(), Some(vec![]));
+        assert_eq!(asset::unit_name(779.into()).unwrap(), None);
+        assert_eq!(asset::unit_name(780.into()).unwrap(), Some(vec![0xff; 8]));
+        assert_eq!(asset::unit_name(781.into()), Err(TxnError::BufferTooSmall));
         assert_eq!(*_host.unit_name_reads.borrow(), vec!["into"; 5]);
     }
 }
@@ -392,7 +401,7 @@ fn transaction_helpers() {
     *avm.app_args.borrow_mut() = vec![b"first".to_vec(), b"second".to_vec()];
     let _host = set_host(avm);
 
-    assert_eq!(txn::application_id(), 888);
+    assert_eq!(txn::application_id(), Application::from(888));
     assert_eq!(txn::uint(TxnField::ApplicationID), 888);
     assert_eq!(txn::app_args_count(), 2);
     assert_eq!(txn::sender().unwrap(), [0x11; 32]);
@@ -558,9 +567,9 @@ fn guard_restores_previous_host() {
         let inner = MockAvm::default();
         inner.set_uint(TxnField::ApplicationID, 2);
         let _inner = set_host(inner);
-        assert_eq!(txn::application_id(), 2);
+        assert_eq!(txn::application_id(), Application::from(2));
     }
-    assert_eq!(txn::application_id(), 1);
+    assert_eq!(txn::application_id(), Application::from(1));
 }
 
 #[test]
@@ -581,7 +590,7 @@ fn inner_asset_helpers_use_zero_fees_and_correct_fields() {
         ..Default::default()
     }
     .submit();
-    assert_eq!(id, 1234);
+    assert_eq!(id, Asset::from(1234));
     assert!(calls
         .borrow()
         .contains(&(2, TxnField::ConfigAssetTotal as i32, u64::MAX, vec![])));
@@ -592,7 +601,7 @@ fn inner_asset_helpers_use_zero_fees_and_correct_fields() {
         .borrow()
         .contains(&(3, TxnField::ConfigAssetName as i32, 0, b"pool".to_vec())));
     calls.borrow_mut().clear();
-    itxn::asset_opt_in(777).unwrap();
+    itxn::asset_opt_in(777.into()).unwrap();
     assert_eq!(
         *calls.borrow(),
         vec![
@@ -606,7 +615,7 @@ fn inner_asset_helpers_use_zero_fees_and_correct_fields() {
         ]
     );
     calls.borrow_mut().clear();
-    itxn::asset_transfer(777, &[8; 32], 42);
+    itxn::asset_transfer(777.into(), &[8; 32], 42);
     assert!(calls
         .borrow()
         .contains(&(2, TxnField::AssetAmount as i32, 42, vec![])));

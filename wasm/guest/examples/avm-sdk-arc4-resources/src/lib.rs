@@ -18,8 +18,8 @@
 //! and a uint64 return log. This is a routing fixture, not an AMM.
 #![cfg_attr(target_arch = "wasm32", no_std)]
 
-use avm_sdk::arc4::{Account, Application, Asset, AssetTransferTxn};
-use avm_sdk::{contract, txn, Error, TxnField};
+use avm_sdk::arc4::{Account, AssetTransferTxn};
+use avm_sdk::{asset::Asset, contract, txn, Application, Error, TxnField};
 avm_sdk::panic_handler!();
 
 #[contract]
@@ -35,8 +35,7 @@ impl Resources {
         receiver: Account,
         application: Application,
     ) -> Result<u64, Error> {
-        if asset.id != transfer.uint(TxnField::XferAsset) || application.id != txn::application_id()
-        {
+        if asset.id != transfer.uint(TxnField::XferAsset) || application != txn::application_id() {
             return Err(Error::InvalidValue);
         }
         let mut address = [0; 32];

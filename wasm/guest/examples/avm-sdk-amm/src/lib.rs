@@ -21,10 +21,10 @@
 extern crate alloc;
 
 use alloc::vec::Vec;
-use avm_sdk::arc4::{Address, Asset, AssetTransferTxn, PaymentTxn};
+use avm_sdk::arc4::{Address, AssetTransferTxn, PaymentTxn};
 use avm_sdk::{
-    assert, assert_eq, assert_ne, asset, contract, globals, itxn, math, txn, Error, GlobalBytes,
-    GlobalUint, TxnField,
+    assert, assert_eq, assert_ne, asset, contract, globals, itxn, math, txn, Asset, Error,
+    GlobalBytes, GlobalUint, TxnField,
 };
 
 avm_sdk::panic_handler!();
@@ -38,11 +38,11 @@ pub struct ConstantProductAMM {
     #[key = "g"]
     governor: GlobalBytes,
     #[key = "a"]
-    asset_a: GlobalUint,
+    asset_a: GlobalUint<Asset>,
     #[key = "b"]
-    asset_b: GlobalUint,
+    asset_b: GlobalUint<Asset>,
     #[key = "p"]
-    pool_token: GlobalUint,
+    pool_token: GlobalUint<Asset>,
     #[key = "r"]
     ratio: GlobalUint,
 }
@@ -51,7 +51,7 @@ pub struct ConstantProductAMM {
 impl ConstantProductAMM {
     /// Bare NoOp creation, matching createApplication in the source.
     pub fn approve(&self) -> Result<(), Error> {
-        assert!(txn::application_id() == 0 && txn::uint(TxnField::OnCompletion) == 0);
+        assert!(txn::application_id().id == 0 && txn::uint(TxnField::OnCompletion) == 0);
         self.governor.write(&txn::sender()?);
         Ok(())
     }
@@ -71,7 +71,7 @@ impl ConstantProductAMM {
         b_asset: Asset,
     ) -> Result<u64, Error> {
         self.assert_governor()?;
-        assert!(self.pool_token.get() == 0 && globals::group_size() == 2);
+        assert!(self.pool_token.get().id == 0 && globals::group_size() == 2);
         assert!(a_asset.id != 0 && a_asset.id < b_asset.id);
         let app = globals::application_address()?;
         assert_eq!(seed.address(TxnField::Receiver)?, app);
@@ -79,8 +79,8 @@ impl ConstantProductAMM {
         assert_eq!(seed.address(TxnField::CloseRemainderTo)?, [0; 32]);
         assert_eq!(seed.address(TxnField::RekeyTo)?, [0; 32]);
 
-        let a_unit = asset::unit_name(a_asset.id)?.ok_or(Error::InvalidValue)?;
-        let b_unit = asset::unit_name(b_asset.id)?.ok_or(Error::InvalidValue)?;
+        let a_unit = asset::unit_name(a_asset)?.ok_or(Error::InvalidValue)?;
+        let b_unit = asset::unit_name(b_asset)?.ok_or(Error::InvalidValue)?;
         let name = pool_token_name(&a_unit, &b_unit);
         let pool = itxn::AssetCreation {
             total: TOTAL_SUPPLY,
@@ -92,13 +92,13 @@ impl ConstantProductAMM {
             ..Default::default()
         }
         .submit();
-        assert_ne!(pool, 0);
-        itxn::asset_opt_in(a_asset.id)?;
-        itxn::asset_opt_in(b_asset.id)?;
-        self.asset_a.set(a_asset.id);
-        self.asset_b.set(b_asset.id);
+        assert_ne!(pool.id, 0);
+        itxn::asset_opt_in(a_asset)?;
+        itxn::asset_opt_in(b_asset)?;
+        self.asset_a.set(a_asset);
+        self.asset_b.set(b_asset);
         self.pool_token.set(pool);
-        Ok(pool)
+        Ok(pool.id)
     }
 
     #[abimethod]
@@ -111,19 +111,19 @@ impl ConstantProductAMM {
         b_asset: Asset,
     ) -> Result<(), Error> {
         self.assert_assets(pool_asset, a_asset, b_asset);
-        let a_amount = verify_transfer(a_xfer, a_asset.id)?;
-        let b_amount = verify_transfer(b_xfer, b_asset.id)?;
-        let a_supply = sub(balance(a_asset.id)?, a_amount)?;
-        let b_supply = sub(balance(b_asset.id)?, b_amount)?;
-        let issued = sub(TOTAL_SUPPLY, balance(pool_asset.id)?)?;
+        let a_amount = verify_transfer(a_xfer, a_asset)?;
+        let b_amount = verify_transfer(b_xfer, b_asset)?;
+        let a_supply = sub(balance(a_asset)?, a_amount)?;
+        let b_supply = sub(balance(b_asset)?, b_amount)?;
+        let issued = sub(TOTAL_SUPPLY, balance(pool_asset)?)?;
         let to_mint = if issued == 0 {
             assert!(a_supply == 0 && b_supply == 0);
             initial_tokens(a_amount, b_amount)
         } else {
             mint_tokens(issued, a_supply, b_supply, a_amount, b_amount)?
         };
-        assert!(to_mint > 0 && to_mint <= balance(pool_asset.id)?);
-        itxn::asset_transfer(pool_asset.id, &txn::sender()?, to_mint);
+        assert!(to_mint > 0 && to_mint <= balance(pool_asset)?);
+        itxn::asset_transfer(pool_asset, &txn::sender()?, to_mint);
         Ok(())
     }
 
@@ -136,14 +136,14 @@ impl ConstantProductAMM {
         b_asset: Asset,
     ) -> Result<(), Error> {
         self.assert_assets(pool_asset, a_asset, b_asset);
-        let amount = verify_transfer(pool_xfer, pool_asset.id)?;
-        let issued = sub(TOTAL_SUPPLY, sub(balance(pool_asset.id)?, amount)?)?;
+        let amount = verify_transfer(pool_xfer, pool_asset)?;
+        let issued = sub(TOTAL_SUPPLY, sub(balance(pool_asset)?, amount)?)?;
         assert!(amount <= issued);
-        let a_amount = mul_div(balance(a_asset.id)?, amount, issued)?;
-        let b_amount = mul_div(balance(b_asset.id)?, amount, issued)?;
+        let a_amount = mul_div(balance(a_asset)?, amount, issued)?;
+        let b_amount = mul_div(balance(b_asset)?, amount, issued)?;
         let sender = txn::sender()?;
-        itxn::asset_transfer(a_asset.id, &sender, a_amount);
-        itxn::asset_transfer(b_asset.id, &sender, b_amount);
+        itxn::asset_transfer(a_asset, &sender, a_amount);
+        itxn::asset_transfer(b_asset, &sender, b_amount);
         self.update_ratio()
     }
 
@@ -154,22 +154,12 @@ impl ConstantProductAMM {
         a_asset: Asset,
         b_asset: Asset,
     ) -> Result<(), Error> {
-        self.assert_assets(
-            Asset {
-                id: self.pool_token.get(),
-            },
-            a_asset,
-            b_asset,
-        );
-        let in_id = swap_xfer.uint(TxnField::XferAsset);
-        assert!(in_id == a_asset.id || in_id == b_asset.id);
-        let amount = verify_transfer(swap_xfer, in_id)?;
-        let out_id = if in_id == a_asset.id {
-            b_asset.id
-        } else {
-            a_asset.id
-        };
-        let to_swap = swap_tokens(amount, sub(balance(in_id)?, amount)?, balance(out_id)?)?;
+        self.assert_assets(self.pool_token.get(), a_asset, b_asset);
+        let in_asa = Asset::from(swap_xfer.uint(TxnField::XferAsset));
+        assert!(in_asa == a_asset || in_asa == b_asset);
+        let amount = verify_transfer(swap_xfer, in_asa)?;
+        let out_id = if in_asa == a_asset { b_asset } else { a_asset };
+        let to_swap = swap_tokens(amount, sub(balance(in_asa)?, amount)?, balance(out_id)?)?;
         assert!(to_swap > 0);
         itxn::asset_transfer(out_id, &txn::sender()?, to_swap);
         self.update_ratio()
@@ -183,10 +173,10 @@ impl ConstantProductAMM {
     }
 
     fn assert_assets(&self, pool: Asset, a: Asset, b: Asset) {
-        assert_ne!(self.pool_token.get(), 0);
-        assert_eq!(pool.id, self.pool_token.get());
-        assert_eq!(a.id, self.asset_a.get());
-        assert_eq!(b.id, self.asset_b.get());
+        assert_ne!(self.pool_token.get().id, 0);
+        assert_eq!(pool, self.pool_token.get());
+        assert_eq!(a, self.asset_a.get());
+        assert_eq!(b, self.asset_b.get());
     }
 
     fn update_ratio(&self) -> Result<(), Error> {
@@ -211,12 +201,12 @@ fn pool_token_name(a: &[u8], b: &[u8]) -> Vec<u8> {
     [b"DPT-".as_slice(), a, b"-", b].concat()
 }
 
-fn balance(id: u64) -> Result<u64, Error> {
-    asset::balance(&globals::application_address()?, id).ok_or(Error::InvalidValue)
+fn balance(asset: Asset) -> Result<u64, Error> {
+    asset::balance(&globals::application_address()?, asset).ok_or(Error::InvalidValue)
 }
 
-fn verify_transfer(transfer: AssetTransferTxn, id: u64) -> Result<u64, Error> {
-    assert_eq!(transfer.uint(TxnField::XferAsset), id);
+fn verify_transfer(transfer: AssetTransferTxn, asa: Asset) -> Result<u64, Error> {
+    assert_eq!(transfer.uint(TxnField::XferAsset), asa.id);
     let amount = transfer.uint(TxnField::AssetAmount);
     assert!(amount > 0);
     assert_eq!(transfer.address(TxnField::Sender)?, txn::sender()?);

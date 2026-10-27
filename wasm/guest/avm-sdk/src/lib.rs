@@ -56,7 +56,7 @@
 //! #[contract]
 //! impl Counter {
 //!     pub fn approve(&self) -> Result<(), Error> {
-//!         if txn::application_id() == 0 {
+//!         if txn::application_id().id == 0 {
 //!             return Ok(());
 //!         }
 //!         self.count.set(self.count.get() + 1);
@@ -88,6 +88,7 @@ mod bump;
 mod bytes;
 mod error;
 
+pub mod application;
 pub mod arc4;
 pub mod arg;
 pub mod asset;
@@ -104,6 +105,8 @@ mod alloc;
 #[cfg(target_arch = "wasm32")]
 pub use alloc::BumpAllocator;
 
+pub use application::Application;
+pub use asset::Asset;
 pub use avm::{host, Avm, Host, HostAvm};
 pub use avm_sdk_macros::{contract, program_entry};
 pub use avm_sys::{ArgError, GlobalField, TxnError, TxnField, MAX_ARG_BYTES};

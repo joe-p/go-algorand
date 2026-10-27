@@ -715,7 +715,7 @@ fn arc4_route(self_ty: &Type, methods: &[AbiMethod], has_approve: bool) -> Token
     let bare = if has_approve {
         quote! { ::avm_sdk::Approve::approve(<#self_ty>::new().approve()) }
     } else {
-        quote! { app_id == 0 && on_completion == ::avm_sdk::arc4::NO_OP }
+        quote! { app_id.id == 0 && on_completion == ::avm_sdk::arc4::NO_OP }
     };
     let mut entries = Vec::new();
     let arms: Vec<_> = methods
@@ -824,7 +824,7 @@ fn arc4_route(self_ty: &Type, methods: &[AbiMethod], has_approve: bool) -> Token
             });
             quote! {
                 #selector => {
-                    if (app_id == 0) != #create || num_args != #num_args {
+                    if (app_id.id == 0) != #create || num_args != #num_args {
                         return false;
                     }
                     if !args.validate(&[#(#descs),*]) {

@@ -18,7 +18,7 @@
 
 #[cfg(target_arch = "wasm32")]
 use crate::Avm;
-use crate::{host, Error, GlobalField, TxnError};
+use crate::{application::Application, host, Error, GlobalField, TxnError};
 
 /// Reads a uint64 context field. Wrong types and unavailable modes trap.
 #[inline]
@@ -40,8 +40,8 @@ pub fn group_size() -> u64 {
 
 /// Current application's assigned ID, including during creation.
 #[inline]
-pub fn application_id() -> u64 {
-    uint(GlobalField::CurrentApplicationID)
+pub fn application_id() -> Application {
+    Application::from(uint(GlobalField::CurrentApplicationID))
 }
 
 /// Current application's address. Application-only.

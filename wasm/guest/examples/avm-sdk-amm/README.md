@@ -19,10 +19,21 @@ exercise ARC-4 routing, state, deposit validation, and inner transactions with
 a mock host; they do not model protocol budgets, fee pooling, minimum balances,
 resource availability, or atomic rollback.
 
-The stripped release module is 11,580 bytes (one memory page), down from 13,103
-bytes before moving wide arithmetic and square roots to host imports. It now
-requires an executor exposing `mulw`, `divmodw`, and `sqrtw`; these are not
-software arithmetic implementations bundled in each guest.
+The stripped release module is **15,021 bytes** (one memory page), or **10,866
+bytes** after Binaryen 133 `wasm-opt -Oz` post-processing. The corresponding
+standard-Rust-assert builds measured 22,073 and 18,391 bytes. See the
+[comparison and reproduction commands](../README.md#size-and-cost).
+
+The contract imports SDK trap-only `assert!`, `assert_eq!`, and `assert_ne!`
+while keeping normal slices and `copy_from_slice` for the pool name. No allocator
+was added. The guest still uses host `mulw`, `divmodw`, and `sqrtw`, rather than
+bundling software wide arithmetic. Both SDK-assert builds fit the executor's
+16,384-byte size cap; normal-budget deployability remains unverified.
+
+Failed assertions trap on WASM rather than returning an ABI method error;
+the SDK macros do not format operands or accept custom message arguments.
+Native rejection tests invoke methods directly and catch panics, because
+unwinding through the generated `extern "C"` entry point would abort the process.
 
 ## Interface
 

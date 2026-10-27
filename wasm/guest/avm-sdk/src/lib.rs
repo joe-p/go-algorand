@@ -176,6 +176,51 @@ pub fn trap() -> ! {
     panic!("avm-sdk trap");
 }
 
+/// Asserts a condition without constructing a panic message. Failure calls
+/// [`trap`]: WASM traps immediately; native tests panic. The condition is
+/// evaluated exactly once. Unlike `core::assert!`, message arguments are not
+/// supported; use the core macro when formatted diagnostics are wanted.
+#[macro_export]
+macro_rules! assert {
+    ($condition:expr $(,)?) => {
+        if !$condition {
+            $crate::trap();
+        }
+    };
+}
+
+/// Asserts equality without formatting operands or requiring `Debug`.
+/// Operands are evaluated once, left to right, and borrowed rather than moved.
+/// Failure calls [`trap`]; message arguments are not supported.
+#[macro_export]
+macro_rules! assert_eq {
+    ($left:expr, $right:expr $(,)?) => {
+        match (&$left, &$right) {
+            (left, right) => {
+                if !(*left == *right) {
+                    $crate::trap();
+                }
+            }
+        }
+    };
+}
+
+/// Asserts inequality without formatting operands or requiring `Debug`.
+/// Operands are evaluated once, left to right, and borrowed rather than moved.
+/// Failure calls [`trap`]; message arguments are not supported.
+#[macro_export]
+macro_rules! assert_ne {
+    ($left:expr, $right:expr $(,)?) => {
+        match (&$left, &$right) {
+            (left, right) => {
+                if !(*left != *right) {
+                    $crate::trap();
+                }
+            }
+        }
+    };
+}
+
 /// Converts a guest body's return value into an approval decision.
 ///
 /// `true` and `Ok(())` approve; `false` and `Err(_)` reject. Used by

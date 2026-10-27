@@ -75,12 +75,51 @@ needs to pool enough budget for that total.
 | | `join` | | | | 2,184 | 7,181 | 11 |
 | | `record` | | | | 3,677 | 8,674 | 13 |
 | | `wide` | | | | 2,949 | 7,946 | 12 |
-| `avm_sdk_amm.wasm` (local build) | | 11,580 | 1 | — | — | — | — |
+| `avm_sdk_amm.wasm` (local build) | SDK assertions | 15,021 | 1 | — | — | — | — |
+| `avm_sdk_amm.oz.wasm` (local post-processing) | SDK assertions + `wasm-opt -Oz` | 10,866 | 1 | — | — | — | — |
 | `sdk_math.wasm` | | 722 | 1 | — | — | — | — |
 
 AMM and math fixture costs have not yet been measured; dashes indicate unavailable
 measurements. Host-backed wide arithmetic and square roots reduced the AMM from
-13,103 to 11,580 bytes, without narrowing arithmetic or changing rounding.
+13,103 to 11,580 bytes, without narrowing arithmetic or changing rounding. The
+following historical measurements isolate the earlier AMM-specific changes:
+
+| AMM implementation (same release settings, SDK, and host arithmetic) | bytes |
+| --- | ---: |
+| `require` checks and checked/iterator-based name builder | 11,580 |
+| Standard `assert!` / `assert_eq!` / `assert_ne!`, previous name builder | 20,907 |
+| Standard assertions and straightforward slice-based name construction | 22,073 |
+
+The current AMM keeps the straightforward slice-based name construction and
+imports trap-only assertions from `avm_sdk`. Only the assertion implementation
+changes between these rows; host arithmetic and SDK byte encoding are unchanged:
+
+| AMM assertions | Cargo release bytes | after `wasm-opt -Oz` |
+| --- | ---: | ---: |
+| Standard Rust `assert!` / `assert_eq!` / `assert_ne!` | 22,073 | 18,391 |
+| SDK trap-only assertions (current) | 15,021 | 10,866 |
+
+Binaryen **133** was used with `-Oz --enable-bulk-memory --enable-sign-ext
+--enable-mutable-globals`, without unsafe trap assumptions. `wasm-opt` alone
+saves 3,682 bytes (16.7%); SDK assertions alone save 7,052 bytes (31.9%); together
+they save 11,207 bytes (50.8%) relative to the 22,073-byte baseline. No allocator
+was added. Ordinary slice operations can still retain Rust's bounds-panic code.
+
+Both standard-assert variants exceed the executor's 16,384-byte module limit.
+Both SDK-assert variants pass executor validation and smoke tests for creation
+and assertion failure. Those smoke tests use a lifted budget; fitting the size
+cap does not establish normal-budget deployability. Post-processing is optional,
+not part of the default Cargo build or `make wasm-guest-fixtures`.
+
+To reproduce post-processing, from `wasm/guest`:
+
+```sh
+cargo build --release --locked -p avm-sdk-amm --target wasm32-unknown-unknown
+wasm-opt -Oz --enable-bulk-memory --enable-sign-ext --enable-mutable-globals \
+  target/wasm32-unknown-unknown/release/avm_sdk_amm.wasm \
+  -o target/wasm32-unknown-unknown/release/avm_sdk_amm.oz.wasm
+wc -c target/wasm32-unknown-unknown/release/avm_sdk_amm{,.oz}.wasm
+```
 
 The signed-claim and LogicSig executions each include the 2,850-unit
 `ed25519verify_bare` host charge. The LogicSig runs under its own 20,000-unit

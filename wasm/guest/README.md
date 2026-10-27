@@ -95,6 +95,16 @@ This is a separate Cargo workspace from the host executor so `make wasmlib`
    their fixed host fuel weights are 15/25/10/25 respectively, calibrated on
    linux/arm64 toward 1 ns/fuel (see `../../WASM_PERF.md`).
 
+   Optional trap-only assertions can be imported with
+   `use avm_sdk::{assert, assert_eq, assert_ne};`. They preserve the familiar
+   assertion syntax (including optional trailing commas), evaluate operands
+   once, and borrow comparison operands. They do not require `Debug` or support
+   custom message arguments. Failure calls `avm_sdk::trap()` (a WASM trap or a
+   generic native panic), avoiding assertion formatting code in guests. Normal
+   Rust indexing/copy operations still have their own bounds-panic paths. Use
+   `core::assert!` / `core::assert_eq!` / `core::assert_ne!` when formatted panic
+   diagnostics are wanted instead.
+
   A contract is usually a struct of state fields plus an `impl` block, both
   marked `#[contract]`. On the struct, each field's key is its name
   (`#[key = "..."]` overrides it) and the macro computes the global-state schema

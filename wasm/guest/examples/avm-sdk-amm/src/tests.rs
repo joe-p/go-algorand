@@ -15,11 +15,14 @@
 // along with go-algorand.  If not, see <https://www.gnu.org/licenses/>.
 
 use super::*;
+// Use normal test diagnostics, not the contract's imported trap-only macros.
 use avm_sdk::arc4::{Arc4Contract, RETURN_PREFIX};
 use avm_sdk::testing::set_host;
 use avm_sdk::{ArgError, Avm, GlobalField, TxnError};
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
+use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::{assert, assert_eq};
 
 const USER: [u8; 32] = [7; 32];
 const APP: [u8; 32] = [8; 32];
@@ -72,6 +75,13 @@ struct Mock {
 }
 
 impl Mock {
+    // Failed assertions panic natively and trap on WASM. Invoke methods directly
+    // for rejection tests: unwinding through the extern "C" program export aborts.
+    fn rejects<T>(&self, call: impl FnOnce(&ConstantProductAMM) -> Result<T, Error>) {
+        if let Ok(result) = catch_unwind(AssertUnwindSafe(|| call(&ConstantProductAMM::new()))) {
+            assert!(result.is_err());
+        }
+    }
     fn new() -> Self {
         Self {
             app_id: Cell::new(1),
@@ -277,9 +287,9 @@ fn creation_governance_and_lifecycle() {
     assert_eq!(super::program(), 1);
     assert_eq!(host.bytes.borrow().get(b"g".as_slice()).unwrap(), &USER);
     host.app_id.set(1);
-    assert_eq!(super::program(), 0);
+    host.rejects(|amm| amm.approve());
     assert_eq!(host.call("set_governor", &[&[9; 32]], vec![]), 1);
-    assert_eq!(host.call("set_governor", &[&USER], vec![]), 0);
+    host.rejects(|amm| amm.set_governor(Address(USER)));
     host.sender.set([9; 32]);
     assert_eq!(host.call("set_governor", &[&USER], vec![]), 1);
     host.completion.set(4); // UpdateApplication is not authorized.
@@ -312,10 +322,7 @@ fn bootstrap_creates_pool_and_opt_ins_and_returns_id() {
         [RETURN_PREFIX.as_slice(), &POOL.to_be_bytes()].concat()
     );
     drop(inner);
-    assert_eq!(
-        host.call("bootstrap", &[&[0], &[1]], vec![seed(300_000)]),
-        0
-    );
+    host.rejects(|amm| amm.bootstrap(PaymentTxn::resolve(0, 1).unwrap(), Asset(A), Asset(B)));
 }
 
 #[test]
@@ -352,7 +359,14 @@ fn bootstrap_rejects_bad_seed_order_and_sender() {
             }
             _ => unreachable!(),
         }
-        assert_eq!(host.call("bootstrap", &args, vec![payment]), 0);
+        *host.group.borrow_mut() = vec![payment];
+        host.rejects(|amm| {
+            amm.bootstrap(
+                PaymentTxn::resolve(0, 1).unwrap(),
+                Asset::resolve(args[0][0]).unwrap(),
+                Asset::resolve(args[1][0]).unwrap(),
+            )
+        });
         assert!(host.inner.borrow().is_empty());
     }
 }
@@ -490,11 +504,14 @@ fn reject_malformed_deposits_before_any_inner_transaction() {
             }
             _ => unreachable!(),
         }
-        assert_eq!(
-            host.call("swap", &[&[0], &[1]], vec![deposit]),
-            0,
-            "case {case}"
-        );
+        *host.group.borrow_mut() = vec![deposit];
+        host.rejects(|amm| {
+            amm.swap(
+                AssetTransferTxn::resolve(0, 1).ok_or(Error::InvalidValue)?,
+                Asset(A),
+                Asset(B),
+            )
+        });
         assert!(host.inner.borrow().is_empty());
     }
 }
@@ -527,24 +544,30 @@ fn pool_names_cover_all_unit_name_lengths_and_short_output_buffers() {
             let b = vec![b'B'; b_len];
             let expected = [b"DPT-".as_slice(), &a, b"-", &b].concat();
             let mut out = [0xff; 22];
-            assert_eq!(pool_token_name(&a, &b, &mut out), Ok(expected.as_slice()));
+            assert_eq!(pool_token_name(&a, &b, &mut out), expected.as_slice());
             assert!(out[expected.len()..].iter().all(|byte| *byte == 0xff));
             for capacity in 0..expected.len() {
                 let mut short = vec![0xff; capacity];
-                assert!(pool_token_name(&a, &b, &mut short).is_err());
+                assert!(catch_unwind(AssertUnwindSafe(|| {
+                    pool_token_name(&a, &b, &mut short);
+                }))
+                .is_err());
                 assert!(short.iter().all(|byte| *byte == 0xff));
             }
         }
     }
     for (a, b) in [(vec![b'A'; 9], vec![]), (vec![], vec![b'B'; 9])] {
         let mut out = [0xff; 32];
-        assert!(pool_token_name(&a, &b, &mut out).is_err());
+        assert!(catch_unwind(AssertUnwindSafe(|| {
+            pool_token_name(&a, &b, &mut out);
+        }))
+        .is_err());
         assert_eq!(out, [0xff; 32]);
     }
 }
 
 #[test]
-fn bootstrap_rejects_missing_or_oversized_unit_names_without_panicking() {
+fn bootstrap_rejects_missing_or_oversized_unit_names() {
     for asset in [A, B] {
         for oversized in [false, true] {
             let host = set_host(Mock::new());
@@ -555,10 +578,10 @@ fn bootstrap_rejects_missing_or_oversized_unit_names_without_panicking() {
             } else {
                 host.unit_names.borrow_mut().remove(&asset);
             }
-            assert_eq!(
-                host.call("bootstrap", &[&[0], &[1]], vec![seed(300_000)]),
-                0
-            );
+            *host.group.borrow_mut() = vec![seed(300_000)];
+            host.rejects(|amm| {
+                amm.bootstrap(PaymentTxn::resolve(0, 1).unwrap(), Asset(A), Asset(B))
+            });
             assert!(host.inner.borrow().is_empty());
         }
     }

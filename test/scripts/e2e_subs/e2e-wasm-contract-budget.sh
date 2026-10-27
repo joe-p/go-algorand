@@ -24,8 +24,8 @@ WASM_DIR="${DIR}/../../../data/transactions/logic/testdata/wasm"
 CONTRACT="${WASM_DIR}/app_rust_signed_claim.wasm"
 CLEAR="${WASM_DIR}/approve.wasm"
 
-DEPLOY_CALLS=${DEPLOY_CALLS:-8}
-CALL_CALLS=${CALL_CALLS:-13}
+DEPLOY_CALLS=${DEPLOY_CALLS:-7}
+CALL_CALLS=${CALL_CALLS:-12}
 
 gcmd="goal -w ${WALLET}"
 ACCOUNT=$(${gcmd} account list | awk '{ print $3 }')

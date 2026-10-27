@@ -19,13 +19,17 @@ exercise ARC-4 routing, state, deposit validation, and inner transactions with
 a mock host; they do not model protocol budgets, fee pooling, minimum balances,
 resource availability, or atomic rollback.
 
-The stripped release module is **15,978 bytes**, or **11,240 bytes** after
-Binaryen 133 `wasm-opt -Oz` post-processing. The owned-unit-name-only version
-measured 16,107 / 11,343 bytes; switching to typed `GlobalBytes<Address>` and
-typed SDK address helpers changes that by -129 / -103 bytes. Initial memory is
-one page; bootstrap grows it to two 64 KiB pages. Moving ownership from the SDK
-wrapper to the `Avm` trait produced byte-for-byte identical raw and optimized
-modules. See the [comparison and reproduction commands](../README.md#size-and-cost).
+The stripped release module is **13,526 bytes**, or **8,812 bytes** after
+Binaryen 133 `wasm-opt -Oz` post-processing. An earlier revision with fallible
+transaction and context reads and `Result`-returning void methods measured
+15,978 / 11,240 bytes. The owned-unit-name-only version measured 16,107 / 11,343
+bytes; switching to typed `GlobalBytes<Address>` and typed SDK address helpers
+changed that by -129 / -103 bytes, and making the reads infallible while the
+void methods trap changed it by a further -2,452 / -2,428 bytes. Initial memory
+is one page; bootstrap grows it to two 64 KiB pages. Moving ownership from the
+SDK wrapper to the `Avm` trait produced byte-for-byte identical raw and
+optimized modules. See the
+[comparison and reproduction commands](../README.md#size-and-cost).
 
 The contract imports SDK trap-only `assert!`, `assert_eq!`, and `assert_ne!`
 and enables the SDK's `alloc` feature and `#[contract(alloc)]`. Asset unit names

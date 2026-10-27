@@ -270,7 +270,7 @@ This is a separate Cargo workspace from the host executor so `make wasmlib`
   contracts small:
 
   - Link with a small stack. Rust's default 1 MiB stack is 16 pages of initial
-    memory at 350 fuel each; the ARC-4 examples' `build.rs` sets 32 KiB.
+    memory at 300 fuel each; the ARC-4 examples' `build.rs` sets 32 KiB.
   - Avoid operations that can panic (`slice[a..b]`, `slice[i]`,
     `copy_from_slice`). A panic path links about 1 KB of core's formatting code
     even though the panic handler ignores the message. Use `get` and trap or
@@ -398,7 +398,7 @@ is `MaxAbsoluteLogicSigProgramSize`, 16000 in `vFuture`). The LSig cost budget i
 is 4 MiB.
 
 These limits are tighter for application programs. The compiler-generated
-`app_rust_signed_claim.wasm` is 4,522 bytes (three pages) and has a 4,506
+`app_rust_signed_claim.wasm` is 4,221 bytes (three pages) and has a 4,291
 deterministic setup cost, so even deploying it needs a pooled group; see
 `../../WASM_CONTRACTS.md`.
 

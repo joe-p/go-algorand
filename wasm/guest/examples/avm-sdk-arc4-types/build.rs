@@ -16,8 +16,8 @@
 
 //! Links the wasm module with a 32 KiB stack instead of Rust's default 1 MiB.
 //!
-//! Setup fuel charges 350 per page of initial linear memory, so the default
-//! stack's 16 pages cost every call about 560 AVM budget units. Rust places
+//! Setup fuel charges 300 per page of initial linear memory, so the default
+//! stack's 16 pages cost every call about 480 AVM budget units. Rust places
 //! the stack below static data, so an overflow traps rather than corrupting
 //! memory.
 

@@ -661,10 +661,13 @@ are **microseconds per module**. Setup total also includes engine/linker creatio
 | `app_fib.wasm` | 208 | 0.36 | 2.37 | 0.85 | 4.34 | 0.63 | 8,032 | 0.62 |
 | `ed25519_dalek.wasm` | 4,761 | 1.35 | 18.90 | 5.33 | 26.36 | 0.87 | 45,460 | 0.60 |
 | `app_rust_counter.wasm` | 560 | 0.63 | 4.78 | 5.33 | 11.37 | 0.71 | 16,512 | 0.73 |
-| `app_rust_signed_claim.wasm` | 4,522 | 1.54 | 19.49 | 5.84 | 27.68 | 0.92 | 45,052 | 0.63 |
-| `app_avm_sdk_counter.wasm` | 5,242 | 1.80 | 25.73 | 5.87 | 34.17 | 0.95 | 51,650 | 0.68 |
-| `app_avm_sdk_arc4_counter.wasm` | 1,589 | 1.10 | 10.19 | 1.63 | 13.64 | 0.85 | 20,158 | 0.72 |
-| `app_avm_sdk_arc4_types.wasm` | 5,797 | 1.78 | 27.39 | 1.73 | 31.63 | 0.96 | 49,966 | 0.65 |
+| `app_rust_signed_claim.wasm` | 4,221 | 1.54 | 19.49 | 5.84 | 27.68 | 0.92 | 42,904 | 0.63 |
+| `app_avm_sdk_counter.wasm` | 5,138 | 1.80 | 25.73 | 5.87 | 34.17 | 0.95 | 51,026 | 0.68 |
+| `app_avm_sdk_arc4_counter.wasm` | 1,726 | 1.10 | 10.19 | 1.63 | 13.64 | 0.85 | 21,330 | 0.72 |
+| `app_avm_sdk_arc4_types.wasm` | 6,097 | 1.78 | 27.39 | 1.73 | 31.63 | 0.96 | 52,316 | 0.65 |
+
+Fixture rows: `bytes` and `setup fuel` were re-measured with the rebuilt guest
+fixtures; the timing columns for those rows are from the earlier sweep.
 
 Across all 165 case/run combinations at the current weights, the highest
 measured setup-plus-teardown ratio was **0.84 ns/fuel**, for 4,000 nested

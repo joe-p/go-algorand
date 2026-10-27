@@ -31,14 +31,15 @@ representative contract before judging these results.
       determine whether useful contracts need excessive pooling or exceed size
       limits.
       - Measured with compiler-generated Rust fixtures deployed through algod on
-        `ConsensusFuture`: a 560-byte stateful counter has 1,832 setup cost and
-        needs 4 pooled app calls to deploy and 4 to call; a 4,522-byte
-        ed25519 signed-claim contract has 4,821 setup cost (8,930 to call) and
-        needs 8 calls to deploy and 13 of the maximum 16 to call. Creation runs
+        `ConsensusFuture`: a 560-byte stateful counter has 1,652 setup cost and
+        needs 3 pooled app calls to deploy and 3 to call; a 4,221-byte
+        ed25519 signed-claim contract has 4,291 setup cost (8,187 to call) and
+        needs 7 calls to deploy and 12 of the maximum 16 to call. Creation runs
         the approval program, so deployment needs pooling too. A second
-        signature check would exceed the 11,200 pooled ceiling. Size is not the
-        binding limit; the 700/11,200 budget model is. A Rust clear-state
-        program cannot fit the unpooled 700 budget. See `WASM_CONTRACTS.md`.
+        signature check would need all 16 pooled calls, leaving almost no
+        slack. Size is not the binding limit; the 700/11,200 budget model is. A
+        Rust clear-state program cannot fit the unpooled 700 budget. See
+        `WASM_CONTRACTS.md`.
 - [ ] **Do supported architectures produce identical results and fuel
       consumption?** Run the same corpus on amd64 and arm64, comparing acceptance,
       return values, state deltas, traps, and exact fuel/cost. Include fuel

@@ -145,8 +145,8 @@ This is the main “safe pricing makes useful contracts impractical” finding s
 far.
 
 Compiler-generated Rust applications extend this result: even a 560-byte
-stateful contract has a 1,832 setup charge and needs 4 pooled calls, and a
-representative ed25519 signed-claim contract needs 8 calls to deploy and 13 of
+stateful contract has a 1,652 setup charge and needs 3 pooled calls, and a
+representative ed25519 signed-claim contract needs 7 calls to deploy and 12 of
 the maximum 16 to call. See `WASM_CONTRACTS.md` for the algorithm and the
 normal-limit deployment measurements.
 

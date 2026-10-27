@@ -26,8 +26,8 @@ use std::rc::Rc;
 
 use avm_sdk::testing::set_host;
 use avm_sdk::{
-    arg, asset, ed25519_verify_bare, global, globals, txn, Application, ArgError, Asset, Avm,
-    Error, GlobalBytes, GlobalField, GlobalUint, TxnError, TxnField,
+    arg, asset, ed25519_verify_bare, global, globals, txn, Address, Application, ArgError, Asset,
+    Avm, Error, GlobalBytes, GlobalField, GlobalUint, TxnError, TxnField,
 };
 
 #[derive(Clone)]
@@ -253,7 +253,7 @@ fn grouped_transactions_and_context_helpers() {
     assert_eq!(txn::group_uint(0, TxnField::Amount), u64::MAX);
     assert_eq!(globals::group_size(), 3);
     assert_eq!(globals::application_id(), Application::from(888));
-    assert_eq!(globals::application_address().unwrap(), [0x12; 32]);
+    assert_eq!(globals::application_address().unwrap(), Address([0x12; 32]));
     assert_eq!(
         txn::group_bytes(0, TxnField::Receiver, &mut []).unwrap(),
         32
@@ -294,6 +294,7 @@ fn wrong_application_address_length_is_an_error() {
 #[test]
 fn asset_queries_distinguish_missing_and_empty() {
     let account = [0x12; 32];
+    let address = Address(account);
     let mut avm = MockAvm::default();
     avm.balances.insert((account, 777), u64::MAX);
     avm.balances.insert((account, 778), 0);
@@ -303,9 +304,9 @@ fn asset_queries_distinguish_missing_and_empty() {
     avm.unit_names.insert(781, vec![b'X'; 9]);
     let _host = set_host(avm);
 
-    assert_eq!(asset::balance(&account, 777.into()), Some(u64::MAX));
-    assert_eq!(asset::balance(&account, 778.into()), Some(0));
-    assert_eq!(asset::balance(&account, 779.into()), None);
+    assert_eq!(asset::balance(&address, 777.into()), Some(u64::MAX));
+    assert_eq!(asset::balance(&address, 778.into()), Some(0));
+    assert_eq!(asset::balance(&address, 779.into()), None);
     assert_eq!(asset::unit_name_into(777.into(), &mut []).unwrap(), Some(4));
     let mut buf = [0xFF; 8];
     assert_eq!(
@@ -378,6 +379,48 @@ fn global_bytes_round_trip() {
 }
 
 #[test]
+fn global_bytes_typed_address() {
+    let _host = set_host(MockAvm::default());
+    let slot = GlobalBytes::<Address>::new_typed(b"owner");
+    let owner = Address([0x42; 32]);
+
+    slot.set(owner);
+    assert_eq!(slot.get(), owner);
+    let mut raw = [0u8; 32];
+    assert_eq!(global::get_bytes(b"owner", &mut raw).unwrap(), &[0x42; 32]);
+
+    // A value with the wrong length is rejected; `get` traps.
+    slot.write(&[0x42; 31]);
+    let mut buf = [0u8; 32];
+    assert_eq!(
+        slot.try_get(&mut buf),
+        Err(Error::WrongLength {
+            expected: 32,
+            got: 31
+        })
+    );
+    assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| slot.get())).is_err());
+
+    // A missing key reads as empty, which is not a valid address.
+    slot.delete();
+    assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| slot.get())).is_err());
+}
+
+#[test]
+fn global_bytes_typed_array() {
+    let _host = set_host(MockAvm::default());
+    let slot = GlobalBytes::<[u8; 4]>::new_typed(b"tag");
+
+    slot.set(*b"tag!");
+    assert_eq!(slot.get(), *b"tag!");
+    let mut buf = [0u8; 4];
+    assert_eq!(slot.try_get(&mut buf), Ok(*b"tag!"));
+
+    let mut small = [0u8; 3];
+    assert_eq!(slot.try_get(&mut small), Err(Error::BufferTooSmall));
+}
+
+#[test]
 fn global_runtime_keys() {
     let host = set_host(MockAvm::default());
 
@@ -404,7 +447,7 @@ fn transaction_helpers() {
     assert_eq!(txn::application_id(), Application::from(888));
     assert_eq!(txn::uint(TxnField::ApplicationID), 888);
     assert_eq!(txn::app_args_count(), 2);
-    assert_eq!(txn::sender().unwrap(), [0x11; 32]);
+    assert_eq!(txn::sender().unwrap(), Address([0x11; 32]));
     assert!(txn::app_arg_eq(0, b"first"));
     assert!(!txn::app_arg_eq(0, b"second"));
 
@@ -503,7 +546,7 @@ fn address_helpers_validate_lengths_and_propagate_read_errors() {
         avm.group.push(pay);
         let _host = set_host(avm);
         let expected = match len {
-            32 => Ok([0x12; 32]),
+            32 => Ok(Address([0x12; 32])),
             33 => Err(Error::BufferTooSmall),
             _ => Err(Error::WrongLength {
                 expected: 32,
@@ -585,8 +628,8 @@ fn inner_asset_helpers_use_zero_fees_and_correct_fields() {
         decimals: 3,
         asset_name: b"pool",
         unit_name: b"dpt",
-        manager: Some([7; 32]),
-        reserve: Some([7; 32]),
+        manager: Some(Address([7; 32])),
+        reserve: Some(Address([7; 32])),
         ..Default::default()
     }
     .submit();
@@ -615,7 +658,7 @@ fn inner_asset_helpers_use_zero_fees_and_correct_fields() {
         ]
     );
     calls.borrow_mut().clear();
-    itxn::asset_transfer(777.into(), &[8; 32], 42);
+    itxn::asset_transfer(777.into(), &Address([8; 32]), 42);
     assert!(calls
         .borrow()
         .contains(&(2, TxnField::AssetAmount as i32, 42, vec![])));

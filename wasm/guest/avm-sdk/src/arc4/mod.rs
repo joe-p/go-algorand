@@ -68,6 +68,7 @@ mod reference;
 mod tuple;
 mod utf8;
 
+pub use crate::address::Address;
 pub use crate::application::Application;
 pub use crate::asset::Asset;
 pub use array::{DynArray, Iter};
@@ -235,10 +236,6 @@ impl Decode<'_> for Byte {
         Byte(unsafe { u8::read(bytes) })
     }
 }
-
-/// An ARC-4 `address`: a 32-byte public key.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Address(pub [u8; 32]);
 
 impl Decode<'_> for Address {
     const DESC: Desc = Desc::fixed(32);

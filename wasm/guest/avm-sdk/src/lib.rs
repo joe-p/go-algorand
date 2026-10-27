@@ -88,6 +88,7 @@ mod bump;
 mod bytes;
 mod error;
 
+pub mod address;
 pub mod application;
 pub mod arc4;
 pub mod arg;
@@ -105,13 +106,14 @@ mod alloc;
 #[cfg(target_arch = "wasm32")]
 pub use alloc::BumpAllocator;
 
+pub use address::Address;
 pub use application::Application;
 pub use asset::Asset;
 pub use avm::{host, Avm, Host, HostAvm};
 pub use avm_sdk_macros::{contract, program_entry};
 pub use avm_sys::{ArgError, GlobalField, TxnError, TxnField, MAX_ARG_BYTES};
 pub use error::Error;
-pub use global::{GlobalBytes, GlobalUint, StateField};
+pub use global::{GlobalBytes, GlobalUint, StateBytes, StateField};
 
 /// Host-backed unsigned arithmetic, available in application and signature mode.
 pub mod math {

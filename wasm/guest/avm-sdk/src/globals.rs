@@ -18,7 +18,7 @@
 
 #[cfg(target_arch = "wasm32")]
 use crate::Avm;
-use crate::{application::Application, host, Error, GlobalField, TxnError};
+use crate::{address::Address, application::Application, host, Error, GlobalField, TxnError};
 
 /// Reads a uint64 context field. Wrong types and unavailable modes trap.
 #[inline]
@@ -46,6 +46,6 @@ pub fn application_id() -> Application {
 
 /// Current application's address. Application-only.
 #[inline]
-pub fn application_address() -> Result<[u8; 32], Error> {
+pub fn application_address() -> Result<Address, Error> {
     crate::bytes::read_address(|buf| bytes(GlobalField::CurrentApplicationAddress, buf))
 }

@@ -21,9 +21,9 @@
 extern crate alloc;
 
 use alloc::vec::Vec;
-use avm_sdk::arc4::{Address, AssetTransferTxn, PaymentTxn};
+use avm_sdk::arc4::{AssetTransferTxn, PaymentTxn};
 use avm_sdk::{
-    assert, assert_eq, assert_ne, asset, contract, globals, itxn, math, txn, Asset, Error,
+    assert, assert_eq, assert_ne, asset, contract, globals, itxn, math, txn, Address, Asset, Error,
     GlobalBytes, GlobalUint, TxnField,
 };
 
@@ -36,7 +36,7 @@ pub const FEE: u64 = 5;
 #[contract]
 pub struct ConstantProductAMM {
     #[key = "g"]
-    governor: GlobalBytes,
+    governor: GlobalBytes<Address>,
     #[key = "a"]
     asset_a: GlobalUint<Asset>,
     #[key = "b"]
@@ -52,14 +52,14 @@ impl ConstantProductAMM {
     /// Bare NoOp creation, matching createApplication in the source.
     pub fn approve(&self) -> Result<(), Error> {
         assert!(txn::application_id().id == 0 && txn::uint(TxnField::OnCompletion) == 0);
-        self.governor.write(&txn::sender()?);
+        self.governor.set(txn::sender()?);
         Ok(())
     }
 
     #[abimethod]
     pub fn set_governor(&self, governor: Address) -> Result<(), Error> {
         self.assert_governor()?;
-        self.governor.write(&governor.0);
+        self.governor.set(governor);
         Ok(())
     }
 
@@ -76,8 +76,8 @@ impl ConstantProductAMM {
         let app = globals::application_address()?;
         assert_eq!(seed.address(TxnField::Receiver)?, app);
         assert!(seed.uint(TxnField::Amount) >= 300_000);
-        assert_eq!(seed.address(TxnField::CloseRemainderTo)?, [0; 32]);
-        assert_eq!(seed.address(TxnField::RekeyTo)?, [0; 32]);
+        assert_eq!(seed.address(TxnField::CloseRemainderTo)?, Address::ZERO);
+        assert_eq!(seed.address(TxnField::RekeyTo)?, Address::ZERO);
 
         let a_unit = asset::unit_name(a_asset)?.ok_or(Error::InvalidValue)?;
         let b_unit = asset::unit_name(b_asset)?.ok_or(Error::InvalidValue)?;
@@ -168,7 +168,7 @@ impl ConstantProductAMM {
 
 impl ConstantProductAMM {
     fn assert_governor(&self) -> Result<(), Error> {
-        assert_eq!(self.governor.try_read_owned()?, txn::sender()?);
+        assert_eq!(self.governor.get(), txn::sender()?);
         Ok(())
     }
 
@@ -220,7 +220,7 @@ fn verify_transfer(transfer: AssetTransferTxn, asa: Asset) -> Result<u64, Error>
         TxnField::AssetCloseTo,
         TxnField::RekeyTo,
     ] {
-        assert_eq!(transfer.address(field)?, [0; 32]);
+        assert_eq!(transfer.address(field)?, Address::ZERO);
     }
     Ok(amount)
 }

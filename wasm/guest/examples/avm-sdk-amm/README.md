@@ -19,13 +19,13 @@ exercise ARC-4 routing, state, deposit validation, and inner transactions with
 a mock host; they do not model protocol budgets, fee pooling, minimum balances,
 resource availability, or atomic rollback.
 
-The stripped release module is **16,068 bytes**, or **11,346 bytes** after
+The stripped release module is **15,978 bytes**, or **11,240 bytes** after
 Binaryen 133 `wasm-opt -Oz` post-processing. The owned-unit-name-only version
-measured 16,107 / 11,343 bytes; adding the owned governor read and SDK address
-helpers changes that by -39 / +3 bytes. Initial memory is one page; bootstrap grows it to
-two 64 KiB pages. Moving ownership from the SDK wrapper to the `Avm` trait
-produced byte-for-byte identical raw and optimized modules. See the
-[comparison and reproduction commands](../README.md#size-and-cost).
+measured 16,107 / 11,343 bytes; switching to typed `GlobalBytes<Address>` and
+typed SDK address helpers changes that by -129 / -103 bytes. Initial memory is
+one page; bootstrap grows it to two 64 KiB pages. Moving ownership from the SDK
+wrapper to the `Avm` trait produced byte-for-byte identical raw and optimized
+modules. See the [comparison and reproduction commands](../README.md#size-and-cost).
 
 The contract imports SDK trap-only `assert!`, `assert_eq!`, and `assert_ne!`
 and enables the SDK's `alloc` feature and `#[contract(alloc)]`. Asset unit names
@@ -34,9 +34,9 @@ manual buffer offsets/copies. The guest still uses host `mulw`, `divmodw`, and `
 bundling software wide arithmetic. Both SDK-assert builds fit the executor's
 16,384-byte size cap; normal-budget deployability remains unverified.
 
-Governor reads use `GlobalBytes::try_read_owned()` (one host call with a 4 KiB
-allocation whose capacity is retained for the invocation). Group address reads
-use `Transaction::address(field)` without allocation or contract-local buffer
+Governor reads use `GlobalBytes<Address>::get()` (a fixed 32-byte value, with
+no allocation or caller buffer). Group address reads use
+`Transaction::address(field)` without allocation or contract-local buffer
 handling. The underlying `Avm` methods remain buffer-based.
 
 Failed assertions trap on WASM rather than returning an ABI method error;

@@ -16,12 +16,12 @@
 
 //! Shared buffer handling for public SDK byte readers.
 
-use crate::{Error, TxnError};
+use crate::{address::Address, Error, TxnError};
 
 #[inline]
 pub(crate) fn read_address(
     read: impl FnOnce(&mut [u8]) -> Result<usize, TxnError>,
-) -> Result<[u8; 32], Error> {
+) -> Result<Address, Error> {
     let mut address = [0; 32];
     let len = read(&mut address)?;
     if len != address.len() {
@@ -30,7 +30,7 @@ pub(crate) fn read_address(
             got: len,
         });
     }
-    Ok(address)
+    Ok(Address(address))
 }
 
 #[cfg(feature = "alloc")]
@@ -56,6 +56,13 @@ mod tests {
 
     #[test]
     fn reported_address_length_is_checked_even_if_host_did_not_copy() {
+        assert_eq!(
+            read_address(|buf| {
+                buf.copy_from_slice(&[7; 32]);
+                Ok(32)
+            }),
+            Ok(Address([7; 32]))
+        );
         for len in [0, 31, 33, usize::MAX] {
             assert_eq!(
                 read_address(|_| Ok(len)),

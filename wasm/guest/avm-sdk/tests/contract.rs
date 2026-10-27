@@ -24,7 +24,7 @@ use std::collections::BTreeMap;
 
 use avm_sdk::testing::set_host;
 use avm_sdk::{
-    contract, ArgError, Avm, Contract, Error, GlobalBytes, GlobalUint, TxnError, TxnField,
+    contract, Address, ArgError, Avm, Contract, Error, GlobalBytes, GlobalUint, TxnError, TxnField,
 };
 
 /// A host with global state only; transaction fields read as 0.
@@ -91,6 +91,7 @@ pub struct Registry {
     #[key = "cap"]
     limit: GlobalUint,
     owner: GlobalBytes,
+    delegate: GlobalBytes<Address>,
 }
 
 #[contract]
@@ -109,7 +110,7 @@ impl Registry {
 #[test]
 fn schema_counts_fields() {
     assert_eq!(Registry::GLOBAL_UINTS, 2);
-    assert_eq!(Registry::GLOBAL_BYTES, 1);
+    assert_eq!(Registry::GLOBAL_BYTES, 2);
 }
 
 #[test]
@@ -118,6 +119,7 @@ fn keys_come_from_field_names_or_key_attribute() {
     assert_eq!(registry.count.key(), b"count");
     assert_eq!(registry.limit.key(), b"cap");
     assert_eq!(registry.owner.key(), b"owner");
+    assert_eq!(registry.delegate.key(), b"delegate");
 }
 
 #[test]

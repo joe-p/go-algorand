@@ -80,8 +80,8 @@ impl Counter {
         let sender = txn::sender()?;
 
         // A heap-allocated key proves the optional bump allocator is working.
-        let mut sender_key = Vec::with_capacity(sender.len());
-        sender_key.extend_from_slice(&sender);
+        let mut sender_key = Vec::with_capacity(sender.as_ref().len());
+        sender_key.extend_from_slice(sender.as_ref());
 
         let Some(total) = self.count.get().checked_add(delta) else {
             return Err(Error::InvalidValue);

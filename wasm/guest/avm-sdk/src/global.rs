@@ -19,6 +19,10 @@
 //! [`GlobalUint`] and [`GlobalBytes`] are typed handles for keys known at
 //! compile time; the free functions take runtime keys. Both handles implement
 //! [`StateField`], so they can be fields of a `#[contract]` struct.
+//!
+//! [`GlobalUint`] accepts any value that converts to and from `u64`.
+//! [`GlobalBytes`] accepts any [`StateBytes`] value, such as
+//! [`crate::Address`] or `[u8; N]`.
 
 use core::marker::PhantomData;
 
@@ -28,7 +32,7 @@ use avm_sys::TxnError;
 use crate::rust_alloc::vec::Vec;
 #[cfg(target_arch = "wasm32")]
 use crate::Avm;
-use crate::{host, trap};
+use crate::{host, trap, Error};
 
 /// A uint64 global-state slot.
 ///
@@ -98,16 +102,36 @@ where
 /// [`GlobalBytes::try_read`] when the value may exceed the buffer;
 /// [`GlobalBytes::read`] traps on that, matching the AVM. Like [`GlobalUint`],
 /// a handle holds only its key.
+///
+/// The default `T = [u8]` is the raw byte-string handle. Use another value type
+/// with [`GlobalBytes::new_typed`] or by naming it in a state struct:
+///
+/// ```ignore
+/// const OWNER: GlobalBytes<Address> = GlobalBytes::new_typed(b"owner");
+/// ```
+///
+/// Typed values use [`GlobalBytes::get`] and [`GlobalBytes::set`].
 /// With the `alloc` feature, `try_read_owned` / `read_owned` manage a buffer and
 /// return an owned byte vector instead.
-pub struct GlobalBytes {
+pub struct GlobalBytes<T: ?Sized = [u8]> {
     key: &'static [u8],
+    phantom: PhantomData<T>,
 }
 
-impl GlobalBytes {
-    /// Creates a handle for `key` on the current application.
+impl GlobalBytes<[u8]> {
+    /// Creates a raw byte-string handle for `key` on the current application.
     pub const fn new(key: &'static [u8]) -> Self {
-        GlobalBytes { key }
+        Self::new_typed(key)
+    }
+}
+
+impl<T: ?Sized> GlobalBytes<T> {
+    /// Creates a handle for `key` with an explicit value type.
+    pub const fn new_typed(key: &'static [u8]) -> Self {
+        GlobalBytes {
+            key,
+            phantom: PhantomData,
+        }
     }
 
     /// The state key.
@@ -162,6 +186,77 @@ impl GlobalBytes {
     }
 }
 
+impl<T> GlobalBytes<T>
+where
+    T: StateBytes,
+{
+    /// Reads the value, trapping if the stored bytes do not encode a `T`.
+    ///
+    /// A missing key reads as empty, which is not a valid `T` unless `T` accepts
+    /// the empty byte string. The value is read through a 4 KiB buffer; use
+    /// [`Self::try_get`] to control the buffer or read a larger value.
+    #[inline]
+    pub fn get(&self) -> T {
+        let mut buf = [0u8; crate::MAX_ARG_BYTES];
+        match self.try_get(&mut buf) {
+            Ok(value) => value,
+            Err(_) => trap(),
+        }
+    }
+
+    /// Reads the value into `buf` and converts it to `T`.
+    ///
+    /// Returns [`Error::WrongLength`] when the value does not match a
+    /// fixed-size `T`, or [`Error::InvalidValue`] when a variable-size `T`
+    /// rejects it. A missing key reads as empty.
+    #[inline]
+    pub fn try_get(&self, buf: &mut [u8]) -> Result<T, Error> {
+        let bytes = self.try_read(buf)?;
+        T::from_bytes(bytes).ok_or(match T::LEN {
+            Some(expected) => Error::WrongLength {
+                expected,
+                got: bytes.len(),
+            },
+            None => Error::InvalidValue,
+        })
+    }
+
+    /// Writes the value.
+    #[inline]
+    pub fn set(&self, value: T) {
+        self.write(value.as_bytes());
+    }
+}
+
+/// A value that can be stored in a global byte-string slot.
+///
+/// Implement this to use a type with [`GlobalBytes`]. The SDK implements it
+/// for [`crate::Address`] and for `[u8; N]`.
+pub trait StateBytes: Sized {
+    /// The stored length, if every value of this type has the same length.
+    const LEN: Option<usize> = None;
+
+    /// Reads the value from its stored bytes, or `None` if `bytes` is invalid.
+    fn from_bytes(bytes: &[u8]) -> Option<Self>;
+
+    /// The bytes to store.
+    fn as_bytes(&self) -> &[u8];
+}
+
+impl<const N: usize> StateBytes for [u8; N] {
+    const LEN: Option<usize> = Some(N);
+
+    #[inline]
+    fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        bytes.try_into().ok()
+    }
+
+    #[inline]
+    fn as_bytes(&self) -> &[u8] {
+        self
+    }
+}
+
 /// A value that can be a field of a `#[contract]` struct.
 ///
 /// The macro builds each field with [`StateField::from_key`] and sums the
@@ -185,12 +280,12 @@ impl<T> StateField for GlobalUint<T> {
     }
 }
 
-impl StateField for GlobalBytes {
+impl<T: ?Sized> StateField for GlobalBytes<T> {
     const GLOBAL_BYTES: u32 = 1;
 
     #[inline]
     fn from_key(key: &'static [u8]) -> Self {
-        Self::new(key)
+        Self::new_typed(key)
     }
 }
 

@@ -62,7 +62,8 @@ This is a separate Cargo workspace from the host executor so `make wasmlib`
    Group scalar reads are `txn::group_uint` / `txn::group_bytes`. Context
    fields live in **`globals`**, separately from application state in `global`:
    `globals::group_size()`, `globals::application_id()` (returns `Application`;
-   the assigned ID, even at creation), and `globals::application_address()`.
+   the assigned ID, even at creation), and `globals::application_address()`
+   (returns `Address`).
    Only those three context fields are currently exposed. Byte reads accept an
    empty buffer to query length without copying. Group array reads remain
    unavailable. Native mocks can override the four new `Avm` methods; their
@@ -70,7 +71,7 @@ This is a separate Cargo workspace from the host executor so `make wasmlib`
 
    Application-only inner assets use `itxn::AssetCreation { .. }.submit()`
    (returns the created `Asset`), `itxn::asset_opt_in(asset: Asset)`, and
-   `itxn::asset_transfer(asset: Asset, &receiver, amount)`. These helpers set
+   `itxn::asset_transfer(asset: Asset, receiver: &Address, amount)`. These helpers set
    Fee=0 and require outer fee credit. Low-level `begin`, `next`, `set_uint`,
    `set_bytes`, `submit`, and `created_asset_id` (which also returns `Asset`)
    mirror the AVM asset transaction lifecycle and defaults. Protocol/ledger
@@ -78,7 +79,7 @@ This is a separate Cargo workspace from the host executor so `make wasmlib`
    group. Inner app calls are not supported, and inner host fuel charges are
    provisional pending calibration.
 
-   Application-only asset queries are `asset::balance(&address, asset: Asset)`
+   Application-only asset queries are `asset::balance(address: &Address, asset: Asset)`
    and `asset::unit_name_into(asset: Asset, &mut buffer)`. They distinguish
    missing resources (`None`) from existing zero balances/empty names
    (`Some(0)`). An empty name buffer queries the required length. Missing
@@ -128,11 +129,11 @@ This is a separate Cargo workspace from the host executor so `make wasmlib`
 
    Fixed-size reads need no allocator: `txn::address(field)`,
    `txn::array_address(field, index)`, `txn::group_address(index, field)`, and
-   `Transaction::address(field)` return `Result<[u8; 32], Error>`. They check
+   `Transaction::address(field)` return `Result<Address, Error>`. They check
    the returned length and propagate read errors. Select an address-valued field;
    these helpers validate length, not field semantics. The AMM uses
-   `seed.address(TxnField::Receiver)` and `governor.try_read_owned()` instead of
-   local buffer-management helpers.
+   `seed.address(TxnField::Receiver)` and `GlobalBytes<Address>::get()` for the
+   governor instead of local buffer-management helpers.
 
    Both modes can use host-backed arithmetic through `math::mulw(a, b)`
    (returns high/low product words), `math::divmodw(a_hi, a_lo, b_hi, b_lo)`
@@ -222,7 +223,7 @@ This is a separate Cargo workspace from the host executor so `make wasmlib`
   |---|---|
   | `uint8` … `uint128` | `u8` … `u128` |
   | `uintN`, `ufixedNxM` | `arc4::Uint<N / 8>` (`U256`, `U512`), `arc4::UFixed<N / 8, M>` |
-  | `bool`, `byte`, `address` | `bool`, `arc4::Byte`, `arc4::Address` |
+  | `bool`, `byte`, `address` | `bool`, `arc4::Byte`, `address::Address` |
   | `byte[N]`, `T[N]` | `[u8; N]`, `[T; N]` |
   | `byte[]`, `string` | `&[u8]`, `&str` |
   | `T[]` | `arc4::DynArray<T>` |
@@ -230,12 +231,16 @@ This is a separate Cargo workspace from the host executor so `make wasmlib`
 
   Top-level `arc4::Account`, `application::Application`, and `asset::Asset`
   consume uint8 indices into the call's foreign arrays (`Application` and
-  `Asset` are also re-exported by `arc4`). Account/application index 0 resolves
-  to sender/current transaction ApplicationID (0 at creation); asset index 0 is
-  the first foreign asset. Values passed to methods contain resolved addresses
-  or IDs, not indices. Invalid indices reject before running the method.
-  `Asset` and `Application` convert to and from `u64`, so resolved IDs work
-  directly with SDK helpers and typed state slots such as `GlobalUint<Asset>`.
+  `Asset` are also re-exported at the crate root). Account/application index 0
+  resolves to sender/current transaction ApplicationID (0 at creation); asset
+  index 0 is the first foreign asset. Values passed to methods contain resolved
+  addresses or IDs, not indices. Invalid indices reject before running the
+  method. `address::Address` is the ARC-4 `address` value (also re-exported at
+  the crate root); it converts to and from `[u8; 32]`. `Asset` and `Application`
+  convert to and from `u64`. Resolved values work directly with SDK helpers and
+  typed state slots such as `GlobalUint<Asset>` or `GlobalBytes<Address>`.
+  `Address` and `[u8; N]` implement `StateBytes`, so typed byte state supports
+  `get()` / `set()`; use `try_get(buf)` for a fallible read.
   `Transaction`, `PaymentTxn`, `KeyRegistrationTxn`, `AssetConfigTxn`,
   `AssetTransferTxn`, `AssetFreezeTxn`, and `ApplicationCallTxn` consume no
   application argument. They select immediately preceding group transactions

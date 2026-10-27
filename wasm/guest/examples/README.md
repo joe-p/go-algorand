@@ -37,7 +37,7 @@ wasm-guest-fixtures` rebuilds and copies all of them.
 - **`avm-sdk-arc4-resources`** resolves asset/account/application references,
   validates a preceding asset transfer, and returns its amount in an ARC-4 log.
   It is a routing fixture, not a deposit-safe AMM implementation. With a 32 KiB
-  stack it is 5,119 bytes and uses 6,691 budget units (10 pooled app calls) for
+  stack it is 2,712 bytes and uses 5,221 budget units (8 pooled app calls) for
   the successful Go integration case. Log host pricing is provisional. Run
   `go test ./data/transactions/logic -run TestWasmARC4ResourceArgumentsAndReturns -v`.
 
@@ -68,15 +68,15 @@ needs to pool enough budget for that total.
 | `app_rust_signed_claim.wasm` | | 4,522 | 17 | 4,506 | 4,109 | 8,615 | 13 |
 | `ed25519_dalek.wasm` | LogicSig | 4,761 | 17 | 4,546 | 3,811 | 8,357 | |
 | `app_avm_sdk_counter.wasm` | | 5,242 | 17 | 5,165 | 1,292 | 6,457 | 10 |
-| `app_avm_sdk_arc4_counter.wasm` | `increment` | 1,589 | 1 | 2,016 | 816 | 2,832 | 5 |
-| | `set_label` | | | | 992 | 3,008 | 5 |
-| | bare create | | | | 284 | 2,300 | 4 |
-| `app_avm_sdk_arc4_types.wasm` | `sum` | 5,797 | 1 | 4,997 | 1,370 | 6,367 | 10 |
-| | `join` | | | | 2,184 | 7,181 | 11 |
-| | `record` | | | | 3,677 | 8,674 | 13 |
-| | `wide` | | | | 2,949 | 7,946 | 12 |
-| `avm_sdk_amm.wasm` (local build) | SDK assertions + owned reads | 16,068 | 1 | — | — | — | — |
-| `avm_sdk_amm.oz.wasm` (local post-processing) | owned reads + `wasm-opt -Oz` | 11,346 | 1 | — | — | — | — |
+| `app_avm_sdk_arc4_counter.wasm` | `increment` | 1,726 | 1 | 2,133 | 918 | 3,051 | 5 |
+| | `set_label` | | | | 1,094 | 3,227 | 5 |
+| | bare create | | | | 284 | 2,417 | 4 |
+| `app_avm_sdk_arc4_types.wasm` | `sum` | 6,097 | 1 | 5,232 | 1,472 | 6,704 | 10 |
+| | `join` | | | | 2,440 | 7,672 | 11 |
+| | `record` | | | | 3,922 | 9,154 | 14 |
+| | `wide` | | | | 3,133 | 8,365 | 12 |
+| `avm_sdk_amm.wasm` (local build) | SDK assertions + owned reads | 15,978 | 1 | — | — | — | — |
+| `avm_sdk_amm.oz.wasm` (local post-processing) | owned reads + `wasm-opt -Oz` | 11,240 | 1 | — | — | — | — |
 | `sdk_math.wasm` | | 722 | 1 | — | — | — | — |
 
 AMM and math fixture costs have not yet been measured; dashes indicate unavailable
@@ -131,25 +131,26 @@ native mocks only implement the buffer read. That layer added no bytecode in
 this example after inlining. The raw host ABI still writes into guest memory;
 changing the Rust trait does not change that ABI.
 
-The AMM now also uses `GlobalBytes::try_read_owned()` for the governor read and
-`Transaction::address(field)` for fixed-size group addresses. These changes
-remove the contract-local `group_address` helper:
+The AMM now also uses typed `GlobalBytes<Address>` state for the governor read
+and typed SDK address helpers for group addresses. These changes remove the
+contract-local `group_address` helper and the owned governor buffer:
 
 | Additional SDK helpers | Cargo release bytes | after `wasm-opt -Oz` |
 | --- | ---: | ---: |
 | Owned unit names only | 16,107 | 11,343 |
-| Plus owned governor read and SDK address helpers (current) | 16,068 | 11,346 |
-| Change | -39 | +3 |
+| Plus typed governor read and SDK address helpers (current) | 15,978 | 11,240 |
+| Change | -129 | -103 |
 
 General owned reads allocate a 4 KiB buffer and make one host call; truncation
 does not reclaim capacity. This is a memory/zeroing tradeoff, not a free
-abstraction. Fixed-size address helpers return `[u8; 32]` without allocation;
-owned unit names still allocate only eight bytes. The new general readers are
-feature-gated and unused ones do not increase the AMM's linked module size.
+abstraction. Fixed-size address helpers and `GlobalBytes<Address>::get()` return
+their value without allocation; owned unit names still allocate only eight
+bytes. The new general readers are feature-gated and unused ones do not increase
+the AMM's linked module size.
 
 For this contract, allocation simplifies the code but does not reduce the
 module size. Both current builds fit the 16,384-byte executor limit (the raw
-build has 316 bytes to spare). Initial memory remains one 64 KiB page; bootstrap
+build has 406 bytes to spare). Initial memory remains one 64 KiB page; bootstrap
 grows it to two pages, versus one throughout for the stack-buffer baseline.
 A temporary wasmi harness exercised bootstrap with empty, three-byte, and
 eight-byte unit names for both current builds, verifying the LP name, three
@@ -184,7 +185,7 @@ What the table shows:
 - **The default stack costs 510 units per call.** Rust links a 1 MiB stack,
   which is 16 of the 17 initial pages. The two ARC-4 examples link a 32 KiB
   stack from their `build.rs`, so they start with one page; that is why the
-  ARC-4 counter's setup is 2,016 at 1,589 bytes while the `avm-sys` counter's
+  ARC-4 counter's setup is 2,133 at 1,726 bytes while the `avm-sys` counter's
   is 1,652 at 560 bytes.
 - **Allocation is expensive, mostly through panics.** `avm-sdk-counter` is
   the same program as `rust-counter` plus a `Vec`. The bump allocator and

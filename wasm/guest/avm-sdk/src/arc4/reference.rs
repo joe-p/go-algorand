@@ -18,13 +18,13 @@
 
 #[cfg(feature = "alloc")]
 use crate::rust_alloc::vec::Vec;
-use crate::{txn, Error, TxnError, TxnField};
+use crate::{address::Address, txn, Error, TxnError, TxnField};
 
 /// A resolved ARC-4 `account`; index 0 means the sender, indices 1.. select
 /// this call's foreign accounts. This is distinct from an ARC-4 `address`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Account {
-    pub address: [u8; 32],
+    pub address: Address,
 }
 
 impl Account {
@@ -34,7 +34,9 @@ impl Account {
         }
         let mut address = [0; 32];
         (txn::array_bytes(TxnField::Accounts, u32::from(index), &mut address).ok()? == 32)
-            .then_some(Self { address })
+            .then_some(Self {
+                address: Address(address),
+            })
     }
 }
 
@@ -85,8 +87,8 @@ impl<const KIND: u64> Transaction<KIND> {
         txn::group_bytes_owned(self.group_index, field)
     }
 
-    /// Reads a 32-byte field without allocating; see [`txn::group_address`].
-    pub fn address(self, field: TxnField) -> Result<[u8; 32], Error> {
+    /// Reads an address field without allocating; see [`txn::group_address`].
+    pub fn address(self, field: TxnField) -> Result<Address, Error> {
         txn::group_address(self.group_index, field)
     }
 }

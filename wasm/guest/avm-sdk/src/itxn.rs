@@ -19,7 +19,7 @@
 
 #[cfg(target_arch = "wasm32")]
 use crate::Avm;
-use crate::{asset::Asset, globals, host, Error, TxnField};
+use crate::{address::Address, asset::Asset, globals, host, Error, TxnField};
 
 /// Begins a group with one pending transaction; mirrors `itxn_begin` defaults.
 #[inline]
@@ -67,8 +67,8 @@ pub struct AssetCreation<'a> {
     pub decimals: u32,
     pub asset_name: &'a [u8],
     pub unit_name: &'a [u8],
-    pub manager: Option<[u8; 32]>,
-    pub reserve: Option<[u8; 32]>,
+    pub manager: Option<Address>,
+    pub reserve: Option<Address>,
     pub fee: u64,
 }
 
@@ -83,10 +83,10 @@ impl AssetCreation<'_> {
         set_bytes(TxnField::ConfigAssetName, self.asset_name);
         set_bytes(TxnField::ConfigAssetUnitName, self.unit_name);
         if let Some(addr) = self.manager.as_ref() {
-            set_bytes(TxnField::ConfigAssetManager, addr);
+            set_bytes(TxnField::ConfigAssetManager, addr.as_ref());
         }
         if let Some(addr) = self.reserve.as_ref() {
-            set_bytes(TxnField::ConfigAssetReserve, addr);
+            set_bytes(TxnField::ConfigAssetReserve, addr.as_ref());
         }
         submit();
         created_asset_id()
@@ -95,13 +95,13 @@ impl AssetCreation<'_> {
 
 /// Sends an asset from the application with Fee=0, using outer fee credit.
 /// The receiver and asset/holding must be available under AVM resource rules.
-pub fn asset_transfer(asset: Asset, receiver: &[u8; 32], amount: u64) {
+pub fn asset_transfer(asset: Asset, receiver: &Address, amount: u64) {
     begin();
     set_uint(TxnField::TypeEnum, 4);
     set_uint(TxnField::Fee, 0);
     set_uint(TxnField::XferAsset, asset.id);
     set_uint(TxnField::AssetAmount, amount);
-    set_bytes(TxnField::AssetReceiver, receiver);
+    set_bytes(TxnField::AssetReceiver, receiver.as_ref());
     submit();
 }
 

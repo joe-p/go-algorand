@@ -21,7 +21,7 @@
 use crate::rust_alloc::{vec, vec::Vec};
 #[cfg(target_arch = "wasm32")]
 use crate::Avm;
-use crate::{host, txn, TxnError, TxnField};
+use crate::{address::Address, host, txn, TxnError, TxnField};
 
 /// A typed asset ID (the actual ID, not an encoded uint8 ARC-4 index).
 ///
@@ -61,8 +61,8 @@ impl From<Asset> for u64 {
 /// no units returns `Some(0)`. Prefer explicit `Asset` values over reference
 /// slots.
 #[inline]
-pub fn balance(account: &[u8; 32], asset: Asset) -> Option<u64> {
-    host().asset_balance(account, asset.id)
+pub fn balance(account: &Address, asset: Asset) -> Option<u64> {
+    host().asset_balance(&account.0, asset.id)
 }
 
 /// Copies an asset's unit name, returning its length, or `None` for a missing

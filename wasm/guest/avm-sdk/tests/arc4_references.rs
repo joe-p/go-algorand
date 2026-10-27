@@ -17,7 +17,7 @@
 mod common;
 use avm_sdk::arc4::{Account, Arc4Contract, AssetTransferTxn, PaymentTxn, Transaction};
 use avm_sdk::testing::set_host;
-use avm_sdk::{contract, Application, Asset, GlobalUint};
+use avm_sdk::{contract, Address, Application, Asset, GlobalUint};
 use common::CallAvm;
 
 #[contract]
@@ -38,14 +38,14 @@ impl References {
     ) {
         assert_eq!(a.id, u64::MAX);
         assert_eq!(pay.group_index(), 1);
-        assert_eq!(account.address, [7; 32]);
+        assert_eq!(account.address, Address([7; 32]));
         assert_eq!(app.id, 999);
         assert_eq!(transfer.group_index(), 2);
         self.calls.set(1);
     }
     #[abimethod]
     fn current(&self, account: Account, app: Application, a: Asset) {
-        assert_eq!(account.address, [42; 32]);
+        assert_eq!(account.address, Address([42; 32]));
         assert_eq!(app.id, 888);
         assert_eq!(a.id, 777);
         self.calls.set(1);
@@ -79,13 +79,13 @@ impl References {
     ) {
         assert_eq!([a, b, c, d, e, f, g, h, i, j, k, l, m, n], [0; 14]);
         assert_eq!(asset.id, 777);
-        assert_eq!(account.address, [42; 32]);
+        assert_eq!(account.address, Address([42; 32]));
         assert_eq!(tx.group_index(), 0);
     }
 }
 
 #[test]
-fn references_convert_to_and_from_uint64() {
+fn references_convert_to_and_from_native_types() {
     let asset: Asset = 777.into();
     assert_eq!(asset.id, 777);
     assert_eq!(u64::from(asset), 777);
@@ -93,6 +93,11 @@ fn references_convert_to_and_from_uint64() {
     let application = Application::from(999);
     assert_eq!(application.id, 999);
     assert_eq!(u64::from(application), 999);
+
+    let address = Address::from([7; 32]);
+    assert_eq!(address, Address([7; 32]));
+    assert_eq!(<[u8; 32]>::from(address), [7; 32]);
+    assert_eq!(Address::ZERO, Address([0; 32]));
 
     let _host = set_host(CallAvm::call(&[]));
     let asset_slot = GlobalUint::<Asset>::new_typed(b"asset");

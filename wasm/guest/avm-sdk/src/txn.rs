@@ -22,7 +22,7 @@ use avm_sys::{TxnError, TxnField, MAX_ARG_BYTES};
 use crate::rust_alloc::vec::Vec;
 #[cfg(target_arch = "wasm32")]
 use crate::Avm;
-use crate::{application::Application, host, Error};
+use crate::{address::Address, application::Application, host, Error};
 
 /// Reads a uint64 transaction field. Traps if the field is invalid or is a
 /// byte-string field.
@@ -50,11 +50,11 @@ pub fn bytes_owned(field: TxnField) -> Result<Vec<u8>, TxnError> {
     crate::bytes::read_owned(|buf| bytes(field, buf), TxnError::BufferTooSmall)
 }
 
-/// Reads a 32-byte transaction field without allocating. A successful read of
-/// any other length returns [`Error::WrongLength`]; host read errors propagate.
-/// The caller selects an address-valued field; this does not validate its type.
+/// Reads an address-valued transaction field without allocating. A successful
+/// read of any other length returns [`Error::WrongLength`]; host read errors
+/// propagate. The caller selects the field; this does not validate its type.
 #[inline]
-pub fn address(field: TxnField) -> Result<[u8; 32], Error> {
+pub fn address(field: TxnField) -> Result<Address, Error> {
     crate::bytes::read_address(|buf| bytes(field, buf))
 }
 
@@ -82,9 +82,9 @@ pub fn array_bytes_owned(field: TxnField, index: u32) -> Result<Vec<u8>, TxnErro
     )
 }
 
-/// Reads a 32-byte array element without allocating; see [`address`].
+/// Reads an address array element without allocating; see [`address`].
 #[inline]
-pub fn array_address(field: TxnField, index: u32) -> Result<[u8; 32], Error> {
+pub fn array_address(field: TxnField, index: u32) -> Result<Address, Error> {
     crate::bytes::read_address(|buf| array_bytes(field, index, buf))
 }
 
@@ -112,15 +112,16 @@ pub fn group_bytes_owned(group_index: u32, field: TxnField) -> Result<Vec<u8>, T
     )
 }
 
-/// Reads a 32-byte group transaction field without allocating; see [`address`].
+/// Reads an address-valued group transaction field without allocating; see
+/// [`address`].
 #[inline]
-pub fn group_address(group_index: u32, field: TxnField) -> Result<[u8; 32], Error> {
+pub fn group_address(group_index: u32, field: TxnField) -> Result<Address, Error> {
     crate::bytes::read_address(|buf| group_bytes(group_index, field, buf))
 }
 
 /// Reads the current transaction's sender, which is always 32 bytes.
 #[inline]
-pub fn sender() -> Result<[u8; 32], Error> {
+pub fn sender() -> Result<Address, Error> {
     address(TxnField::Sender)
 }
 

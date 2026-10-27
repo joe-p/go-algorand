@@ -38,10 +38,7 @@ impl Resources {
         if asset.id != transfer.uint(TxnField::XferAsset) || application != txn::application_id() {
             return Err(Error::InvalidValue);
         }
-        let mut address = [0; 32];
-        if transfer.bytes(TxnField::AssetReceiver, &mut address)? != 32
-            || address != receiver.address
-        {
+        if transfer.address(TxnField::AssetReceiver)? != receiver.address {
             return Err(Error::InvalidValue);
         }
         Ok(transfer.uint(TxnField::AssetAmount))
